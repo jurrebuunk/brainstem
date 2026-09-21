@@ -153,6 +153,101 @@ Monitor
 
 This avoids having every external system maintain its own webhook or direct integration with an agent.
 
+## Input Plugins
+
+Input plugins are loadable source adapters. They observe one external system and emit standardized Brainstem observations.
+
+A plugin exports a small object:
+
+```js
+import { defineInputPlugin } from "./sdk.mjs";
+
+export default defineInputPlugin({
+  apiVersion: "brainstem.input/v1",
+  name: "my-input",
+
+  inputs: {
+    default: {
+      mode: "poll",
+      defaultIntervalMs: 60_000,
+
+      async *poll(ctx) {
+        yield ctx.observation({
+          id: "example:1",
+          source: { type: "example", name: "demo" },
+          type: "status",
+          state: "open",
+          title: "Example observation",
+          message: "Something happened"
+        });
+      }
+    }
+  }
+});
+```
+
+The runtime loads local plugin files and sends emitted observations to the core:
+
+```js
+import config from "./brainstem.config.mjs";
+import { BrainstemRuntime } from "./runtime.mjs";
+
+const runtime = new BrainstemRuntime({
+  config,
+  plugins: [
+    {
+      module: "./plugins/github-issues.mjs",
+      input: "issues",
+      config: {
+        repo: "owner/repo",
+        tokenEnv: "GITHUB_TOKEN"
+      }
+    }
+  ]
+});
+
+await runtime.start();
+await runtime.wait();
+```
+
+Or add plugin entries to `brainstem.config.mjs` under `inputs` and run:
+
+```sh
+node brainstem.mjs
+```
+
+Keep tokens in environment variables, not in committed config files:
+
+```js
+inputs: [
+  {
+    module: "./plugins/github-issues.mjs",
+    input: "issues",
+    config: {
+      repo: "owner/repo",
+      tokenEnv: "GITHUB_TOKEN"
+
+      // Equivalent:
+      // token: { env: "GITHUB_TOKEN" }
+    }
+  }
+]
+```
+
+Then start Brainstem with:
+
+```sh
+GITHUB_TOKEN=... node brainstem.mjs
+```
+
+For a one-shot local smoke test:
+
+```sh
+node run-plugin-test.mjs
+```
+
+Phase 1 intentionally supports only local file plugins and polling inputs. NPM package loading, secrets helpers, persistent adapter state, retries/backoff, streaming inputs, and destination plugins can be added later without changing the core.
+
 ## Agents
 
 Brainstem does not replace agents.

@@ -4,6 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "start": "node brainstem.mjs",
+    "plugin:test": "node run-plugin-test.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

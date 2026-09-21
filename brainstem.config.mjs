@@ -1,4 +1,37 @@
 export default {
+  /*
+   * Input plugins consumed by brainstem.mjs.
+   *
+   * Example:
+   *
+   * inputs: [
+   *   {
+   *     module: "./plugins/github-issues.mjs",
+   *     input: "issues",
+   *     config: {
+   *       repo: "owner/repo",
+   *
+   *       // Keep tokens in the environment, not in this file.
+   *       tokenEnv: "GITHUB_TOKEN"
+   *
+   *       // Equivalent object form:
+   *       // token: { env: "GITHUB_TOKEN" }
+   *     }
+   *   }
+   * ],
+   */
+  inputs: [
+    {
+      module: "./plugins/github-issues.mjs",
+      input: "issues",
+      config: {
+        repo: "jurrebuunk/brainstem",
+        tokenEnv: "GITHUB_TOKEN",
+        perPage: 10
+      }
+    }
+  ],
+  
   policy: {
     dispatch: {
       attention: 0.65,
