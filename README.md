@@ -216,6 +216,18 @@ Or add plugin entries to `brainstem.config.mjs` under `inputs` and run:
 node brainstem.mjs
 ```
 
+For adapter development, poll once and exit:
+
+```sh
+node brainstem.mjs --once
+```
+
+Print ignored decisions too:
+
+```sh
+node brainstem.mjs --once --all
+```
+
 Keep tokens in environment variables, not in committed config files:
 
 ```js
@@ -246,7 +258,9 @@ For a one-shot local smoke test:
 node run-plugin-test.mjs
 ```
 
-Phase 1 intentionally supports only local file plugins and polling inputs. NPM package loading, secrets helpers, persistent adapter state, retries/backoff, streaming inputs, and destination plugins can be added later without changing the core.
+See `docs/input-plugins.md` for adapter author guidance, stable ID conventions, token handling, and retry configuration.
+
+Phase 1 intentionally supports only local file plugins and polling inputs. NPM package loading, richer secrets helpers, streaming inputs, and destination plugins can be added later without changing the core.
 
 ## Agents
 

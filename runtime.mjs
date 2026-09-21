@@ -10,6 +10,13 @@ import {
 
 const DEFAULT_INTERVAL_MS = 60_000;
 
+const DEFAULT_RETRY = {
+  attempts: 3,
+  minDelayMs: 1_000,
+  maxDelayMs: 30_000,
+  factor: 2
+};
+
 export class BrainstemRuntime {
   constructor({
     config,
@@ -24,6 +31,8 @@ export class BrainstemRuntime {
         "BrainstemRuntime requires either config or brainstem"
       );
     }
+
+    this.config = config ?? {};
 
     this.brainstem =
       brainstem ?? new Brainstem(config);
@@ -76,6 +85,50 @@ export class BrainstemRuntime {
     return this;
   }
 
+  async runOnce({ signal } = {}) {
+    if (this.abortController) {
+      throw new Error(
+        "BrainstemRuntime has already been started"
+      );
+    }
+
+    this.abortController =
+      new AbortController();
+
+    if (signal) {
+      if (signal.aborted) {
+        this.abortController.abort(
+          signal.reason
+        );
+      }
+      else {
+        signal.addEventListener(
+          "abort",
+          () => this.abortController.abort(
+            signal.reason
+          ),
+          { once: true }
+        );
+      }
+    }
+
+    try {
+      await this.brainstem.start();
+
+      await Promise.all(
+        this.plugins.map(entry =>
+          this.#runPluginEntryOnce(
+            entry,
+            this.abortController.signal
+          )
+        )
+      );
+    }
+    finally {
+      await this.close();
+    }
+  }
+
   async wait() {
     await Promise.all(this.tasks);
   }
@@ -90,9 +143,44 @@ export class BrainstemRuntime {
     );
 
     await this.brainstem.close();
+
+    this.abortController = null;
+    this.tasks = [];
   }
 
   async #runPluginEntry(entry, signal) {
+    const loaded =
+      await this.#loadEntry(entry);
+
+    while (!signal.aborted) {
+      try {
+        await this.#pollInputWithRetry({
+          ...loaded,
+          signal
+        });
+      }
+      catch (error) {
+        this.logger.error?.(
+          `[brainstem] input '${loaded.plugin.name}.${loaded.inputName}' failed`,
+          error
+        );
+      }
+
+      await sleep(loaded.intervalMs, signal);
+    }
+  }
+
+  async #runPluginEntryOnce(entry, signal) {
+    const loaded =
+      await this.#loadEntry(entry);
+
+    await this.#pollInputWithRetry({
+      ...loaded,
+      signal
+    });
+  }
+
+  async #loadEntry(entry) {
     const { plugin } =
       await loadInputPlugin(
         entry.module,
@@ -126,24 +214,78 @@ export class BrainstemRuntime {
       input.defaultIntervalMs ??
       DEFAULT_INTERVAL_MS;
 
-    while (!signal.aborted) {
+    return {
+      entry,
+      plugin,
+      inputName,
+      input,
+      intervalMs,
+      retry: this.#retryConfig(entry)
+    };
+  }
+
+  #retryConfig(entry) {
+    const retry = {
+      ...DEFAULT_RETRY,
+      ...(this.config.runtime?.retry ?? {}),
+      ...(entry.retry ?? {}),
+      ...(entry.config?.retry ?? {})
+    };
+
+    retry.attempts = Math.max(
+      1,
+      Number(retry.attempts ?? 1)
+    );
+
+    retry.minDelayMs = Math.max(
+      0,
+      Number(retry.minDelayMs ?? 0)
+    );
+
+    retry.maxDelayMs = Math.max(
+      retry.minDelayMs,
+      Number(retry.maxDelayMs ?? retry.minDelayMs)
+    );
+
+    retry.factor = Math.max(
+      1,
+      Number(retry.factor ?? 1)
+    );
+
+    return retry;
+  }
+
+  async #pollInputWithRetry(args) {
+    let attempt = 0;
+    let delayMs = args.retry.minDelayMs;
+
+    while (true) {
+      attempt += 1;
+
       try {
-        await this.#pollInput({
-          entry,
-          plugin,
-          inputName,
-          input,
-          signal
-        });
+        await this.#pollInput(args);
+        return;
       }
       catch (error) {
-        this.logger.error?.(
-          `[brainstem] input '${plugin.name}.${inputName}' failed`,
+        if (
+          attempt >= args.retry.attempts ||
+          args.signal.aborted
+        ) {
+          throw error;
+        }
+
+        this.logger.warn?.(
+          `[brainstem] input '${args.plugin.name}.${args.inputName}' failed; retrying in ${delayMs}ms (${attempt}/${args.retry.attempts})`,
           error
         );
-      }
 
-      await sleep(intervalMs, signal);
+        await sleep(delayMs, args.signal);
+
+        delayMs = Math.min(
+          args.retry.maxDelayMs,
+          delayMs * args.retry.factor
+        );
+      }
     }
   }
 
@@ -224,11 +366,18 @@ export async function runBrainstemRuntime(options) {
     new BrainstemRuntime(options);
 
   try {
-    await runtime.start({
-      signal: options?.signal
-    });
+    if (options?.once) {
+      await runtime.runOnce({
+        signal: options?.signal
+      });
+    }
+    else {
+      await runtime.start({
+        signal: options?.signal
+      });
 
-    await runtime.wait();
+      await runtime.wait();
+    }
   }
   finally {
     await runtime.close();

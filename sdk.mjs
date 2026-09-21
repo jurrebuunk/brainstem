@@ -87,21 +87,81 @@ export function assertObservation(observation) {
     );
   }
 
+  if (observation.version !== "1") {
+    throw new TypeError(
+      "Adapter emitted an observation with unsupported version"
+    );
+  }
+
   if (observation.kind !== "observation") {
     throw new TypeError(
       "Adapter emitted an envelope whose kind is not 'observation'"
     );
   }
 
+  const payload =
+    observation.payload;
+
+  if (!payload || typeof payload !== "object") {
+    throw new TypeError(
+      "Adapter emitted an observation without payload"
+    );
+  }
+
+  requireString(payload.id, "payload.id");
+  requireObject(payload.source, "payload.source");
+  requireString(payload.source.type, "payload.source.type");
+  requireString(payload.source.name, "payload.source.name");
+  requireString(payload.type, "payload.type");
+  requireString(payload.state, "payload.state");
+  requireString(payload.timestamp, "payload.timestamp");
+  requireString(payload.title, "payload.title");
+  requireString(payload.message, "payload.message");
+
   if (
-    !observation.payload ||
-    typeof observation.payload.id !== "string" ||
-    observation.payload.id.length === 0
+    payload.facts !== undefined &&
+    !isPlainObject(payload.facts)
   ) {
     throw new TypeError(
-      "Adapter emitted an observation without payload.id"
+      "Adapter emitted observation payload.facts that is not an object"
+    );
+  }
+
+  if (
+    payload.data !== undefined &&
+    !isPlainObject(payload.data)
+  ) {
+    throw new TypeError(
+      "Adapter emitted observation payload.data that is not an object"
     );
   }
 
   return observation;
+}
+
+function requireString(value, path) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0
+  ) {
+    throw new TypeError(
+      `Adapter emitted observation with invalid ${path}`
+    );
+  }
+}
+
+function requireObject(value, path) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(
+      `Adapter emitted observation with invalid ${path}`
+    );
+  }
+}
+
+function isPlainObject(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
 }

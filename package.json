@@ -5,6 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node brainstem.mjs",
+    "start:once": "node brainstem.mjs --once",
+    "start:once:all": "node brainstem.mjs --once --all",
     "plugin:test": "node run-plugin-test.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

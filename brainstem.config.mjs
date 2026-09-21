@@ -12,7 +12,7 @@ export default {
    *       repo: "owner/repo",
    *
    *       // Keep tokens in the environment, not in this file.
-   *       tokenEnv: "GITHUB_TOKEN"
+   *       tokenEnv: "GITHUB_TOKEN",
    *
    *       // Equivalent object form:
    *       // token: { env: "GITHUB_TOKEN" }
@@ -24,6 +24,12 @@ export default {
     {
       module: "./plugins/github-issues.mjs",
       input: "issues",
+      retry: {
+        attempts: 3,
+        minDelayMs: 1000,
+        maxDelayMs: 10000,
+        factor: 2
+      },
       config: {
         repo: "jurrebuunk/brainstem",
         tokenEnv: "GITHUB_TOKEN",
@@ -31,7 +37,16 @@ export default {
       }
     }
   ],
-  
+
+  runtime: {
+    retry: {
+      attempts: 3,
+      minDelayMs: 1000,
+      maxDelayMs: 30000,
+      factor: 2
+    }
+  },
+
   policy: {
     dispatch: {
       attention: 0.65,

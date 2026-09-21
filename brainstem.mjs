@@ -1,6 +1,20 @@
 import config from "./brainstem.config.mjs";
 import { BrainstemRuntime } from "./runtime.mjs";
 
+const args =
+  new Set(process.argv.slice(2));
+
+const once =
+  args.has("--once");
+
+const printAll =
+  args.has("--all");
+
+if (args.has("--help") || args.has("-h")) {
+  console.log(`Usage: node brainstem.mjs [--once] [--all]\n\nOptions:\n  --once   Poll each configured input once, then exit.\n  --all    Print ignored decisions too.\n`);
+  process.exit(0);
+}
+
 const inputs =
   config.inputs ?? [];
 
@@ -46,6 +60,7 @@ else {
         input
       }) {
         if (
+          !printAll &&
           decision.payload.decision ===
           "ignore"
         ) {
@@ -64,15 +79,26 @@ else {
     });
 
   try {
-    console.log(
-      `Starting Brainstem with ${inputs.length} input plugin(s)...`
-    );
+    if (once) {
+      console.log(
+        `Polling ${inputs.length} input plugin(s) once...`
+      );
 
-    await runtime.start({
-      signal: controller.signal
-    });
+      await runtime.runOnce({
+        signal: controller.signal
+      });
+    }
+    else {
+      console.log(
+        `Starting Brainstem with ${inputs.length} input plugin(s)...`
+      );
 
-    await runtime.wait();
+      await runtime.start({
+        signal: controller.signal
+      });
+
+      await runtime.wait();
+    }
   }
   finally {
     await runtime.close();
