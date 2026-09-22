@@ -51,6 +51,27 @@ Destination plugins:
 
 See the [plugin catalog](docs/plugins.md) for all built-in plugins and configuration examples.
 
+## Logging
+
+Brainstem has built-in runtime logs for startup, plugin polling, retries, decisions, destination delivery, and shutdown. These logs are independent from the optional `log-decisions` destination, which is intended for full decision/audit dumps.
+
+Configure runtime logs with:
+
+```js
+runtime: {
+  logging: {
+    level: "info",
+    format: "pretty"
+  }
+}
+```
+
+CLI overrides:
+
+```sh
+node brainstem.mjs --log-level debug --log-format json
+```
+
 ## Requirements
 
 - Node.js `>=24`

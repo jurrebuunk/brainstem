@@ -18,7 +18,17 @@ export default defineDestinationPlugin({
         const notification =
           await planNotification(ctx, event);
 
+        const observationId =
+          event.observation.payload.id;
+
         if (!notification.send) {
+          ctx.logger.debug?.(
+            "matrix notification suppressed",
+            {
+              observationId
+            }
+          );
+
           return;
         }
 
@@ -38,6 +48,15 @@ export default defineDestinationPlugin({
         await notification.commit({
           eventId: result.eventId
         });
+
+        ctx.logger.info?.(
+          "matrix notification sent",
+          {
+            observationId,
+            kind: notification.kind,
+            eventId: result.eventId
+          }
+        );
       }
     }
   }

@@ -6,6 +6,7 @@ import {
   JsonFileCheckpointStore,
   MemoryCheckpointStore
 } from "./checkpoints.mjs";
+import { createRuntimeLogger } from "./logger.mjs";
 import { Brainstem } from "../core/brainstem.mjs";
 import {
   MemoryRecordStore,
@@ -35,7 +36,7 @@ export class BrainstemRuntime {
     plugins = [],
     destinations = [],
     baseDir = process.cwd(),
-    logger = console,
+    logger,
     onDecision = defaultOnDecision,
     checkpointStore,
     recordStore
@@ -70,7 +71,11 @@ export class BrainstemRuntime {
     this.plugins = plugins;
     this.destinations = destinations;
     this.baseDir = baseDir;
-    this.logger = logger;
+    this.logger =
+      logger ??
+      createRuntimeLogger(
+        this.config.runtime?.logging ?? {}
+      );
     this.onDecision = onDecision;
     this.checkpointStore =
       checkpointStore ??
@@ -111,6 +116,16 @@ export class BrainstemRuntime {
       }
     }
 
+    this.logger.info?.(
+      "runtime starting",
+      {
+        inputs: this.plugins.length,
+        destinations: this.destinations.length,
+        records: storeInfo(this.recordStore),
+        checkpoints: storeInfo(this.checkpointStore)
+      }
+    );
+
     await this.brainstem.start();
 
     this.destinationEntries =
@@ -122,6 +137,14 @@ export class BrainstemRuntime {
         index,
         this.abortController.signal
       )
+    );
+
+    this.logger.info?.(
+      "runtime started",
+      {
+        inputs: this.plugins.length,
+        destinations: this.destinationEntries.length
+      }
     );
 
     return this;
@@ -155,6 +178,16 @@ export class BrainstemRuntime {
     }
 
     try {
+      this.logger.info?.(
+        "runtime run-once starting",
+        {
+          inputs: this.plugins.length,
+          destinations: this.destinations.length,
+          records: storeInfo(this.recordStore),
+          checkpoints: storeInfo(this.checkpointStore)
+        }
+      );
+
       await this.brainstem.start();
 
       this.destinationEntries =
@@ -169,6 +202,10 @@ export class BrainstemRuntime {
           )
         )
       );
+
+      this.logger.info?.(
+        "runtime run-once completed"
+      );
     }
     finally {
       await this.close();
@@ -180,6 +217,18 @@ export class BrainstemRuntime {
   }
 
   async close() {
+    if (
+      !this.abortController &&
+      this.tasks.length === 0 &&
+      this.destinationEntries.length === 0
+    ) {
+      return;
+    }
+
+    this.logger.info?.(
+      "runtime stopping"
+    );
+
     if (this.abortController) {
       this.abortController.abort();
     }
@@ -194,6 +243,10 @@ export class BrainstemRuntime {
     this.abortController = null;
     this.tasks = [];
     this.destinationEntries = [];
+
+    this.logger.info?.(
+      "runtime stopped"
+    );
   }
 
   async #runPluginEntry(entry, index, signal) {
@@ -209,8 +262,13 @@ export class BrainstemRuntime {
       }
       catch (error) {
         this.logger.error?.(
-          `[brainstem] input '${loaded.plugin.name}.${loaded.inputName}' failed`,
-          error
+          "input poll failed",
+          {
+            plugin: loaded.plugin.name,
+            input: loaded.inputName,
+            id: loaded.checkpointKey,
+            error
+          }
         );
       }
 
@@ -262,19 +320,31 @@ export class BrainstemRuntime {
       input.defaultIntervalMs ??
       DEFAULT_INTERVAL_MS;
 
+    const checkpointKey =
+      checkpointKeyForEntry(
+        entry,
+        plugin,
+        inputName,
+        index
+      );
+
+    this.logger.info?.(
+      "input loaded",
+      {
+        id: checkpointKey,
+        plugin: plugin.name,
+        input: inputName,
+        intervalMs
+      }
+    );
+
     return {
       entry,
       plugin,
       inputName,
       input,
       intervalMs,
-      checkpointKey:
-        checkpointKeyForEntry(
-          entry,
-          plugin,
-          inputName,
-          index
-        ),
+      checkpointKey,
       retry: this.#retryConfig(entry)
     };
   }
@@ -330,8 +400,16 @@ export class BrainstemRuntime {
         }
 
         this.logger.warn?.(
-          `[brainstem] input '${args.plugin.name}.${args.inputName}' failed; retrying in ${delayMs}ms (${attempt}/${args.retry.attempts})`,
-          error
+          "input poll failed; retrying",
+          {
+            plugin: args.plugin.name,
+            input: args.inputName,
+            id: args.checkpointKey,
+            attempt,
+            attempts: args.retry.attempts,
+            retryInMs: delayMs,
+            error
+          }
         );
 
         await sleep(delayMs, args.signal);
@@ -366,8 +444,19 @@ export class BrainstemRuntime {
         checkpoint: checkpoint.api
       });
 
+    this.logger.debug?.(
+      "input poll started",
+      {
+        id: checkpointKey,
+        plugin: plugin.name,
+        input: inputName
+      }
+    );
+
     const observations =
       input.poll(ctx);
+
+    let observationCount = 0;
 
     for await (
       const observation of toAsyncIterable(
@@ -381,6 +470,8 @@ export class BrainstemRuntime {
       assertObservation(
         observation
       );
+
+      observationCount += 1;
 
       const decision =
         await this.brainstem.process(
@@ -399,6 +490,20 @@ export class BrainstemRuntime {
 
     if (!signal.aborted) {
       await checkpoint.commit();
+
+      const level = observationCount > 0
+        ? "info"
+        : "debug";
+
+      this.logger[level]?.(
+        "input poll completed",
+        {
+          id: checkpointKey,
+          plugin: plugin.name,
+          input: inputName,
+          observations: observationCount
+        }
+      );
     }
   }
 
@@ -432,6 +537,18 @@ export class BrainstemRuntime {
       );
     }
 
+    this.logger.info?.(
+      "destination loaded",
+      {
+        plugin: plugin.name,
+        destination: destinationName,
+        decisions: entry.decisions ?? ["queue", "dispatch", "escalate"],
+        routes: entry.routes ?? "all",
+        sources: entry.sources ?? "all",
+        types: entry.types ?? "all"
+      }
+    );
+
     return {
       entry,
       plugin,
@@ -442,6 +559,30 @@ export class BrainstemRuntime {
 
   async #handleDecision(event) {
     await this.onDecision?.(event);
+
+    const decisionPayload =
+      event.decision.payload;
+
+    const observationPayload =
+      event.observation.payload;
+
+    const decisionLogLevel =
+      decisionPayload.decision === "ignore"
+        ? "debug"
+        : "info";
+
+    this.logger[decisionLogLevel]?.(
+      "observation decided",
+      {
+        observationId: observationPayload.id,
+        source: observationPayload.source.type,
+        type: observationPayload.type,
+        state: observationPayload.state,
+        decision: decisionPayload.decision,
+        route: decisionPayload.route,
+        reason: decisionPayload.reason
+      }
+    );
 
     for (const destinationEntry of this.destinationEntries) {
       if (
@@ -461,6 +602,16 @@ export class BrainstemRuntime {
             logger: this.logger
           });
 
+        this.logger.debug?.(
+          "destination handling decision",
+          {
+            plugin: destinationEntry.plugin.name,
+            destination: destinationEntry.destinationName,
+            observationId: observationPayload.id,
+            decision: decisionPayload.decision
+          }
+        );
+
         await destinationEntry.destination.handle(
           ctx,
           {
@@ -478,11 +629,27 @@ export class BrainstemRuntime {
             }
           }
         );
+
+        this.logger.debug?.(
+          "destination handled decision",
+          {
+            plugin: destinationEntry.plugin.name,
+            destination: destinationEntry.destinationName,
+            observationId: observationPayload.id,
+            decision: decisionPayload.decision
+          }
+        );
       }
       catch (error) {
         this.logger.error?.(
-          `[brainstem] destination '${destinationEntry.plugin.name}.${destinationEntry.destinationName}' failed`,
-          error
+          "destination failed",
+          {
+            plugin: destinationEntry.plugin.name,
+            destination: destinationEntry.destinationName,
+            observationId: observationPayload.id,
+            decision: decisionPayload.decision,
+            error
+          }
         );
       }
     }
@@ -623,6 +790,17 @@ async function* toAsyncIterable(value) {
   throw new TypeError(
     "poll(ctx) must return an iterable, async iterable, or array of observations"
   );
+}
+
+function storeInfo(store) {
+  if (!store) {
+    return null;
+  }
+
+  return {
+    type: store.constructor?.name ?? "unknown",
+    path: store.path ?? null
+  };
 }
 
 function createRecordStore(config, baseDir) {

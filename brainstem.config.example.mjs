@@ -112,6 +112,11 @@ export default {
   ],
 
   runtime: {
+    logging: {
+      level: "info",
+      format: "pretty"
+    },
+
     records: {
       type: "sqlite",
       path: "data/brainstem.sqlite",

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { createRuntimeLogger } from "./src/runtime/logger.mjs";
 import { BrainstemRuntime } from "./src/runtime/runtime.mjs";
 
 loadDotEnv();
@@ -12,10 +13,12 @@ const args = new Set(argv);
 
 const once = args.has("--once");
 const printAll = args.has("--all");
-const configPath = configPathFromArgs(argv) ?? "brainstem.config.mjs";
+const configPath = valueFromArgs(argv, "--config") ?? "brainstem.config.mjs";
+const logLevel = valueFromArgs(argv, "--log-level");
+const logFormat = valueFromArgs(argv, "--log-format");
 
 if (args.has("--help") || args.has("-h")) {
-  console.log(`Usage: node brainstem.mjs [--config path] [--once] [--all]\n\nOptions:\n  --config  Config file path. Default: brainstem.config.mjs\n  --once    Poll each configured input once, then exit.\n  --all     Print ignored decisions too through log destinations.\n\nSetup:\n  cp brainstem.config.example.mjs brainstem.config.mjs\n  cp .env.example .env\n`);
+  console.log(`Usage: node brainstem.mjs [--config path] [--once] [--all] [--log-level level] [--log-format format]\n\nOptions:\n  --config      Config file path. Default: brainstem.config.mjs\n  --once        Poll each configured input once, then exit.\n  --all         Print ignored decisions too through log destinations.\n  --log-level   Runtime log level: debug, info, warn, error, silent.\n  --log-format  Runtime log format: pretty or json.\n\nSetup:\n  cp brainstem.config.example.mjs brainstem.config.mjs\n  cp .env.example .env\n`);
   process.exit(0);
 }
 
@@ -24,6 +27,13 @@ const config =
 
 const inputs =
   config.inputs ?? [];
+
+const logger =
+  createRuntimeLogger({
+    ...(config.runtime?.logging ?? {}),
+    ...(logLevel ? { level: logLevel } : {}),
+    ...(logFormat ? { format: logFormat } : {})
+  });
 
 const destinations =
   (config.destinations ?? []).map(entry => {
@@ -41,8 +51,8 @@ const destinations =
   });
 
 if (inputs.length === 0) {
-  console.error(
-    "No input plugins configured. Add entries to config.inputs or run `node run-plugin-test.mjs`."
+  logger.error(
+    "no input plugins configured"
   );
 
   process.exitCode = 1;
@@ -60,8 +70,11 @@ else {
 
     stopping = true;
 
-    console.log(
-      `\nReceived ${signalName}; shutting down Brainstem...`
+    logger.info(
+      "shutdown signal received",
+      {
+        signal: signalName
+      }
     );
 
     controller.abort();
@@ -74,13 +87,17 @@ else {
     new BrainstemRuntime({
       config,
       plugins: inputs,
-      destinations
+      destinations,
+      logger
     });
 
   try {
     if (once) {
-      console.log(
-        `Polling ${inputs.length} input plugin(s) once...`
+      logger.info(
+        "polling inputs once",
+        {
+          inputs: inputs.length
+        }
       );
 
       await runtime.runOnce({
@@ -88,8 +105,11 @@ else {
       });
     }
     else {
-      console.log(
-        `Starting Brainstem with ${inputs.length} input plugin(s)...`
+      logger.info(
+        "starting brainstem",
+        {
+          inputs: inputs.length
+        }
       );
 
       await runtime.start({
@@ -123,16 +143,16 @@ async function loadConfig(path) {
   return module.default;
 }
 
-function configPathFromArgs(args) {
+function valueFromArgs(args, name) {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
 
-    if (arg === "--config") {
+    if (arg === name) {
       return args[index + 1];
     }
 
-    if (arg.startsWith("--config=")) {
-      return arg.slice("--config=".length);
+    if (arg.startsWith(`${name}=`)) {
+      return arg.slice(name.length + 1);
     }
   }
 

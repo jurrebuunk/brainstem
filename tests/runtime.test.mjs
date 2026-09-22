@@ -21,6 +21,13 @@ const minimalPolicyConfig = {
   laya: config.laya
 };
 
+const silentLogger = {
+  debug() {},
+  info() {},
+  warn() {},
+  error() {}
+};
+
 test("input checkpoints commit after successful processing", async () => {
   const dir = await mkdtemp(join(tmpdir(), "brainstem-checkpoint-success-"));
   const pluginPath = join(dir, "checkpoint-plugin.mjs");
@@ -31,6 +38,7 @@ test("input checkpoints commit after successful processing", async () => {
   const runtime = new BrainstemRuntime({
     brainstem: fakeBrainstem(),
     config: checkpointConfig(checkpointPath),
+    logger: silentLogger,
     plugins: [
       {
         id: "checkpoint-test-input",
@@ -62,6 +70,7 @@ test("input checkpoints are not committed when processing fails", async () => {
   const runtime = new BrainstemRuntime({
     brainstem: fakeBrainstem({ fail: true }),
     config: checkpointConfig(checkpointPath),
+    logger: silentLogger,
     plugins: [
       {
         id: "checkpoint-test-input",
@@ -337,7 +346,7 @@ test("matrix destination sends room messages", async () => {
           }
         },
         signal: new AbortController().signal,
-        logger: console
+        logger: silentLogger
       },
       {
         decision: {
@@ -412,7 +421,7 @@ test("matrix destination suppresses repeats and sends recovery", async () => {
       }
     },
     signal: new AbortController().signal,
-    logger: console
+    logger: silentLogger
   };
 
   const alertEvent = matrixEvent({
@@ -502,7 +511,7 @@ test("matrix destination retries rate limits and threads repeats", async () => {
       threading: true
     },
     signal: new AbortController().signal,
-    logger: console
+    logger: silentLogger
   };
 
   const event = matrixEvent({
@@ -542,6 +551,7 @@ test("destinations can filter by decision, route, source, and type", async () =>
       route: "coding"
     }),
     config: checkpointConfig(join(dir, "checkpoints.json")),
+    logger: silentLogger,
     plugins: [
       {
         module: "./plugins/static-observations/index.mjs",

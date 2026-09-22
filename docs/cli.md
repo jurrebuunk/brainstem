@@ -39,6 +39,16 @@ Use a different config file:
 node brainstem.mjs --config ./my.config.mjs --once
 ```
 
+Override runtime logging:
+
+```sh
+node brainstem.mjs --log-level debug --log-format json
+```
+
+Log levels: `debug`, `info`, `warn`, `error`, `silent`.
+
+Log formats: `pretty`, `json`.
+
 Show help:
 
 ```sh

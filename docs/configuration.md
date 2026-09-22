@@ -90,6 +90,11 @@ Filters:
 
 ```js
 runtime: {
+  logging: {
+    level: "info",
+    format: "pretty"
+  },
+
   records: {
     type: "sqlite",
     path: "data/brainstem.sqlite",
@@ -109,6 +114,13 @@ runtime: {
   }
 }
 ```
+
+`runtime.logging` controls application/runtime logs. These are separate from the optional `log-decisions` destination.
+
+- `level`: `debug`, `info`, `warn`, `error`, or `silent`
+- `format`: `pretty` or `json`
+
+Use `pretty` for local/Docker Compose logs and `json` when shipping logs to a collector.
 
 ## Secrets
 

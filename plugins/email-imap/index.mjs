@@ -22,8 +22,13 @@ export default defineInputPlugin({
           checkpoint ?? {}
         );
 
-        ctx.logger?.info?.(
-          `[brainstem] email-imap ${config.user}: ${result.messages.length} new message(s); checkpoint uid ${result.checkpoint.lastUid}`
+        ctx.logger?.debug?.(
+          "email-imap poll result",
+          {
+            user: config.user,
+            messages: result.messages.length,
+            checkpointUid: result.checkpoint.lastUid
+          }
         );
 
         for (const message of result.messages) {
