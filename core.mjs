@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { Laya } from "@receptron/laya";
 
+import { MemoryRecordStore } from "./record-stores.mjs";
+
 const VERSION = "1";
 
 const DECISIONS = [
@@ -12,14 +14,22 @@ const DECISIONS = [
 
 
 export class Brainstem {
-  constructor(config) {
+  constructor(config, {
+    store,
+    cacheKey
+  } = {}) {
     this.config =
       structuredClone(config);
+
+    this.cacheKey =
+      cacheKey ?? cacheKeyOf(
+        this.config
+      );
 
     this.laya = null;
 
     this.records =
-      new Map();
+      store ?? new MemoryRecordStore();
 
     /*
      * Per-observation locks.
@@ -68,6 +78,7 @@ export class Brainstem {
       .catch(() => {});
 
     await this.laya?.close();
+    await this.records?.close?.();
 
     this.laya = null;
   }
@@ -156,9 +167,13 @@ export class Brainstem {
         payload.id
       );
 
+    const now =
+      new Date().toISOString();
+
 
     /*
-     * Nothing meaningful changed.
+     * Nothing meaningful changed and the
+     * current decision cache is still valid.
      *
      * Store the newest observation so the
      * latest observation timestamp/state is
@@ -166,10 +181,20 @@ export class Brainstem {
      */
     if (
       existing?.fingerprint ===
-      fingerprint
+        fingerprint &&
+      existing.cache_key ===
+        this.cacheKey
     ) {
-      existing.observation =
-        observation;
+      this.records.touch(
+        payload.id,
+        {
+          observation:
+            structuredClone(
+              observation
+            ),
+          lastSeenAt: now
+        }
+      );
 
       return structuredClone(
         existing.decision
@@ -194,8 +219,14 @@ export class Brainstem {
       );
 
 
-    const revision =
-      (existing?.revision ?? 0) + 1;
+    const revision = existing
+      ? (
+          existing.fingerprint ===
+          fingerprint
+            ? existing.revision
+            : existing.revision + 1
+        )
+      : 1;
 
 
     const decision = {
@@ -245,23 +276,31 @@ export class Brainstem {
     /*
      * Store private copies.
      */
-    this.records.set(
-      payload.id,
-      {
-        revision,
-        fingerprint,
+    this.records.put({
+      id: payload.id,
+      revision,
+      fingerprint,
+      cache_key: this.cacheKey,
 
-        observation:
-          structuredClone(
-            observation
-          ),
+      observation:
+        structuredClone(
+          observation
+        ),
 
-        decision:
-          structuredClone(
-            decision
-          )
-      }
-    );
+      decision:
+        structuredClone(
+          decision
+        ),
+
+      first_seen_at:
+        existing?.first_seen_at ?? now,
+
+      last_seen_at:
+        now,
+
+      updated_at:
+        now
+    });
 
 
     return structuredClone(
@@ -707,6 +746,26 @@ export function createObservation({
  * Polling the same state at a later time
  * should not trigger semantic evaluation.
  */
+
+function cacheKeyOf(config) {
+  const content = {
+    version: VERSION,
+    policy:
+      config.policy ?? {},
+    laya:
+      config.laya ?? {}
+  };
+
+  return createHash(
+    "sha256"
+  )
+    .update(
+      stableStringify(
+        content
+      )
+    )
+    .digest("hex");
+}
 
 function fingerprintOf(
   observation

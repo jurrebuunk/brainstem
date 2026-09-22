@@ -115,12 +115,14 @@ function validatePluginBase(plugin, apiVersion, label) {
 export function createInputContext({
   config = {},
   signal,
-  logger = console
+  logger = console,
+  checkpoint
 } = {}) {
   return {
     config,
     signal,
     logger,
+    checkpoint,
 
     observation(input) {
       return createObservation(input);

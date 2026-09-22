@@ -22,6 +22,7 @@ export default {
    */
   inputs: [
     {
+      id: "github-brainstem-issues",
       module: "./plugins/github-issues.mjs",
       input: "issues",
       retry: {
@@ -57,6 +58,17 @@ export default {
   ],
 
   runtime: {
+    records: {
+      type: "sqlite",
+      path: "data/brainstem.sqlite",
+      pruneAfterDays: 90
+    },
+
+    checkpoints: {
+      type: "json",
+      path: "data/checkpoints.json"
+    },
+
     retry: {
       attempts: 3,
       minDelayMs: 1000,

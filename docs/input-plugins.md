@@ -44,9 +44,46 @@ ctx.config       // plugin entry config from brainstem.config.mjs
 ctx.signal       // AbortSignal for shutdown/cancellation
 ctx.logger       // logger, usually console
 ctx.observation  // helper around createObservation()
+ctx.checkpoint   // scoped checkpoint API for this configured input
 ```
 
-Persistent adapter state and cursors are intentionally not part of phase 1. Adapters should be safe to poll repeatedly and rely on Brainstem's observation deduplication.
+## Checkpoints
+
+Adapters can use checkpoints to avoid repeatedly fetching old append-only data such as chat messages, emails, or logs.
+
+Adapters do not access storage directly. The runtime provides a scoped API:
+
+```js
+const checkpoint = await ctx.checkpoint.get();
+
+const items = await fetchNewItems({
+  since: checkpoint?.lastSeenAt
+});
+
+for (const item of items) {
+  yield ctx.observation(...);
+}
+
+ctx.checkpoint.defer({
+  lastSeenAt: items.at(-1)?.timestamp ?? checkpoint?.lastSeenAt
+});
+```
+
+`defer()` does not write immediately. The runtime commits the deferred checkpoint only after the adapter finishes polling and all emitted observations have been processed successfully. If the process crashes before then, the checkpoint is not advanced and the next poll may safely refetch overlapping items.
+
+Checkpoint values must be JSON-only. Use `null` to clear a checkpoint.
+
+Use stable input IDs so checkpoint ownership survives config reordering:
+
+```js
+inputs: [
+  {
+    id: "matrix-main-room",
+    module: "./plugins/matrix.mjs",
+    input: "messages"
+  }
+]
+```
 
 ## Observation IDs
 

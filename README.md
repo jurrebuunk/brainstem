@@ -290,7 +290,7 @@ Destinations can filter by decision level, the core's abstract route, observatio
 
 This keeps decision handling outside the core. Later adapters can wake agents, call webhooks, or enqueue tasks.
 
-See `docs/input-plugins.md` for adapter author guidance, stable ID conventions, token handling, and retry configuration.
+See `docs/input-plugins.md` for adapter author guidance, stable ID conventions, checkpoint handling, token handling, and retry configuration. See `docs/state.md` for persistent core records and input checkpoints.
 
 Phase 1 intentionally supports only local file plugins and polling inputs. NPM package loading, richer secrets helpers, streaming inputs, and richer destination adapters can be added later without changing the core.
 
