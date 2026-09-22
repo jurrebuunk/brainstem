@@ -14,6 +14,8 @@ inputs: [
       url: "https://example.com/health",
       timeoutMs: 10000,
       expectedStatuses: [[200, 399]],
+      failureThreshold: 3,
+      recoveryThreshold: 2,
       minimumDecisionOnFailure: "dispatch"
     }
   }
@@ -55,8 +57,12 @@ method                      // default: GET
 timeoutMs                   // default: 10000
 expectedStatuses            // default: [[200, 399]]
 emitHealthy                 // default: true
+failureThreshold            // default: 1; failed polls required before unhealthy
+recoveryThreshold           // default: 1; healthy polls required before recovery
 minimumDecisionOnFailure    // optional: queue, dispatch, escalate
 ```
+
+`failureThreshold` and `recoveryThreshold` are backed by the standard input checkpoint API. This prevents one transient timeout from immediately producing an alert.
 
 The adapter emits observations with:
 
@@ -73,7 +79,7 @@ destinations: [
   {
     module: "./plugins/matrix/index.mjs",
     destination: "room",
-    decisions: ["dispatch", "escalate"],
+    decisions: "all",
     routes: ["infrastructure"],
     sources: ["http"],
     types: ["health_check"],

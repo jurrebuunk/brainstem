@@ -166,6 +166,65 @@ test("http health input emits unhealthy observations", async () => {
   }
 });
 
+test("http health input respects failure and recovery thresholds", async () => {
+  const originalFetch = globalThis.fetch;
+  const statuses = [503, 503, 503, 200, 200];
+  let checkpoint;
+  const emitted = [];
+
+  globalThis.fetch = async () => {
+    const status = statuses.shift();
+
+    return {
+      status,
+      statusText:
+        status === 200
+          ? "OK"
+          : "Service Unavailable"
+    };
+  };
+
+  try {
+    for (let index = 0; index < 5; index += 1) {
+      const deferred = { value: undefined };
+
+      const ctx = {
+        config: {
+          url: "https://example.com/health",
+          name: "example",
+          failureThreshold: 3,
+          recoveryThreshold: 2,
+          minimumDecisionOnFailure: "dispatch"
+        },
+        signal: new AbortController().signal,
+        observation: createObservation,
+        checkpoint: {
+          async get() {
+            return checkpoint;
+          },
+          defer(value) {
+            deferred.value = value;
+          }
+        }
+      };
+
+      for await (const observation of httpHealthPlugin.inputs.check.poll(ctx)) {
+        emitted.push(observation.payload.state);
+      }
+
+      checkpoint = deferred.value;
+    }
+  }
+  finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(emitted, [
+    "unhealthy",
+    "healthy"
+  ]);
+});
+
 test("matrix destination sends room messages", async () => {
   resetNotificationState();
 

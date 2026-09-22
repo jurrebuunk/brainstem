@@ -25,6 +25,26 @@ function normalizeCheck(check, index, defaults) {
     );
   }
 
+  const failureThreshold =
+    check.failureThreshold ??
+    defaults.failureThreshold ??
+    1;
+
+  const recoveryThreshold =
+    check.recoveryThreshold ??
+    defaults.recoveryThreshold ??
+    1;
+
+  validateThreshold(
+    failureThreshold,
+    `HTTP health check ${index} failureThreshold`
+  );
+
+  validateThreshold(
+    recoveryThreshold,
+    `HTTP health check ${index} recoveryThreshold`
+  );
+
   return {
     id:
       check.id ??
@@ -55,8 +75,22 @@ function normalizeCheck(check, index, defaults) {
       defaults.emitHealthy ??
       true,
 
+    failureThreshold,
+    recoveryThreshold,
+
     minimumDecisionOnFailure:
       check.minimumDecisionOnFailure ??
       defaults.minimumDecisionOnFailure
   };
+}
+
+function validateThreshold(value, name) {
+  if (
+    !Number.isInteger(value) ||
+    value < 1
+  ) {
+    throw new Error(
+      `${name} must be an integer >= 1`
+    );
+  }
 }

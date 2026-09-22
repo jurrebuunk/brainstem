@@ -105,6 +105,8 @@ export default {
         url: "https://example.com/health",
         timeoutMs: 10_000,
         expectedStatuses: [[200, 399]],
+        failureThreshold: 3,
+        recoveryThreshold: 2,
         minimumDecisionOnFailure: "dispatch"
       }
     }
