@@ -390,8 +390,8 @@ export class BrainstemRuntime {
 
     for (const destinationEntry of this.destinationEntries) {
       if (
-        !decisionMatchesDestination(
-          event.decision,
+        !eventMatchesDestination(
+          event,
           destinationEntry.entry
         )
       ) {
@@ -590,10 +590,12 @@ function sleep(ms, signal) {
   });
 }
 
-function decisionMatchesDestination(decision, entry) {
+function eventMatchesDestination(event, entry) {
   return (
-    decisionLevelMatches(decision, entry) &&
-    routeMatches(decision, entry)
+    decisionLevelMatches(event.decision, entry) &&
+    routeMatches(event.decision, entry) &&
+    sourceMatches(event.observation, entry) &&
+    typeMatches(event.observation, entry)
   );
 }
 
@@ -624,6 +626,32 @@ function routeMatches(decision, entry) {
 
   return allowed.includes(
     decision.payload.route
+  );
+}
+
+function sourceMatches(observation, entry) {
+  const allowed =
+    entry.sources;
+
+  if (!allowed || allowed === "all") {
+    return true;
+  }
+
+  return allowed.includes(
+    observation.payload.source.type
+  );
+}
+
+function typeMatches(observation, entry) {
+  const allowed =
+    entry.types;
+
+  if (!allowed || allowed === "all") {
+    return true;
+  }
+
+  return allowed.includes(
+    observation.payload.type
   );
 }
 

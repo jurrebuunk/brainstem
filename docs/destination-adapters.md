@@ -11,6 +11,8 @@ destinations: [
     destination: "default",
     decisions: ["queue", "dispatch", "escalate"],
     routes: ["coding", "security"],
+    sources: ["github"],
+    types: ["issue"],
     config: {
       prefix: "brainstem"
     }
@@ -36,7 +38,20 @@ Use `routes` to filter by the abstract route chosen by the core:
 }
 ```
 
-Omit `routes` or set `routes: "all"` to receive every route.
+Use `sources` to filter by `observation.payload.source.type`, and `types` to filter by `observation.payload.type`:
+
+```js
+{
+  module: "./plugins/log-decisions.mjs",
+  decisions: ["dispatch"],
+  routes: ["security"],
+  sources: ["github"],
+  types: ["issue"],
+  config: { prefix: "github-security-issues" }
+}
+```
+
+Omit a filter or set it to `"all"` to receive every value for that field.
 
 A destination adapter exports:
 
@@ -78,12 +93,16 @@ destinations: [
     module: "./plugins/log-decisions.mjs",
     decisions: ["queue", "dispatch"],
     routes: ["coding"],
+    sources: ["github"],
+    types: ["issue"],
     config: { prefix: "coding-agent" }
   },
   {
     module: "./plugins/log-decisions.mjs",
     decisions: ["dispatch", "escalate"],
     routes: ["security"],
+    sources: "all",
+    types: "all",
     config: { prefix: "security-agent" }
   }
 ]

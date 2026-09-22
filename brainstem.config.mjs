@@ -48,6 +48,8 @@ export default {
         "escalate"
       ],
       routes: "all",
+      sources: "all",
+      types: "all",
       config: {
         prefix: "brainstem"
       }

@@ -277,6 +277,8 @@ destinations: [
     destination: "default",
     decisions: ["queue", "dispatch", "escalate"],
     routes: ["coding", "security"],
+    sources: ["github"],
+    types: ["issue"],
     config: {
       prefix: "brainstem"
     }
@@ -284,7 +286,7 @@ destinations: [
 ]
 ```
 
-Destinations can filter by decision level and by the core's abstract route. Use `routes: "all"` or omit `routes` to receive every route.
+Destinations can filter by decision level, the core's abstract route, observation source, and observation type. Use `"all"` or omit a filter to receive every value for that field.
 
 This keeps decision handling outside the core. Later adapters can wake agents, call webhooks, or enqueue tasks.
 
