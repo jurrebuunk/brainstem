@@ -153,6 +153,26 @@ Monitor
 
 This avoids having every external system maintain its own webhook or direct integration with an agent.
 
+## Quick Start
+
+```sh
+cp brainstem.config.example.mjs brainstem.config.mjs
+cp .env.example .env
+npm run start:once
+```
+
+`brainstem.config.mjs` and `.env` are local files and are ignored by git.
+
+Useful commands:
+
+```sh
+npm start              # run continuously
+npm run start:once     # poll once and exit
+npm run start:once:all # poll once and print ignored decisions through log destinations
+```
+
+See `docs/cli.md` for CLI and config details.
+
 ## Project Layout
 
 Brainstem is split into a small core, runtime, SDK, and directory-based plugins:
@@ -163,8 +183,6 @@ src/runtime/              plugin loading, routing, checkpoints
 src/sdk/                  adapter author helpers
 plugins/<name>/index.mjs  plugin entrypoints
 ```
-
-Root files such as `core.mjs`, `runtime.mjs`, and `sdk.mjs` are compatibility re-exports.
 
 ## Input Plugins
 
@@ -203,7 +221,7 @@ The runtime loads local plugin files and sends emitted observations to the core:
 
 ```js
 import config from "./brainstem.config.mjs";
-import { BrainstemRuntime } from "./runtime.mjs";
+import { BrainstemRuntime } from "./src/runtime/runtime.mjs";
 
 const runtime = new BrainstemRuntime({
   config,

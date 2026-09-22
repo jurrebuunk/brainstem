@@ -1,10 +1,10 @@
 import { performance } from "node:perf_hooks";
 
-import config from "./brainstem.config.mjs";
+import config from "./brainstem.config.example.mjs";
 import {
   Brainstem,
   createObservation
-} from "./core.mjs";
+} from "./src/core/brainstem.mjs";
 
 const brainstem = new Brainstem(config);
 

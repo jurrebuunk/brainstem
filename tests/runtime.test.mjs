@@ -5,10 +5,10 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import config from "../brainstem.config.mjs";
-import { Brainstem, createObservation } from "../core.mjs";
-import { SqliteRecordStore } from "../record-stores.mjs";
-import { BrainstemRuntime } from "../runtime.mjs";
+import config from "../brainstem.config.example.mjs";
+import { Brainstem, createObservation } from "../src/core/brainstem.mjs";
+import { SqliteRecordStore } from "../src/core/record-stores.mjs";
+import { BrainstemRuntime } from "../src/runtime/runtime.mjs";
 import httpHealthPlugin from "../plugins/http-health/index.mjs";
 import matrixPlugin from "../plugins/matrix/index.mjs";
 

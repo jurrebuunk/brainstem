@@ -1,5 +1,5 @@
-import config from "./brainstem.config.mjs";
-import { BrainstemRuntime } from "./runtime.mjs";
+import config from "./brainstem.config.example.mjs";
+import { BrainstemRuntime } from "./src/runtime/runtime.mjs";
 
 const runtime = new BrainstemRuntime({
   config,

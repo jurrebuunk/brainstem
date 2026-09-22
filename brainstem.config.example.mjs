@@ -1,93 +1,37 @@
 export default {
   /*
-   * Input plugins consumed by brainstem.mjs.
+   * Example input plugins.
    *
-   * HTTP health example:
-   *
-   * inputs: [
-   *   {
-   *     id: "api-health",
-   *     module: "./plugins/http-health/index.mjs",
-   *     input: "check",
-   *     config: {
-   *       url: "https://example.com/health",
-   *       minimumDecisionOnFailure: "dispatch"
-   *     }
-   *   }
-   * ],
-   *
-   * GitHub example:
-   *
-   * inputs: [
-   *   {
-   *     module: "./plugins/github-issues/index.mjs",
-   *     input: "issues",
-   *     config: {
-   *       repo: "owner/repo",
-   *
-   *       // Keep tokens in the environment, not in this file.
-   *       tokenEnv: "GITHUB_TOKEN",
-   *
-   *       // Equivalent object form:
-   *       // token: { env: "GITHUB_TOKEN" }
-   *     }
-   *   }
-   * ],
+   * Copy this file to brainstem.config.mjs and edit for your environment.
    */
   inputs: [
+    /*
     {
-      id: "localhost-4321-health",
+      id: "api-health",
       module: "./plugins/http-health/index.mjs",
       input: "check",
-      retry: {
-        attempts: 3,
-        minDelayMs: 1000,
-        maxDelayMs: 10000,
-        factor: 2
-      },
       config: {
-        name: "localhost:4321",
-        url: "http://localhost:4321/",
+        name: "example-api",
+        url: "https://example.com/health",
         timeoutMs: 10000,
         expectedStatuses: [[200, 399]],
         minimumDecisionOnFailure: "dispatch"
       }
     },
     {
-      id: "github-brainstem-issues",
+      id: "github-issues",
       module: "./plugins/github-issues/index.mjs",
       input: "issues",
-      retry: {
-        attempts: 3,
-        minDelayMs: 1000,
-        maxDelayMs: 10000,
-        factor: 2
-      },
       config: {
-        repo: "jurrebuunk/brainstem",
+        repo: "owner/repo",
         tokenEnv: "GITHUB_TOKEN",
         perPage: 10
       }
     }
+    */
   ],
 
   destinations: [
-    {
-      module: "./plugins/matrix/index.mjs",
-      destination: "room",
-      decisions: [
-        "dispatch",
-        "escalate"
-      ],
-      routes: "all",
-      sources: ["http"],
-      types: ["health_check"],
-      config: {
-        homeserver: "https://matrix.buunk.org",
-        roomId: "!ZpLgBLhaayVddvfVgb:buunk.org",
-        tokenEnv: "MATRIX_ACCESS_TOKEN"
-      }
-    },
     {
       module: "./plugins/log-decisions/index.mjs",
       destination: "default",
@@ -103,6 +47,22 @@ export default {
         prefix: "brainstem"
       }
     }
+
+    /*
+    ,{
+      module: "./plugins/matrix/index.mjs",
+      destination: "room",
+      decisions: ["dispatch", "escalate"],
+      routes: "all",
+      sources: "all",
+      types: "all",
+      config: {
+        homeserver: "https://matrix.example.org",
+        roomId: "!roomid:example.org",
+        tokenEnv: "MATRIX_ACCESS_TOKEN"
+      }
+    }
+    */
   ],
 
   runtime: {
