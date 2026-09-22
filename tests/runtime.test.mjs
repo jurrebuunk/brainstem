@@ -232,8 +232,9 @@ test("matrix destination sends room messages", async () => {
 
     const body = JSON.parse(calls[0].options.body);
     assert.equal(body.msgtype, "m.text");
-    assert.match(body.body, /Brainstem dispatch/);
+    assert.match(body.body, /Brainstem alert/);
     assert.match(body.body, /example is unhealthy/);
+    assert.match(body.body, /Decision: DISPATCH/);
   }
   finally {
     globalThis.fetch = originalFetch;
@@ -295,7 +296,8 @@ test("matrix destination suppresses repeats and sends recovery", async () => {
   const firstBody = JSON.parse(calls[0].options.body).body;
   const secondBody = JSON.parse(calls[1].options.body).body;
 
-  assert.match(firstBody, /Brainstem dispatch/);
+  assert.match(firstBody, /Brainstem alert/);
+  assert.match(firstBody, /Decision: DISPATCH/);
   assert.match(secondBody, /Brainstem recovery/);
 });
 

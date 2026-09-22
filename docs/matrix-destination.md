@@ -104,13 +104,36 @@ retry: {
 
 ## Message formatting
 
-Plain text is the default:
+Plain text is the default. Messages are written for humans and include a clear alert type, short explanation, decision, route, source, reason, and URL when available.
+
+Example:
+
+```text
+🚨 Brainstem alert: api is unhealthy
+
+This observation should be investigated now.
+
+Decision: DISPATCH
+Route: infrastructure
+State: unhealthy
+Source: http/api
+Type: health_check
+Observation: http-health:api
+Reason: Observation requires immediate investigation
+
+URL: https://example.com/health
+```
+
+Configure text output:
 
 ```js
 message: {
-  format: "text"
+  format: "text",
+  compact: false
 }
 ```
+
+Set `compact: true` for shorter room messages.
 
 HTML formatting is also supported:
 
