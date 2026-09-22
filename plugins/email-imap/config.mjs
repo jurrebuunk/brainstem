@@ -18,7 +18,8 @@ export function normalizeConfig(config) {
     password,
     startFromNow: config.startFromNow ?? true,
     maxMessages: config.maxMessages ?? 25,
-    maxBytes: config.maxBytes ?? 8192
+    maxBytes: config.maxBytes ?? 8192,
+    timeoutMs: config.timeoutMs ?? 10_000
   };
 }
 

@@ -59,21 +59,31 @@ export async function planNotification(ctx, event) {
       changed ||
       repeatDue
     ) {
+      const kind =
+        previous?.status === "active" &&
+        !changed
+          ? "repeat"
+          : "alert";
+
+      const previousEventId =
+        kind === "repeat"
+          ? previous?.rootEventId ?? previous?.eventId
+          : null;
+
       return {
         send: true,
-        kind:
-          previous?.status === "active" &&
-          !changed
-            ? "repeat"
-            : "alert",
-        previousEventId:
-          previous?.eventId,
+        kind,
+        previousEventId,
         async commit({ eventId } = {}) {
           state[key] = {
             status: "active",
             fingerprint: decision.fingerprint,
             decision: decision.decision,
             observationState: observation.state,
+            rootEventId:
+              kind === "repeat"
+                ? previous?.rootEventId ?? previous?.eventId ?? eventId ?? null
+                : eventId ?? null,
             eventId: eventId ?? previous?.eventId ?? null,
             lastSentAt: now,
             updatedAt: new Date(now).toISOString()
@@ -95,13 +105,14 @@ export async function planNotification(ctx, event) {
       send: true,
       kind: "recovery",
       previousEventId:
-        previous.eventId,
+        previous.rootEventId ?? previous.eventId,
       async commit({ eventId } = {}) {
         state[key] = {
           status: "resolved",
           fingerprint: decision.fingerprint,
           decision: decision.decision,
           observationState: observation.state,
+          rootEventId: previous.rootEventId ?? previous.eventId ?? null,
           eventId: eventId ?? previous.eventId ?? null,
           lastSentAt: now,
           updatedAt: new Date(now).toISOString()

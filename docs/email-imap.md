@@ -24,7 +24,8 @@ inputs: [
       passwordEnv: "EMAIL_PASSWORD",
       mailbox: "INBOX",
       startFromNow: true,
-      maxMessages: 25
+      maxMessages: 25,
+      timeoutMs: 10000
     }
   }
 ]
@@ -43,6 +44,7 @@ mailbox        // default: INBOX
 startFromNow   // default: true; do not emit old mail on first run
 maxMessages    // default: 25 per poll
 maxBytes       // default: 8192 snippet bytes
+timeoutMs      // default: 10000 connection/socket timeout
 ```
 
 ## Checkpoints

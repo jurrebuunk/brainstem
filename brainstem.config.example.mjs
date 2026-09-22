@@ -43,7 +43,8 @@ export default {
         user: "user@example.com",
         passwordEnv: "EMAIL_PASSWORD",
         mailbox: "INBOX",
-        startFromNow: true
+        startFromNow: true,
+        timeoutMs: 10000
       }
     },
     {

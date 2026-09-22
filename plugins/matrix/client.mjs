@@ -48,6 +48,26 @@ async function sendOnce({
       await response.text()
         .catch(() => "");
 
+    if (
+      response.status === 400 &&
+      content?.["m.relates_to"] &&
+      body.includes("Cannot start threads")
+    ) {
+      const fallbackContent = {
+        ...content
+      };
+
+      delete fallbackContent["m.relates_to"];
+
+      return await sendOnce({
+        homeserver,
+        roomId,
+        token,
+        content: fallbackContent,
+        signal
+      });
+    }
+
     throw matrixError(response, body);
   }
 

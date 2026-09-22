@@ -9,7 +9,10 @@ export async function fetchNewMessages(config, checkpoint = {}) {
       user: config.user,
       pass: config.password
     },
-    logger: false
+    logger: false,
+    connectionTimeout: config.timeoutMs,
+    greetingTimeout: config.timeoutMs,
+    socketTimeout: config.timeoutMs
   });
 
   await client.connect();
@@ -34,7 +37,7 @@ export async function fetchNewMessages(config, checkpoint = {}) {
         checkpoint = {};
       }
 
-      if (!checkpoint.lastUid && config.startFromNow) {
+      if (checkpoint.lastUid == null && config.startFromNow) {
         return {
           messages: [],
           checkpoint: {
