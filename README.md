@@ -47,6 +47,8 @@ Destination plugins:
 - `log-decisions` — logs decisions to stdout.
 - `matrix` — sends decisions to a Matrix room.
 
+See the [plugin catalog](docs/plugins.md) for all built-in plugins and configuration examples.
+
 ## Requirements
 
 - Node.js `>=24`
@@ -87,7 +89,7 @@ Installed package usage:
 npx @jurrebuunk/brainstem --help
 ```
 
-See [`docs/cli.md`](docs/cli.md) for more details.
+See [`docs/README.md`](docs/README.md) for the full documentation index and [`docs/cli.md`](docs/cli.md) for CLI details.
 
 ## Example config
 
