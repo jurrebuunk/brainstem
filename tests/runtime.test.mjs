@@ -13,6 +13,7 @@ import httpHealthPlugin from "../plugins/http-health/index.mjs";
 import matrixPlugin from "../plugins/matrix/index.mjs";
 import { resetNotificationState } from "../plugins/matrix/notify.mjs";
 import { evaluateCertificate } from "../plugins/tls-certificate/check.mjs";
+import { toObservation as emailToObservation } from "../plugins/email-imap/observation.mjs";
 
 const minimalPolicyConfig = {
   policy: config.policy,
@@ -224,6 +225,37 @@ test("http health input respects failure and recovery thresholds", async () => {
     "unhealthy",
     "healthy"
   ]);
+});
+
+test("email imap input normalizes email observations", () => {
+  const observation = emailToObservation(
+    {
+      observation: createObservation
+    },
+    {
+      user: "bob@example.com"
+    },
+    {
+      uid: 42,
+      messageId: "message-id",
+      subject: "Can you look at this?",
+      from: [
+        {
+          name: "Alice",
+          address: "alice@example.com"
+        }
+      ],
+      to: [],
+      date: "2026-01-01T00:00:00.000Z",
+      flags: [],
+      snippet: "The production API is returning errors."
+    }
+  );
+
+  assert.equal(observation.payload.id, "email:bob@example.com:42");
+  assert.equal(observation.payload.source.type, "email");
+  assert.equal(observation.payload.type, "message");
+  assert.match(observation.payload.message, /production API/);
 });
 
 test("tls certificate evaluation detects expiring certificates", () => {

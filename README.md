@@ -39,6 +39,7 @@ The goal is simple:
 Input plugins:
 
 - `github-issues` — polls GitHub issues.
+- `email-imap` — polls IMAP inboxes for new email.
 - `http-health` — polls HTTP endpoints.
 - `tls-certificate` — checks TLS certificate validity and expiry.
 - `static-observations` — local smoke-test input.

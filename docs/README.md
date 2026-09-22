@@ -19,6 +19,7 @@ Documentation is kept in the repository so it is versioned with the code.
 Built-in plugin pages:
 
 - [GitHub Issues input](plugins/github-issues.md)
+- [Email IMAP input](email-imap.md)
 - [HTTP Health input](http-health.md)
 - [TLS Certificate input](tls-certificate.md)
 - [Static Observations input](plugins/static-observations.md)

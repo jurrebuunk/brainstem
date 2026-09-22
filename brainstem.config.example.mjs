@@ -33,6 +33,20 @@ export default {
       }
     },
     {
+      id: "email-inbox",
+      module: "./plugins/email-imap/index.mjs",
+      input: "messages",
+      config: {
+        host: "imap.example.com",
+        port: 993,
+        secure: true,
+        user: "user@example.com",
+        passwordEnv: "EMAIL_PASSWORD",
+        mailbox: "INBOX",
+        startFromNow: true
+      }
+    },
+    {
       id: "github-issues",
       module: "./plugins/github-issues/index.mjs",
       input: "issues",
@@ -68,13 +82,14 @@ export default {
       destination: "room",
       decisions: "all",
       routes: "all",
-      sources: ["http", "tls"],
-      types: ["health_check", "certificate"],
+      sources: ["http", "tls", "email"],
+      types: ["health_check", "certificate", "message"],
       config: {
         homeserver: "https://matrix.example.org",
         roomId: "!roomid:example.org",
         tokenEnv: "MATRIX_ACCESS_TOKEN",
         notify: {
+          actionableDecisions: ["queue", "dispatch", "escalate"],
           repeatAfterMs: 60 * 60 * 1000,
           onRecovery: true,
           statePath: "data/matrix-notifications.json"
