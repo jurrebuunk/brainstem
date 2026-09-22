@@ -22,7 +22,7 @@ docker run --rm \
   --env-file .env \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:0.1.0-alpha.0 \
+  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.0 \
   node brainstem.mjs --once
 ```
 
@@ -35,7 +35,7 @@ docker run -d \
   --env-file .env \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:0.1.0-alpha.0
+  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.0
 ```
 
 View logs:
