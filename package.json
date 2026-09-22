@@ -1,5 +1,5 @@
 {
-  "name": "brainstem",
+  "name": "@jurrebuunk/brainstem",
   "version": "0.1.0-alpha.0",
   "description": "A lightweight decision and orchestration layer for autonomous AI agents.",
   "main": "src/core/brainstem.mjs",

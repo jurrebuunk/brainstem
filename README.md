@@ -84,7 +84,7 @@ node brainstem.mjs --config ./brainstem.config.mjs --once
 Installed package usage:
 
 ```sh
-npx brainstem --help
+npx @jurrebuunk/brainstem --help
 ```
 
 See [`docs/cli.md`](docs/cli.md) for more details.
