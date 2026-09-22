@@ -1,5 +1,11 @@
 # Brainstem
 
+[![Release](https://img.shields.io/github/v/release/jurrebuunk/brainstem?include_prereleases&label=release)](https://github.com/jurrebuunk/brainstem/releases/tag/v0.1.0-alpha.0)
+[![License: ISC](https://img.shields.io/badge/license-ISC-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D24-339933?logo=node.js&logoColor=white)](package.json)
+[![Status](https://img.shields.io/badge/status-alpha-orange.svg)](CHANGELOG.md)
+[![Plugin API](https://img.shields.io/badge/plugin%20API-inputs%20%7C%20destinations-purple.svg)](docs/input-plugins.md)
+
 > Alpha: `0.1.0-alpha.0`. Brainstem is ready for local experimentation. APIs and plugin contracts may still change.
 
 Brainstem is a lightweight decision and orchestration layer for autonomous AI agents.
