@@ -111,6 +111,18 @@ runtime: {
     minDelayMs: 1000,
     maxDelayMs: 30000,
     factor: 2
+  },
+
+  startupRetry: {
+    attempts: 3,
+    minDelayMs: 5000,
+    maxDelayMs: 60000,
+    factor: 2
+  },
+
+  laya: {
+    cacheDir: "data/laya-cache"
+    // or modelDir: "data/laya-model"
   }
 }
 ```
@@ -121,6 +133,13 @@ runtime: {
 - `format`: `pretty` or `json`
 
 Use `pretty` for local/Docker Compose logs and `json` when shipping logs to a collector.
+
+`runtime.startupRetry` controls retries while starting the core. This is useful because the first startup may download the Laya model bundle and can fail on temporary network/DNS timeouts.
+
+`runtime.laya` is passed to `Laya.load()`. Useful options:
+
+- `cacheDir`: where downloaded Laya model files are cached
+- `modelDir`: use a pre-downloaded model directory and skip network downloads
 
 ## Secrets
 

@@ -119,6 +119,16 @@ else {
       await runtime.wait();
     }
   }
+  catch (error) {
+    logger.error(
+      "brainstem failed",
+      {
+        error
+      }
+    );
+
+    process.exitCode = 1;
+  }
   finally {
     await runtime.close();
   }

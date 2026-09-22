@@ -126,7 +126,9 @@ export class BrainstemRuntime {
       }
     );
 
-    await this.brainstem.start();
+    await this.#startBrainstem(
+      this.abortController.signal
+    );
 
     this.destinationEntries =
       await this.#loadDestinationEntries();
@@ -188,7 +190,9 @@ export class BrainstemRuntime {
         }
       );
 
-      await this.brainstem.start();
+      await this.#startBrainstem(
+        this.abortController.signal
+      );
 
       this.destinationEntries =
         await this.#loadDestinationEntries();
@@ -214,6 +218,70 @@ export class BrainstemRuntime {
 
   async wait() {
     await Promise.all(this.tasks);
+  }
+
+  async #startBrainstem(signal) {
+    const retry =
+      this.#startupRetryConfig();
+
+    let attempt = 0;
+    let delayMs = retry.minDelayMs;
+
+    while (true) {
+      attempt += 1;
+
+      try {
+        this.logger.debug?.(
+          "core starting",
+          {
+            attempt,
+            attempts: retry.attempts
+          }
+        );
+
+        await this.brainstem.start();
+
+        this.logger.info?.(
+          "core started"
+        );
+
+        return;
+      }
+      catch (error) {
+        if (
+          attempt >= retry.attempts ||
+          signal?.aborted
+        ) {
+          this.logger.error?.(
+            "core failed to start",
+            {
+              attempt,
+              attempts: retry.attempts,
+              error
+            }
+          );
+
+          throw error;
+        }
+
+        this.logger.warn?.(
+          "core start failed; retrying",
+          {
+            attempt,
+            attempts: retry.attempts,
+            retryInMs: delayMs,
+            error
+          }
+        );
+
+        await sleep(delayMs, signal);
+
+        delayMs = Math.min(
+          retry.maxDelayMs,
+          delayMs * retry.factor
+        );
+      }
+    }
   }
 
   async close() {
@@ -349,6 +417,14 @@ export class BrainstemRuntime {
     };
   }
 
+  #startupRetryConfig() {
+    return normalizeRetry({
+      ...DEFAULT_RETRY,
+      ...(this.config.runtime?.retry ?? {}),
+      ...(this.config.runtime?.startupRetry ?? {})
+    });
+  }
+
   #retryConfig(entry) {
     const retry = {
       ...DEFAULT_RETRY,
@@ -357,27 +433,7 @@ export class BrainstemRuntime {
       ...(entry.config?.retry ?? {})
     };
 
-    retry.attempts = Math.max(
-      1,
-      Number(retry.attempts ?? 1)
-    );
-
-    retry.minDelayMs = Math.max(
-      0,
-      Number(retry.minDelayMs ?? 0)
-    );
-
-    retry.maxDelayMs = Math.max(
-      retry.minDelayMs,
-      Number(retry.maxDelayMs ?? retry.minDelayMs)
-    );
-
-    retry.factor = Math.max(
-      1,
-      Number(retry.factor ?? 1)
-    );
-
-    return retry;
+    return normalizeRetry(retry);
   }
 
   async #pollInputWithRetry(args) {
@@ -790,6 +846,30 @@ async function* toAsyncIterable(value) {
   throw new TypeError(
     "poll(ctx) must return an iterable, async iterable, or array of observations"
   );
+}
+
+function normalizeRetry(retry) {
+  retry.attempts = Math.max(
+    1,
+    Number(retry.attempts ?? 1)
+  );
+
+  retry.minDelayMs = Math.max(
+    0,
+    Number(retry.minDelayMs ?? 0)
+  );
+
+  retry.maxDelayMs = Math.max(
+    retry.minDelayMs,
+    Number(retry.maxDelayMs ?? retry.minDelayMs)
+  );
+
+  retry.factor = Math.max(
+    1,
+    Number(retry.factor ?? 1)
+  );
+
+  return retry;
 }
 
 function storeInfo(store) {

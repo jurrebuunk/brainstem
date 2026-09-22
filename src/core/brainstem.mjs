@@ -57,7 +57,11 @@ export class Brainstem {
   async start() {
     if (!this.laya) {
       this.laya =
-        await Laya.load();
+        await Laya.load(
+          layaLoadOptionsFromConfig(
+            this.config
+          )
+        );
     }
   }
 
@@ -746,6 +750,26 @@ export function createObservation({
  * Polling the same state at a later time
  * should not trigger semantic evaluation.
  */
+
+function layaLoadOptionsFromConfig(config) {
+  const options = {
+    ...(config.runtime?.laya ?? {}),
+    ...(config.laya?.download ?? {})
+  };
+
+  if (
+    options.tokenEnv &&
+    !options.token
+  ) {
+    options.token =
+      process.env[options.tokenEnv];
+  }
+
+  delete options.tokenEnv;
+  delete options.retry;
+
+  return options;
+}
 
 function cacheKeyOf(config) {
   const content = {

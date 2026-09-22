@@ -133,6 +133,20 @@ export default {
       minDelayMs: 1000,
       maxDelayMs: 30000,
       factor: 2
+    },
+
+    startupRetry: {
+      attempts: 3,
+      minDelayMs: 5000,
+      maxDelayMs: 60000,
+      factor: 2
+    },
+
+    laya: {
+      // Optional: avoid first-run model downloads by mounting a local model dir.
+      // modelDir: "./data/laya-model",
+      // Optional: override download cache location.
+      // cacheDir: "./data/laya-cache"
     }
   },
 
