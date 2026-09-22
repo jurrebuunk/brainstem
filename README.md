@@ -150,13 +150,17 @@ destinations: [
   {
     module: "./plugins/matrix/index.mjs",
     destination: "room",
-    decisions: ["dispatch", "escalate"],
+    decisions: "all",
     sources: ["http"],
     types: ["health_check"],
     config: {
       homeserver: "https://matrix.example.org",
       roomId: "!roomid:example.org",
-      tokenEnv: "MATRIX_ACCESS_TOKEN"
+      tokenEnv: "MATRIX_ACCESS_TOKEN",
+      notify: {
+        repeatAfterMs: 60 * 60 * 1000,
+        onRecovery: true
+      }
     }
   }
 ]

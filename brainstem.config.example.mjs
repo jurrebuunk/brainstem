@@ -52,14 +52,18 @@ export default {
     ,{
       module: "./plugins/matrix/index.mjs",
       destination: "room",
-      decisions: ["dispatch", "escalate"],
+      decisions: "all",
       routes: "all",
       sources: "all",
       types: "all",
       config: {
         homeserver: "https://matrix.example.org",
         roomId: "!roomid:example.org",
-        tokenEnv: "MATRIX_ACCESS_TOKEN"
+        tokenEnv: "MATRIX_ACCESS_TOKEN",
+        notify: {
+          repeatAfterMs: 60 * 60 * 1000,
+          onRecovery: true
+        }
       }
     }
     */

@@ -11,6 +11,7 @@ import { SqliteRecordStore } from "../src/core/record-stores.mjs";
 import { BrainstemRuntime } from "../src/runtime/runtime.mjs";
 import httpHealthPlugin from "../plugins/http-health/index.mjs";
 import matrixPlugin from "../plugins/matrix/index.mjs";
+import { resetNotificationState } from "../plugins/matrix/notify.mjs";
 
 const minimalPolicyConfig = {
   policy: config.policy,
@@ -166,6 +167,8 @@ test("http health input emits unhealthy observations", async () => {
 });
 
 test("matrix destination sends room messages", async () => {
+  resetNotificationState();
+
   const originalFetch = globalThis.fetch;
   const calls = [];
 
@@ -232,6 +235,64 @@ test("matrix destination sends room messages", async () => {
   finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("matrix destination suppresses repeats and sends recovery", async () => {
+  resetNotificationState();
+
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK"
+    };
+  };
+
+  const ctx = {
+    config: {
+      homeserver: "https://matrix.example",
+      roomId: "!room:example",
+      accessToken: "secret",
+      notify: {
+        repeatAfterMs: 60 * 60 * 1000,
+        onRecovery: true
+      }
+    },
+    signal: new AbortController().signal,
+    logger: console
+  };
+
+  const alertEvent = matrixEvent({
+    id: "http:repeat-test",
+    decision: "dispatch",
+    state: "unhealthy"
+  });
+
+  await matrixPlugin.destinations.room.handle(ctx, alertEvent);
+  await matrixPlugin.destinations.room.handle(ctx, alertEvent);
+
+  const recoveryEvent = matrixEvent({
+    id: "http:repeat-test",
+    decision: "ignore",
+    state: "healthy"
+  });
+
+  await matrixPlugin.destinations.room.handle(ctx, recoveryEvent);
+
+  globalThis.fetch = originalFetch;
+
+  assert.equal(calls.length, 2);
+
+  const firstBody = JSON.parse(calls[0].options.body).body;
+  const secondBody = JSON.parse(calls[1].options.body).body;
+
+  assert.match(firstBody, /Brainstem dispatch/);
+  assert.match(secondBody, /Brainstem recovery/);
 });
 
 test("destinations can filter by decision, route, source, and type", async () => {
@@ -312,6 +373,42 @@ test("destinations can filter by decision, route, source, and type", async () =>
 
   assert.equal(output.trim(), "matched");
 });
+
+function matrixEvent({
+  id,
+  decision,
+  state
+}) {
+  return {
+    decision: {
+      payload: {
+        observation_id: id,
+        decision,
+        route:
+          decision === "ignore"
+            ? null
+            : "infrastructure",
+        reason: "test reason",
+        fingerprint: `${id}:${state}`
+      }
+    },
+    observation: {
+      payload: {
+        id,
+        source: {
+          type: "http",
+          name: "example"
+        },
+        type: "health_check",
+        state,
+        title: `example is ${state}`,
+        data: {
+          url: "https://example.com/health"
+        }
+      }
+    }
+  };
+}
 
 function checkpointConfig(path) {
   return {

@@ -9,8 +9,15 @@ export function formatMessage(ctx, event) {
   const observation =
     event.observation.payload;
 
+  const label =
+    event.notification?.kind === "recovery"
+      ? "recovery"
+      : event.notification?.kind === "repeat"
+        ? `${decision.decision} reminder`
+        : decision.decision;
+
   const lines = [
-    `Brainstem ${decision.decision}: ${observation.title}`,
+    `Brainstem ${label}: ${observation.title}`,
     `Observation: ${observation.id}`,
     `Route: ${decision.route ?? "none"}`,
     `Source: ${observation.source.type}/${observation.source.name}`,
