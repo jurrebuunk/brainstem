@@ -1,209 +1,224 @@
 # Brainstem
 
-A lightweight decision and orchestration layer for autonomous AI agents.
+> Alpha: `0.1.0-alpha.0`. Brainstem is ready for local experimentation. APIs and plugin contracts may still change.
 
-> Status: `0.1.0-alpha.0`. Brainstem is usable for local experimentation, but APIs and plugin contracts may still change.
+Brainstem is a lightweight decision and orchestration layer for autonomous AI agents.
 
-Brainstem sits between external systems and AI agents. It continuously monitors configured sources, uses a local decision model to determine whether something requires attention, and only wakes an agent when actual reasoning or action is needed.
-
-The goal is simple: **keep expensive agents asleep until there is something worth doing.**
-
-## Concept
-
-Many autonomous agents use a heartbeat to periodically wake up, inspect their environment, and determine whether anything needs attention.
-
-This works, but means repeatedly invoking an LLM even when nothing has changed.
-
-Brainstem moves that responsibility into a lightweight external service.
+It watches external systems, normalizes what it sees into observations, uses a small local Laya decision model to decide whether the observation matters, and only then routes actionable decisions to destinations such as logs, Matrix rooms, webhooks, or future agent runners.
 
 ```text
-GitHub ──────┐
-Logs ────────┤
-Metrics ─────┤
-Services ────┤
-Schedules ───┘
-      │
-      ▼
- ┌───────────┐
- │ Brainstem │
- │           │
- │ Monitors  │
- │     ↓     │
- │   Laya    │
- │     ↓     │
- │ Decision  │
- └─────┬─────┘
-       │
-       │ something requires attention
-       ▼
- ┌───────────┐
- │   Agent   │
- │           │
- │  Hermes   │
- │    etc.   │
- └───────────┘
+Inputs                Brainstem Core                 Destinations
+------                --------------                 ------------
+GitHub issues ─┐      dedupe/cache ─┐                console log
+HTTP health ───┼──▶   Laya signals  ├──▶ decision ─▶ Matrix room
+logs/chats ────┘      policy/route  ┘                agent/webhook later
 ```
 
-Brainstem acts as a small, always-running **brainstem** around larger AI agents.
+The goal is simple:
 
-## Why?
+> Keep expensive agents asleep until something actually needs attention.
 
-Instead of an agent doing this:
+## What Brainstem does
 
-```text
-wake up
-↓
-check GitHub
-↓
-check logs
-↓
-check metrics
-↓
-nothing happened
-↓
-sleep
-↓
-repeat
-```
+- Polls configured input plugins.
+- Converts source data into standardized observations.
+- Deduplicates observations with durable SQLite records.
+- Uses [Laya](https://github.com/receptron/laya) for bounded local decisions.
+- Produces decision envelopes: `ignore`, `queue`, `dispatch`, or `escalate`.
+- Routes decisions by decision level, route, source, and type.
+- Sends matching decisions to destination plugins.
 
-Brainstem continuously performs the inexpensive checks itself.
+## Current plugins
 
-```text
-monitor
-monitor
-monitor
-↓
-event detected
-↓
-Laya decision
-↓
-ignore
-```
+Input plugins:
 
-When something actually requires reasoning:
+- `github-issues` — polls GitHub issues.
+- `http-health` — polls HTTP endpoints.
+- `static-observations` — local smoke-test input.
 
-```text
-monitor
-↓
-event detected
-↓
-Laya decision
-↓
-action required
-↓
-wake agent
-```
+Destination plugins:
 
-The agent can then receive a specific task rather than a generic heartbeat.
+- `log-decisions` — logs decisions to stdout.
+- `matrix` — sends decisions to a Matrix room.
 
-## Laya
+## Requirements
 
-Brainstem uses [Laya](https://github.com/receptron/laya) as its lightweight decision layer.
+- Node.js `>=24`
+- npm
 
-Laya is a local typed decision model. Instead of generating arbitrary text, it answers bounded questions such as:
+Brainstem uses Node's built-in SQLite support for durable core records. Node may print an experimental SQLite warning.
 
-```text
-Does this require an agent?
-
-yes: 0.94
-no:  0.06
-```
-
-or:
-
-```text
-What kind of task is this?
-
-coding          0.81
-infrastructure  0.12
-security        0.05
-other           0.02
-```
-
-This makes it suitable for deciding **whether** a larger generative model needs to be invoked.
-
-## Monitors
-
-Brainstem is intended to provide one central place for defining things an agent should care about.
-
-Examples include:
-
-* GitHub issues and activity
-* application logs
-* system logs
-* infrastructure metrics
-* Kubernetes events
-* HTTP endpoints
-* scheduled checks
-* custom data sources
-
-Monitors produce events when something changes.
-
-```text
-Monitor
-   │
-   ▼
- Event
-   │
-   ▼
- Laya
-   │
-   ├── ignore
-   │
-   └── wake agent
-```
-
-This avoids having every external system maintain its own webhook or direct integration with an agent.
-
-## Quick Start
+## Quick start from source
 
 ```sh
+git clone https://github.com/jurrebuunk/brainstem.git
+cd brainstem
+npm install
 cp brainstem.config.example.mjs brainstem.config.mjs
 cp .env.example .env
 npm run start:once
 ```
 
-`brainstem.config.mjs` and `.env` are local files and are ignored by git.
+`brainstem.config.mjs`, `.env`, and `data/` are local runtime files and are ignored by git.
 
-Useful commands:
+## CLI
 
 ```sh
 npm start              # run continuously
-npm run start:once     # poll once and exit
-npm run start:once:all # poll once and print ignored decisions through log destinations
+npm run start:once     # poll each input once and exit
+npm run start:once:all # poll once and also print ignored decisions through log destinations
 ```
 
-See `docs/cli.md` for CLI and config details.
+Direct CLI usage:
 
-## Project Layout
-
-Brainstem is split into a small core, runtime, SDK, and directory-based plugins:
-
-```text
-src/core/                 decision engine and record stores
-src/runtime/              plugin loading, routing, checkpoints
-src/sdk/                  adapter author helpers
-plugins/<name>/index.mjs  plugin entrypoints
+```sh
+node brainstem.mjs --config ./brainstem.config.mjs --once
 ```
 
-## Input Plugins
+Installed package usage:
 
-Input plugins are loadable source adapters. They observe one external system and emit standardized Brainstem observations.
+```sh
+npx brainstem --help
+```
 
-A plugin exports a small object:
+See [`docs/cli.md`](docs/cli.md) for more details.
+
+## Example config
+
+A minimal config that checks an HTTP endpoint and logs actionable decisions:
 
 ```js
-import { defineInputPlugin } from "./src/sdk/index.mjs";
+export default {
+  inputs: [
+    {
+      id: "api-health",
+      module: "./plugins/http-health/index.mjs",
+      input: "check",
+      config: {
+        name: "api",
+        url: "https://example.com/health",
+        timeoutMs: 10_000,
+        expectedStatuses: [[200, 399]],
+        minimumDecisionOnFailure: "dispatch"
+      }
+    }
+  ],
+
+  destinations: [
+    {
+      module: "./plugins/log-decisions/index.mjs",
+      destination: "default",
+      decisions: ["queue", "dispatch", "escalate"],
+      routes: "all",
+      sources: "all",
+      types: "all",
+      config: {
+        prefix: "brainstem"
+      }
+    }
+  ],
+
+  runtime: {
+    records: {
+      type: "sqlite",
+      path: "data/brainstem.sqlite",
+      pruneAfterDays: 90
+    },
+
+    checkpoints: {
+      type: "json",
+      path: "data/checkpoints.json"
+    }
+  }
+};
+```
+
+See [`brainstem.config.example.mjs`](brainstem.config.example.mjs) for a fuller example with GitHub, HTTP health, logging, and Matrix.
+
+## Matrix notifications
+
+Configure the Matrix destination:
+
+```js
+destinations: [
+  {
+    module: "./plugins/matrix/index.mjs",
+    destination: "room",
+    decisions: ["dispatch", "escalate"],
+    sources: ["http"],
+    types: ["health_check"],
+    config: {
+      homeserver: "https://matrix.example.org",
+      roomId: "!roomid:example.org",
+      tokenEnv: "MATRIX_ACCESS_TOKEN"
+    }
+  }
+]
+```
+
+Put tokens in `.env`, not in committed config:
+
+```sh
+MATRIX_ACCESS_TOKEN=...
+GITHUB_TOKEN=...
+```
+
+See [`docs/matrix-destination.md`](docs/matrix-destination.md).
+
+## Decision model
+
+Brainstem asks Laya bounded questions such as:
+
+- Does this observation deserve attention?
+- Is it actionable by a technical agent?
+- How severe is it?
+- Which abstract route owns it?
+
+Default routes:
+
+- `infrastructure`
+- `coding`
+- `security`
+- `general`
+
+The core returns a decision envelope like:
+
+```js
+{
+  kind: "decision",
+  payload: {
+    observation_id: "http-health:api",
+    decision: "dispatch",
+    route: "infrastructure",
+    reason: "Observation requires immediate investigation"
+  }
+}
+```
+
+## Durable state
+
+Brainstem keeps two kinds of state:
+
+1. **Core records** in SQLite — latest fingerprint and decision per observation ID.
+2. **Input checkpoints** — small adapter cursors such as `lastSeenAt` or `lastMessageId`.
+
+This keeps repeated polling cheap while avoiding unbounded event history by default.
+
+See [`docs/state.md`](docs/state.md).
+
+## Writing plugins
+
+Input plugins emit observations:
+
+```js
+import { defineInputPlugin } from "../../src/sdk/index.mjs";
 
 export default defineInputPlugin({
   apiVersion: "brainstem.input/v1",
   name: "my-input",
-
   inputs: {
     default: {
       mode: "poll",
-      defaultIntervalMs: 60_000,
-
       async *poll(ctx) {
         yield ctx.observation({
           id: "example:1",
@@ -219,269 +234,53 @@ export default defineInputPlugin({
 });
 ```
 
-The runtime loads local plugin files and sends emitted observations to the core:
+Destination plugins receive decisions:
 
 ```js
-import config from "./brainstem.config.mjs";
-import { BrainstemRuntime } from "./src/runtime/runtime.mjs";
+import { defineDestinationPlugin } from "../../src/sdk/index.mjs";
 
-const runtime = new BrainstemRuntime({
-  config,
-  plugins: [
-    {
-      module: "./plugins/github-issues/index.mjs",
-      input: "issues",
-      config: {
-        repo: "owner/repo",
-        tokenEnv: "GITHUB_TOKEN"
+export default defineDestinationPlugin({
+  apiVersion: "brainstem.destination/v1",
+  name: "my-destination",
+  destinations: {
+    default: {
+      async handle(ctx, event) {
+        console.dir(event.decision, { depth: null });
       }
     }
-  ],
-  destinations: [
-    {
-      module: "./plugins/log-decisions/index.mjs",
-      destination: "default"
-    }
-  ]
+  }
 });
-
-await runtime.start();
-await runtime.wait();
 ```
 
-Or add plugin entries to `brainstem.config.mjs` under `inputs` and run:
+Docs:
 
-```sh
-node brainstem.mjs
-```
+- [`docs/input-plugins.md`](docs/input-plugins.md)
+- [`docs/destination-adapters.md`](docs/destination-adapters.md)
 
-For adapter development, poll once and exit:
-
-```sh
-node brainstem.mjs --once
-```
-
-Print ignored decisions too:
-
-```sh
-node brainstem.mjs --once --all
-```
-
-Keep tokens in environment variables, not in committed config files:
-
-```js
-inputs: [
-  {
-    module: "./plugins/github-issues/index.mjs",
-    input: "issues",
-    config: {
-      repo: "owner/repo",
-      tokenEnv: "GITHUB_TOKEN",
-
-      // Equivalent:
-      // token: { env: "GITHUB_TOKEN" }
-    }
-  }
-]
-```
-
-Then start Brainstem with:
-
-```sh
-GITHUB_TOKEN=... node brainstem.mjs
-```
-
-For a one-shot local smoke test:
-
-```sh
-node run-plugin-test.mjs
-```
-
-## HTTP Health Input
-
-Brainstem includes a simple HTTP health input adapter:
-
-```js
-inputs: [
-  {
-    id: "api-health",
-    module: "./plugins/http-health/index.mjs",
-    input: "check",
-    config: {
-      url: "https://example.com/health",
-      timeoutMs: 10_000,
-      expectedStatuses: [[200, 399]],
-      minimumDecisionOnFailure: "dispatch"
-    }
-  }
-]
-```
-
-For multiple endpoints, use `config.checks`.
-
-## Destination Adapters
-
-Destination adapters receive decisions after Brainstem processes observations.
-
-The first destination adapter simply logs non-ignored decisions:
-
-```js
-destinations: [
-  {
-    module: "./plugins/log-decisions/index.mjs",
-    destination: "default",
-    decisions: ["queue", "dispatch", "escalate"],
-    routes: ["coding", "security"],
-    sources: ["github"],
-    types: ["issue"],
-    config: {
-      prefix: "brainstem"
-    }
-  }
-]
-```
-
-Destinations can filter by decision level, the core's abstract route, observation source, and observation type. Use `"all"` or omit a filter to receive every value for that field.
-
-Brainstem also includes a Matrix room destination:
-
-```js
-destinations: [
-  {
-    module: "./plugins/matrix/index.mjs",
-    destination: "room",
-    decisions: ["dispatch", "escalate"],
-    routes: "all",
-    config: {
-      homeserver: "https://matrix.org",
-      roomId: "!roomid:matrix.org",
-      tokenEnv: "MATRIX_ACCESS_TOKEN"
-    }
-  }
-]
-```
-
-Keep the Matrix access token in the environment:
-
-```sh
-MATRIX_ACCESS_TOKEN=... node brainstem.mjs
-```
-
-This keeps decision handling outside the core. Later adapters can wake agents, call webhooks, or enqueue tasks.
-
-See `docs/input-plugins.md` for adapter author guidance, stable ID conventions, checkpoint handling, token handling, and retry configuration. See `docs/state.md` for persistent core records and input checkpoints.
-
-Phase 1 intentionally supports only local file plugins and polling inputs. NPM package loading, richer secrets helpers, streaming inputs, and richer destination adapters can be added later without changing the core.
-
-## Agents
-
-Brainstem does not replace agents.
-
-It decides when they should run.
-
-The initial idea is to use Brainstem alongside [Hermes Agent](https://github.com/NousResearch/hermes-agent).
+## Project layout
 
 ```text
-Brainstem
-    │
-    │ task requires reasoning
-    ▼
-  Hermes
-    │
-    ▼
- investigate / act
+src/core/                 decision engine and record stores
+src/runtime/              plugin loading, routing, checkpoints
+src/sdk/                  adapter author helpers
+plugins/<name>/index.mjs  plugin entrypoints
+plugins/<name>/*.mjs      plugin implementation modules
+docs/                     user and plugin documentation
 ```
 
-Hermes can remain focused on reasoning and tool use while Brainstem handles continuous observation.
+## Development
 
-The architecture is intentionally simple enough that other agents could be connected in the future.
-
-## State
-
-Brainstem should keep track of events it has already processed.
-
-For example, if a GitHub issue remains open for several hours, the agent should not be triggered every time the repository is checked.
-
-```text
-GitHub issue #42
-      │
-      ▼
-first observation
-      │
-      ▼
-Laya → wake agent
-      │
-      ▼
-event remembered
-
-
-next check
-      │
-      ▼
-same issue
-      │
-      ▼
-already processed
-      │
-      ▼
-ignore
+```sh
+npm run check
+npm test
+npm run plugin:test
+npm pack --dry-run
 ```
 
-A new event or meaningful state change can cause the situation to be evaluated again.
+## Release
 
-## Philosophy
-
-Brainstem separates an autonomous system into two levels:
-
-```text
-            BRAINSTEM
-       cheap / always running
-               │
-               │ important event
-               ▼
-              AGENT
-      expensive / intelligent
-```
-
-The small model watches.
-
-The large model thinks.
-
-## Goals
-
-* Reduce unnecessary LLM heartbeat calls
-* Keep monitoring centralized
-* Run the decision layer locally
-* Avoid requiring individual webhook integrations
-* Provide agents with specific tasks instead of generic heartbeat prompts
-* Keep monitoring independent from the agent implementation
-* Make autonomous agents cheaper to leave running continuously
-
-## Status
-
-Brainstem is currently an experimental project exploring local decision models as an orchestration layer for autonomous agents.
-
-The initial focus is:
-
-* monitoring
-* event normalization
-* Laya-based decisions
-* persistent state
-* Hermes Agent triggering
-
-## Related Projects
-
-* [Laya](https://github.com/receptron/laya) — local typed decision models
-* [Hermes Agent](https://github.com/NousResearch/hermes-agent) — autonomous AI agent
+See [`docs/release.md`](docs/release.md).
 
 ## License
 
-License to be determined.
-
----
-
-**Brainstem** — *Let small models decide when big models need to think.*
-
-### GitHub Topics
-
-`ai` `ai-agents` `agent-orchestration` `laya` `hermes-agent` `local-ai` `decision-models` `automation` `self-hosted` `event-driven` `llm` `agentic-ai` `monitoring`
+ISC
