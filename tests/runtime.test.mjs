@@ -14,6 +14,7 @@ import matrixPlugin from "../plugins/matrix/index.mjs";
 import { resetNotificationState } from "../plugins/matrix/notify.mjs";
 import { evaluateCertificate } from "../plugins/tls-certificate/check.mjs";
 import { toObservation as emailToObservation } from "../plugins/email-imap/observation.mjs";
+import { normalizeMessage as normalizeEmailMessage } from "../plugins/email-imap/imap.mjs";
 
 const minimalPolicyConfig = {
   policy: config.policy,
@@ -225,6 +226,32 @@ test("http health input respects failure and recovery thresholds", async () => {
     "unhealthy",
     "healthy"
   ]);
+});
+
+test("email imap parser extracts body without transport headers", async () => {
+  const message = await normalizeEmailMessage(
+    {
+      uid: 7,
+      source: Buffer.from(
+        "From: Alice <alice@example.com>\r\n" +
+        "To: Bob <bob@example.com>\r\n" +
+        "Subject: server is down\r\n" +
+        "Received: by mx.example.test\r\n" +
+        "Content-Type: text/plain; charset=utf-8\r\n" +
+        "\r\n" +
+        "hey bob,\r\n\r\nSERVER is down please get it back up asap\r\n"
+      ),
+      flags: []
+    },
+    {
+      maxBytes: 8192
+    }
+  );
+
+  assert.equal(message.subject, "server is down");
+  assert.equal(message.from[0].address, "alice@example.com");
+  assert.match(message.snippet, /SERVER is down/);
+  assert.doesNotMatch(message.snippet, /Received:/);
 });
 
 test("email imap input normalizes email observations", () => {

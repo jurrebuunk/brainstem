@@ -32,7 +32,8 @@
   "license": "ISC",
   "dependencies": {
     "@receptron/laya": "^0.1.1",
-    "imapflow": "^1.7.8"
+    "imapflow": "^1.7.8",
+    "mailparser": "^3.9.28"
   },
   "bin": {
     "brainstem": "brainstem.mjs"

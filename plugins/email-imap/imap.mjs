@@ -1,4 +1,5 @@
 import { ImapFlow } from "imapflow";
+import { simpleParser } from "mailparser";
 
 export async function fetchNewMessages(config, checkpoint = {}) {
   const client = new ImapFlow({
@@ -78,7 +79,9 @@ export async function fetchNewMessages(config, checkpoint = {}) {
         newestUid = Math.max(newestUid, message.uid);
 
         if (messages.length < config.maxMessages) {
-          messages.push(normalizeMessage(message, config));
+          messages.push(
+            await normalizeMessage(message, config)
+          );
         }
       }
 
@@ -99,40 +102,73 @@ export async function fetchNewMessages(config, checkpoint = {}) {
   }
 }
 
-function normalizeMessage(message, config) {
+export async function normalizeMessage(message, config) {
   const envelope = message.envelope ?? {};
-  const raw = message.source
-    ? message.source.toString("utf8")
-    : "";
+  const source = message.source ?? Buffer.from("");
+  const parsed = await simpleParser(source);
 
   return {
     uid: message.uid,
-    messageId: envelope.messageId ?? null,
-    subject: envelope.subject ?? "(no subject)",
-    from: formatAddresses(envelope.from),
-    to: formatAddresses(envelope.to),
-    date: envelope.date
-      ? new Date(envelope.date).toISOString()
-      : null,
+    messageId:
+      parsed.messageId ??
+      envelope.messageId ??
+      null,
+    subject:
+      parsed.subject ??
+      envelope.subject ??
+      "(no subject)",
+    from: formatParsedAddresses(parsed.from?.value, envelope.from),
+    to: formatParsedAddresses(parsed.to?.value, envelope.to),
+    date:
+      parsed.date
+        ? parsed.date.toISOString()
+        : envelope.date
+          ? new Date(envelope.date).toISOString()
+          : null,
     flags: Array.from(message.flags ?? []),
-    snippet: snippetFromRaw(raw, config.maxBytes)
+    snippet: snippetFromParsed(parsed, config.maxBytes)
   };
 }
 
-function formatAddresses(addresses = []) {
+function formatParsedAddresses(parsedAddresses, fallbackAddresses = []) {
+  const addresses =
+    parsedAddresses?.length
+      ? parsedAddresses
+      : fallbackAddresses;
+
   return addresses.map(address => ({
     name: address.name ?? null,
     address: address.address ?? null
   }));
 }
 
-function snippetFromRaw(raw, maxBytes) {
-  return raw
+export function snippetFromParsed(parsed, maxBytes) {
+  const text =
+    parsed.text ??
+    stripHtml(parsed.html ?? "") ??
+    "";
+
+  return text
     .replace(/\r/g, "")
-    .split("\n")
-    .filter(line => !line.includes(":"))
-    .join("\n")
-    .replace(/\s+/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
     .trim()
     .slice(0, maxBytes);
+}
+
+function stripHtml(html) {
+  if (!html) {
+    return "";
+  }
+
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
 }
