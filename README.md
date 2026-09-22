@@ -203,6 +203,12 @@ const runtime = new BrainstemRuntime({
         tokenEnv: "GITHUB_TOKEN"
       }
     }
+  ],
+  destinations: [
+    {
+      module: "./plugins/log-decisions.mjs",
+      destination: "default"
+    }
   ]
 });
 
@@ -237,7 +243,7 @@ inputs: [
     input: "issues",
     config: {
       repo: "owner/repo",
-      tokenEnv: "GITHUB_TOKEN"
+      tokenEnv: "GITHUB_TOKEN",
 
       // Equivalent:
       // token: { env: "GITHUB_TOKEN" }
@@ -258,9 +264,33 @@ For a one-shot local smoke test:
 node run-plugin-test.mjs
 ```
 
+## Destination Adapters
+
+Destination adapters receive decisions after Brainstem processes observations.
+
+The first destination adapter simply logs non-ignored decisions:
+
+```js
+destinations: [
+  {
+    module: "./plugins/log-decisions.mjs",
+    destination: "default",
+    decisions: ["queue", "dispatch", "escalate"],
+    routes: ["coding", "security"],
+    config: {
+      prefix: "brainstem"
+    }
+  }
+]
+```
+
+Destinations can filter by decision level and by the core's abstract route. Use `routes: "all"` or omit `routes` to receive every route.
+
+This keeps decision handling outside the core. Later adapters can wake agents, call webhooks, or enqueue tasks.
+
 See `docs/input-plugins.md` for adapter author guidance, stable ID conventions, token handling, and retry configuration.
 
-Phase 1 intentionally supports only local file plugins and polling inputs. NPM package loading, richer secrets helpers, streaming inputs, and destination plugins can be added later without changing the core.
+Phase 1 intentionally supports only local file plugins and polling inputs. NPM package loading, richer secrets helpers, streaming inputs, and richer destination adapters can be added later without changing the core.
 
 ## Agents
 

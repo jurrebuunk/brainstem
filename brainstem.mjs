@@ -18,6 +18,18 @@ if (args.has("--help") || args.has("-h")) {
 const inputs =
   config.inputs ?? [];
 
+const destinations =
+  (config.destinations ?? []).map(entry => {
+    if (!printAll) {
+      return entry;
+    }
+
+    return {
+      ...entry,
+      decisions: "all"
+    };
+  });
+
 if (inputs.length === 0) {
   console.error(
     "No input plugins configured. Add entries to config.inputs or run `node run-plugin-test.mjs`."
@@ -52,30 +64,7 @@ else {
     new BrainstemRuntime({
       config,
       plugins: inputs,
-
-      onDecision({
-        decision,
-        observation,
-        plugin,
-        input
-      }) {
-        if (
-          !printAll &&
-          decision.payload.decision ===
-          "ignore"
-        ) {
-          return;
-        }
-
-        console.log(
-          `\n[${plugin.name}.${input}] ${observation.payload.id} -> ${decision.payload.decision}`
-        );
-
-        console.dir(decision, {
-          depth: null,
-          colors: true
-        });
-      }
+      destinations
     });
 
   try {

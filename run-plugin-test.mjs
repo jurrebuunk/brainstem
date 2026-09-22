@@ -1,15 +1,12 @@
 import config from "./brainstem.config.mjs";
 import { BrainstemRuntime } from "./runtime.mjs";
 
-const controller = new AbortController();
-
 const runtime = new BrainstemRuntime({
   config,
   plugins: [
     {
       module: "./plugins/static-observations.mjs",
       config: {
-        intervalMs: 1000,
         observations: [
           {
             id: "test:1",
@@ -27,20 +24,16 @@ const runtime = new BrainstemRuntime({
       }
     }
   ],
-
-  onDecision({ decision }) {
-    console.dir(decision, {
-      depth: null,
-      colors: true
-    });
-
-    controller.abort();
-  }
+  destinations: [
+    {
+      module: "./plugins/log-decisions.mjs",
+      destination: "default",
+      decisions: "all",
+      config: {
+        prefix: "brainstem-test"
+      }
+    }
+  ]
 });
 
-await runtime.start({
-  signal: controller.signal
-});
-
-await runtime.wait();
-await runtime.close();
+await runtime.runOnce();

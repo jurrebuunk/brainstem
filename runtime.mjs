@@ -4,7 +4,9 @@ import { pathToFileURL } from "node:url";
 import { Brainstem } from "./core.mjs";
 import {
   assertObservation,
+  createDestinationContext,
   createInputContext,
+  validateDestinationPlugin,
   validateInputPlugin
 } from "./sdk.mjs";
 
@@ -22,6 +24,7 @@ export class BrainstemRuntime {
     config,
     brainstem,
     plugins = [],
+    destinations = [],
     baseDir = process.cwd(),
     logger = console,
     onDecision = defaultOnDecision
@@ -38,12 +41,14 @@ export class BrainstemRuntime {
       brainstem ?? new Brainstem(config);
 
     this.plugins = plugins;
+    this.destinations = destinations;
     this.baseDir = baseDir;
     this.logger = logger;
     this.onDecision = onDecision;
 
     this.abortController = null;
     this.tasks = [];
+    this.destinationEntries = [];
   }
 
   async start({ signal } = {}) {
@@ -74,6 +79,9 @@ export class BrainstemRuntime {
     }
 
     await this.brainstem.start();
+
+    this.destinationEntries =
+      await this.#loadDestinationEntries();
 
     this.tasks = this.plugins.map(entry =>
       this.#runPluginEntry(
@@ -115,6 +123,9 @@ export class BrainstemRuntime {
     try {
       await this.brainstem.start();
 
+      this.destinationEntries =
+        await this.#loadDestinationEntries();
+
       await Promise.all(
         this.plugins.map(entry =>
           this.#runPluginEntryOnce(
@@ -146,6 +157,7 @@ export class BrainstemRuntime {
 
     this.abortController = null;
     this.tasks = [];
+    this.destinationEntries = [];
   }
 
   async #runPluginEntry(entry, signal) {
@@ -324,13 +336,100 @@ export class BrainstemRuntime {
           observation
         );
 
-      await this.onDecision({
+      await this.#handleDecision({
         decision,
         observation,
         plugin,
         input: inputName,
-        entry
+        entry,
+        signal
       });
+    }
+  }
+
+  async #loadDestinationEntries() {
+    return await Promise.all(
+      this.destinations.map(entry =>
+        this.#loadDestinationEntry(entry)
+      )
+    );
+  }
+
+  async #loadDestinationEntry(entry) {
+    const { plugin } =
+      await loadDestinationPlugin(
+        entry.module,
+        {
+          baseDir:
+            entry.baseDir ?? this.baseDir
+        }
+      );
+
+    const destinationName =
+      entry.destination ?? "default";
+
+    const destination =
+      plugin.destinations[destinationName];
+
+    if (!destination) {
+      throw new Error(
+        `Destination plugin '${plugin.name}' does not define destination '${destinationName}'`
+      );
+    }
+
+    return {
+      entry,
+      plugin,
+      destinationName,
+      destination
+    };
+  }
+
+  async #handleDecision(event) {
+    await this.onDecision?.(event);
+
+    for (const destinationEntry of this.destinationEntries) {
+      if (
+        !decisionMatchesDestination(
+          event.decision,
+          destinationEntry.entry
+        )
+      ) {
+        continue;
+      }
+
+      try {
+        const ctx =
+          createDestinationContext({
+            config: destinationEntry.entry.config ?? {},
+            signal: event.signal,
+            logger: this.logger
+          });
+
+        await destinationEntry.destination.handle(
+          ctx,
+          {
+            decision: event.decision,
+            observation: event.observation,
+            input: {
+              plugin: event.plugin,
+              name: event.input,
+              entry: event.entry
+            },
+            destination: {
+              plugin: destinationEntry.plugin,
+              name: destinationEntry.destinationName,
+              entry: destinationEntry.entry
+            }
+          }
+        );
+      }
+      catch (error) {
+        this.logger.error?.(
+          `[brainstem] destination '${destinationEntry.plugin.name}.${destinationEntry.destinationName}' failed`,
+          error
+        );
+      }
     }
   }
 }
@@ -352,6 +451,32 @@ export async function loadInputPlugin(
     module.default;
 
   validateInputPlugin(
+    plugin
+  );
+
+  return {
+    plugin,
+    url
+  };
+}
+
+export async function loadDestinationPlugin(
+  specifier,
+  { baseDir = process.cwd() } = {}
+) {
+  const url =
+    resolveLocalModuleUrl(
+      specifier,
+      baseDir
+    );
+
+  const module =
+    await import(url);
+
+  const plugin =
+    module.default;
+
+  validateDestinationPlugin(
     plugin
   );
 
@@ -465,11 +590,41 @@ function sleep(ms, signal) {
   });
 }
 
-function defaultOnDecision({ decision }) {
-  if (
-    decision.payload.decision !==
-    "ignore"
-  ) {
-    console.log(decision);
-  }
+function decisionMatchesDestination(decision, entry) {
+  return (
+    decisionLevelMatches(decision, entry) &&
+    routeMatches(decision, entry)
+  );
 }
+
+function decisionLevelMatches(decision, entry) {
+  const allowed =
+    entry.decisions ?? [
+      "queue",
+      "dispatch",
+      "escalate"
+    ];
+
+  if (allowed === "all") {
+    return true;
+  }
+
+  return allowed.includes(
+    decision.payload.decision
+  );
+}
+
+function routeMatches(decision, entry) {
+  const allowed =
+    entry.routes;
+
+  if (!allowed || allowed === "all") {
+    return true;
+  }
+
+  return allowed.includes(
+    decision.payload.route
+  );
+}
+
+function defaultOnDecision() {}

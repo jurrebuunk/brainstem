@@ -3,6 +3,9 @@ import { createObservation } from "./core.mjs";
 export const INPUT_PLUGIN_API_VERSION =
   "brainstem.input/v1";
 
+export const DESTINATION_PLUGIN_API_VERSION =
+  "brainstem.destination/v1";
+
 /*
  * Adapter author helper.
  *
@@ -16,26 +19,11 @@ export function defineInputPlugin(plugin) {
 }
 
 export function validateInputPlugin(plugin) {
-  if (!plugin || typeof plugin !== "object") {
-    throw new TypeError(
-      "Input plugin must export an object"
-    );
-  }
-
-  if (plugin.apiVersion !== INPUT_PLUGIN_API_VERSION) {
-    throw new TypeError(
-      `Input plugin apiVersion must be '${INPUT_PLUGIN_API_VERSION}'`
-    );
-  }
-
-  if (
-    typeof plugin.name !== "string" ||
-    plugin.name.length === 0
-  ) {
-    throw new TypeError(
-      "Input plugin must have a name"
-    );
-  }
+  validatePluginBase(
+    plugin,
+    INPUT_PLUGIN_API_VERSION,
+    "Input"
+  );
 
   if (!plugin.inputs || typeof plugin.inputs !== "object") {
     throw new TypeError(
@@ -64,6 +52,66 @@ export function validateInputPlugin(plugin) {
   }
 }
 
+export function defineDestinationPlugin(plugin) {
+  validateDestinationPlugin(plugin);
+
+  return plugin;
+}
+
+export function validateDestinationPlugin(plugin) {
+  validatePluginBase(
+    plugin,
+    DESTINATION_PLUGIN_API_VERSION,
+    "Destination"
+  );
+
+  if (
+    !plugin.destinations ||
+    typeof plugin.destinations !== "object"
+  ) {
+    throw new TypeError(
+      "Destination plugin must define destinations"
+    );
+  }
+
+  for (const [name, destination] of Object.entries(plugin.destinations)) {
+    if (!destination || typeof destination !== "object") {
+      throw new TypeError(
+        `Destination '${name}' must be an object`
+      );
+    }
+
+    if (typeof destination.handle !== "function") {
+      throw new TypeError(
+        `Destination '${name}' must define handle(ctx, event)`
+      );
+    }
+  }
+}
+
+function validatePluginBase(plugin, apiVersion, label) {
+  if (!plugin || typeof plugin !== "object") {
+    throw new TypeError(
+      `${label} plugin must export an object`
+    );
+  }
+
+  if (plugin.apiVersion !== apiVersion) {
+    throw new TypeError(
+      `${label} plugin apiVersion must be '${apiVersion}'`
+    );
+  }
+
+  if (
+    typeof plugin.name !== "string" ||
+    plugin.name.length === 0
+  ) {
+    throw new TypeError(
+      `${label} plugin must have a name`
+    );
+  }
+}
+
 export function createInputContext({
   config = {},
   signal,
@@ -77,6 +125,18 @@ export function createInputContext({
     observation(input) {
       return createObservation(input);
     }
+  };
+}
+
+export function createDestinationContext({
+  config = {},
+  signal,
+  logger = console
+} = {}) {
+  return {
+    config,
+    signal,
+    logger
   };
 }
 

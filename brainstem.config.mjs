@@ -38,6 +38,22 @@ export default {
     }
   ],
 
+  destinations: [
+    {
+      module: "./plugins/log-decisions.mjs",
+      destination: "default",
+      decisions: [
+        "queue",
+        "dispatch",
+        "escalate"
+      ],
+      routes: "all",
+      config: {
+        prefix: "brainstem"
+      }
+    }
+  ],
+
   runtime: {
     retry: {
       attempts: 3,
