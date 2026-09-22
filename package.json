@@ -50,6 +50,8 @@
   "files": [
     "brainstem.mjs",
     "brainstem.config.example.mjs",
+    "docker-compose.example.yml",
+    "Dockerfile",
     ".env.example",
     "src/",
     "plugins/",

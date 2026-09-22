@@ -5,6 +5,7 @@ Documentation is kept in the repository so it is versioned with the code.
 ## User docs
 
 - [CLI](cli.md) — commands, config loading, and `.env` behavior.
+- [Docker](docker.md) — run Brainstem with Docker or Docker Compose.
 - [Configuration](configuration.md) — full config file structure and common examples.
 - [Architecture](architecture.md) — how inputs, core, runtime, state, and destinations fit together.
 - [State](state.md) — SQLite records and input checkpoints.

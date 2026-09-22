@@ -1,0 +1,13 @@
+services:
+  brainstem:
+    image: ghcr.io/jurrebuunk/brainstem:0.1.0-alpha.0
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./brainstem.config.mjs:/app/brainstem.config.mjs:ro
+      - brainstem-data:/app/data
+    command: ["node", "brainstem.mjs"]
+
+volumes:
+  brainstem-data:

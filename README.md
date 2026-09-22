@@ -56,7 +56,42 @@ See the [plugin catalog](docs/plugins.md) for all built-in plugins and configura
 
 Brainstem uses Node's built-in SQLite support for durable core records. Node may print an experimental SQLite warning.
 
-## Quick start from source
+## Installation options
+
+Brainstem can run from source, from npm, or with Docker.
+
+### Docker
+
+```sh
+cp brainstem.config.example.mjs brainstem.config.mjs
+cp .env.example .env
+docker run --rm \
+  --env-file .env \
+  -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
+  -v brainstem-data:/app/data \
+  ghcr.io/jurrebuunk/brainstem:0.1.0-alpha.0 \
+  node brainstem.mjs --once
+```
+
+With Docker Compose:
+
+```sh
+cp docker-compose.example.yml docker-compose.yml
+docker compose up -d
+```
+
+See [`docs/docker.md`](docs/docker.md).
+
+### NPM
+
+```sh
+npm install -g @jurrebuunk/brainstem@alpha
+brainstem --help
+```
+
+> The npm alpha publish may require package access; Docker/source installs are the primary alpha paths.
+
+### Source
 
 ```sh
 git clone https://github.com/jurrebuunk/brainstem.git
