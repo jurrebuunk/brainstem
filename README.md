@@ -159,8 +159,20 @@ destinations: [
       tokenEnv: "MATRIX_ACCESS_TOKEN",
       notify: {
         repeatAfterMs: 60 * 60 * 1000,
-        onRecovery: true
-      }
+        onRecovery: true,
+        statePath: "data/matrix-notifications.json"
+      },
+      retry: {
+        attempts: 3,
+        minDelayMs: 1000,
+        maxDelayMs: 30000,
+        factor: 2
+      },
+      message: {
+        format: "text"
+      },
+      threading: true
+
     }
   }
 ]

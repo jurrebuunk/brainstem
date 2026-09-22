@@ -3,8 +3,16 @@ export function normalizeConfig(config) {
     required(config.homeserver, "homeserver")
       .replace(/\/$/, "");
 
+  validateUrl(homeserver, "homeserver");
+
   const roomId =
     required(config.roomId, "roomId");
+
+  if (!roomId.startsWith("!")) {
+    throw new Error(
+      "Matrix destination config.roomId should be a Matrix room id starting with '!'"
+    );
+  }
 
   const token =
     resolveToken(config);
@@ -18,7 +26,53 @@ export function normalizeConfig(config) {
   return {
     homeserver,
     roomId,
-    token
+    token,
+    retry: normalizeRetry(config.retry ?? {}),
+    message: normalizeMessage(config.message ?? {}),
+    threading: config.threading !== false
+  };
+}
+
+function normalizeRetry(config) {
+  const retry = {
+    attempts: config.attempts ?? 3,
+    minDelayMs: config.minDelayMs ?? 1_000,
+    maxDelayMs: config.maxDelayMs ?? 30_000,
+    factor: config.factor ?? 2
+  };
+
+  if (retry.attempts < 1) {
+    throw new Error(
+      "Matrix retry.attempts must be at least 1"
+    );
+  }
+
+  if (
+    retry.minDelayMs < 0 ||
+    retry.maxDelayMs < retry.minDelayMs ||
+    retry.factor < 1
+  ) {
+    throw new Error(
+      "Matrix retry config must use non-negative delays and factor >= 1"
+    );
+  }
+
+  return retry;
+}
+
+function normalizeMessage(config) {
+  const format =
+    config.format ?? "text";
+
+  if (!["text", "html"].includes(format)) {
+    throw new Error(
+      "Matrix message.format must be 'text' or 'html'"
+    );
+  }
+
+  return {
+    format,
+    compact: config.compact ?? false
   };
 }
 
@@ -57,4 +111,15 @@ function required(value, name) {
   }
 
   return value;
+}
+
+function validateUrl(value, name) {
+  try {
+    new URL(value);
+  }
+  catch {
+    throw new Error(
+      `Matrix destination config.${name} must be a valid URL`
+    );
+  }
 }

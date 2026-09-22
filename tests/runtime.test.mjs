@@ -188,7 +188,10 @@ test("matrix destination sends room messages", async () => {
         config: {
           homeserver: "https://matrix.example",
           roomId: "!room:example",
-          accessToken: "secret"
+          accessToken: "secret",
+          notify: {
+            statePath: false
+          }
         },
         signal: new AbortController().signal,
         logger: console
@@ -260,7 +263,8 @@ test("matrix destination suppresses repeats and sends recovery", async () => {
       accessToken: "secret",
       notify: {
         repeatAfterMs: 60 * 60 * 1000,
-        onRecovery: true
+        onRecovery: true,
+        statePath: false
       }
     },
     signal: new AbortController().signal,
@@ -293,6 +297,88 @@ test("matrix destination suppresses repeats and sends recovery", async () => {
 
   assert.match(firstBody, /Brainstem dispatch/);
   assert.match(secondBody, /Brainstem recovery/);
+});
+
+test("matrix destination retries rate limits and threads repeats", async () => {
+  resetNotificationState();
+
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+
+  globalThis.fetch = async (_url, options) => {
+    calls.push(options);
+
+    if (calls.length === 1) {
+      return {
+        ok: false,
+        status: 429,
+        statusText: "Too Many Requests",
+        headers: {
+          get() {
+            return null;
+          }
+        },
+        async text() {
+          return JSON.stringify({
+            error: "rate limited",
+            retry_after_ms: 1
+          });
+        }
+      };
+    }
+
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      async json() {
+        return {
+          event_id: `$event${calls.length}`
+        };
+      }
+    };
+  };
+
+  const ctx = {
+    config: {
+      homeserver: "https://matrix.example",
+      roomId: "!room:example",
+      accessToken: "secret",
+      notify: {
+        repeatAfterMs: 0,
+        statePath: false
+      },
+      retry: {
+        attempts: 2,
+        minDelayMs: 0,
+        maxDelayMs: 1,
+        factor: 1
+      },
+      threading: true
+    },
+    signal: new AbortController().signal,
+    logger: console
+  };
+
+  const event = matrixEvent({
+    id: "http:thread-test",
+    decision: "dispatch",
+    state: "unhealthy"
+  });
+
+  await matrixPlugin.destinations.room.handle(ctx, event);
+  await matrixPlugin.destinations.room.handle(ctx, event);
+
+  globalThis.fetch = originalFetch;
+
+  assert.equal(calls.length, 3);
+
+  const repeated = JSON.parse(calls[2].body);
+
+  assert.equal(
+    repeated["m.relates_to"].event_id,
+    "$event2"
+  );
 });
 
 test("destinations can filter by decision, route, source, and type", async () => {

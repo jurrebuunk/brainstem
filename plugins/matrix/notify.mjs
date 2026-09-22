@@ -1,3 +1,6 @@
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+
 const DEFAULT_REPEAT_AFTER_MS =
   60 * 60 * 1000;
 
@@ -6,10 +9,13 @@ const DEFAULT_ACTIONABLE_DECISIONS = [
   "escalate"
 ];
 
-const states =
+const memoryStates =
   new Map();
 
-export function planNotification(ctx, event) {
+const fileCache =
+  new Map();
+
+export async function planNotification(ctx, event) {
   const notify =
     normalizeNotifyConfig(ctx.config.notify ?? {});
 
@@ -22,8 +28,11 @@ export function planNotification(ctx, event) {
   const key =
     notificationKey(ctx, event);
 
+  const state =
+    await loadState(notify);
+
   const previous =
-    states.get(key);
+    state[key];
 
   const now =
     Date.now();
@@ -57,23 +66,25 @@ export function planNotification(ctx, event) {
           !changed
             ? "repeat"
             : "alert",
-        commit() {
-          states.set(key, {
+        previousEventId:
+          previous?.eventId,
+        async commit({ eventId } = {}) {
+          state[key] = {
             status: "active",
             fingerprint: decision.fingerprint,
             decision: decision.decision,
             observationState: observation.state,
-            lastSentAt: now
-          });
+            eventId: eventId ?? previous?.eventId ?? null,
+            lastSentAt: now,
+            updatedAt: new Date(now).toISOString()
+          };
+
+          await saveState(notify, state);
         }
       };
     }
 
-    return {
-      send: false,
-      kind: "suppressed",
-      commit() {}
-    };
+    return suppressed();
   }
 
   if (
@@ -83,43 +94,140 @@ export function planNotification(ctx, event) {
     return {
       send: true,
       kind: "recovery",
-      commit() {
-        states.set(key, {
+      previousEventId:
+        previous.eventId,
+      async commit({ eventId } = {}) {
+        state[key] = {
           status: "resolved",
           fingerprint: decision.fingerprint,
           decision: decision.decision,
           observationState: observation.state,
-          lastSentAt: now
-        });
+          eventId: eventId ?? previous.eventId ?? null,
+          lastSentAt: now,
+          updatedAt: new Date(now).toISOString()
+        };
+
+        await saveState(notify, state);
       }
     };
   }
 
-  return {
-    send: false,
-    kind: "suppressed",
-    commit() {}
-  };
+  return suppressed();
 }
 
 export function resetNotificationState() {
-  states.clear();
+  memoryStates.clear();
+  fileCache.clear();
+}
+
+function suppressed() {
+  return {
+    send: false,
+    kind: "suppressed",
+    previousEventId: null,
+    async commit() {}
+  };
 }
 
 function normalizeNotifyConfig(config) {
+  const repeatAfterMs =
+    config.repeatAfterMs === undefined
+      ? DEFAULT_REPEAT_AFTER_MS
+      : config.repeatAfterMs;
+
+  if (
+    repeatAfterMs !== null &&
+    (
+      typeof repeatAfterMs !== "number" ||
+      repeatAfterMs < 0
+    )
+  ) {
+    throw new Error(
+      "Matrix notify.repeatAfterMs must be a non-negative number or null"
+    );
+  }
+
   return {
-    repeatAfterMs:
-      config.repeatAfterMs === undefined
-        ? DEFAULT_REPEAT_AFTER_MS
-        : config.repeatAfterMs,
+    repeatAfterMs,
 
     onRecovery:
       config.onRecovery ?? true,
 
     actionableDecisions:
       config.actionableDecisions ??
-      DEFAULT_ACTIONABLE_DECISIONS
+      DEFAULT_ACTIONABLE_DECISIONS,
+
+    statePath:
+      config.statePath === false
+        ? null
+        : resolve(
+            config.statePath ??
+            "data/matrix-notifications.json"
+          )
   };
+}
+
+async function loadState(notify) {
+  if (!notify.statePath) {
+    return objectFromMap(memoryStates);
+  }
+
+  if (fileCache.has(notify.statePath)) {
+    return fileCache.get(notify.statePath);
+  }
+
+  try {
+    const data = JSON.parse(
+      await readFile(notify.statePath, "utf8")
+    );
+
+    fileCache.set(notify.statePath, data);
+    return data;
+  }
+  catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+
+    const data = {};
+    fileCache.set(notify.statePath, data);
+    return data;
+  }
+}
+
+async function saveState(notify, state) {
+  if (!notify.statePath) {
+    memoryStates.clear();
+
+    for (const [key, value] of Object.entries(state)) {
+      memoryStates.set(key, value);
+    }
+
+    return;
+  }
+
+  await mkdir(dirname(notify.statePath), {
+    recursive: true
+  });
+
+  const temporaryPath =
+    `${notify.statePath}.tmp`;
+
+  await writeFile(
+    temporaryPath,
+    JSON.stringify(state, null, 2) + "\n"
+  );
+
+  await rename(
+    temporaryPath,
+    notify.statePath
+  );
+}
+
+function objectFromMap(map) {
+  return Object.fromEntries(
+    map.entries()
+  );
 }
 
 function notificationKey(ctx, event) {

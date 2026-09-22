@@ -2,7 +2,7 @@
 
 The Matrix destination sends Brainstem decisions to a Matrix room using the Matrix Client-Server API.
 
-It includes notification throttling so repeated polls of the same ongoing incident do not spam the room.
+It includes notification policy, repeat suppression, recovery messages, delivery retries, optional Matrix threads, and persistent delivery state.
 
 ## Config
 
@@ -27,8 +27,22 @@ destinations: [
 
       notify: {
         repeatAfterMs: 60 * 60 * 1000,
-        onRecovery: true
-      }
+        onRecovery: true,
+        statePath: "data/matrix-notifications.json"
+      },
+
+      retry: {
+        attempts: 3,
+        minDelayMs: 1000,
+        maxDelayMs: 30000,
+        factor: 2
+      },
+
+      message: {
+        format: "text"
+      },
+
+      threading: true
     }
   }
 ]
@@ -60,13 +74,69 @@ Configure them with:
 notify: {
   actionableDecisions: ["dispatch", "escalate"],
   repeatAfterMs: 60 * 60 * 1000,
-  onRecovery: true
+  onRecovery: true,
+  statePath: "data/matrix-notifications.json"
 }
 ```
 
 Set `repeatAfterMs: null` to disable reminders.
 
-Notification state is currently in-memory and resets when Brainstem restarts. Core decision records still prevent repeated Laya evaluations after restart.
+Set `statePath: false` to use in-memory notification state. Persistent state is recommended for real monitoring so Brainstem does not resend ongoing alerts after restart.
+
+## Rate limits and retries
+
+Matrix delivery retries transient errors:
+
+- HTTP `429` rate limits
+- HTTP `5xx` server errors
+- network errors
+
+For `429`, Brainstem respects Matrix `retry_after_ms` when present.
+
+```js
+retry: {
+  attempts: 3,
+  minDelayMs: 1000,
+  maxDelayMs: 30000,
+  factor: 2
+}
+```
+
+## Message formatting
+
+Plain text is the default:
+
+```js
+message: {
+  format: "text"
+}
+```
+
+HTML formatting is also supported:
+
+```js
+message: {
+  format: "html"
+}
+```
+
+For advanced use, provide a config template function in local config:
+
+```js
+template(event) {
+  return `Brainstem ${event.decision.payload.decision}: ${event.observation.payload.title}`;
+}
+```
+
+## Threading
+
+Matrix threading is enabled by default:
+
+```js
+threading: true
+```
+
+When Matrix returns an `event_id`, repeats and recoveries are sent as thread replies to the previous alert. Set `threading: false` to disable this.
 
 ## Token options
 
@@ -109,7 +179,8 @@ destinations: [
       tokenEnv: "MATRIX_ACCESS_TOKEN",
       notify: {
         repeatAfterMs: 60 * 60 * 1000,
-        onRecovery: true
+        onRecovery: true,
+        statePath: "data/matrix-notifications.json"
       }
     }
   }
