@@ -2,6 +2,8 @@
 
 A lightweight decision and orchestration layer for autonomous AI agents.
 
+> Status: `0.1.0-alpha.0`. Brainstem is usable for local experimentation, but APIs and plugin contracts may still change.
+
 Brainstem sits between external systems and AI agents. It continuously monitors configured sources, uses a local decision model to determine whether something requires attention, and only wakes an agent when actual reasoning or action is needed.
 
 The goal is simple: **keep expensive agents asleep until there is something worth doing.**
