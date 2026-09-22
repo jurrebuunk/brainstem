@@ -20,6 +20,7 @@ Built-in plugin pages:
 
 - [GitHub Issues input](plugins/github-issues.md)
 - [HTTP Health input](http-health.md)
+- [TLS Certificate input](tls-certificate.md)
 - [Static Observations input](plugins/static-observations.md)
 - [Log Decisions destination](plugins/log-decisions.md)
 - [Matrix destination](matrix-destination.md)

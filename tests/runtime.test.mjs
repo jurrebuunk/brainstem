@@ -12,6 +12,7 @@ import { BrainstemRuntime } from "../src/runtime/runtime.mjs";
 import httpHealthPlugin from "../plugins/http-health/index.mjs";
 import matrixPlugin from "../plugins/matrix/index.mjs";
 import { resetNotificationState } from "../plugins/matrix/notify.mjs";
+import { evaluateCertificate } from "../plugins/tls-certificate/check.mjs";
 
 const minimalPolicyConfig = {
   policy: config.policy,
@@ -223,6 +224,30 @@ test("http health input respects failure and recovery thresholds", async () => {
     "unhealthy",
     "healthy"
   ]);
+});
+
+test("tls certificate evaluation detects expiring certificates", () => {
+  const now = Date.parse("2026-01-01T00:00:00.000Z");
+
+  const result = evaluateCertificate(
+    {
+      warnDays: 14,
+      criticalDays: 3,
+      checkAuthorization: true
+    },
+    {
+      authorized: true,
+      authorizationError: null,
+      certificate: {
+        valid_to: "Jan 05 00:00:00 2026 GMT",
+        fingerprint256: "AA:BB"
+      }
+    },
+    now
+  );
+
+  assert.equal(result.state, "expiring");
+  assert.equal(result.daysRemaining, 4);
 });
 
 test("matrix destination sends room messages", async () => {

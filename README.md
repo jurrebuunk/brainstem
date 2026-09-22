@@ -40,6 +40,7 @@ Input plugins:
 
 - `github-issues` — polls GitHub issues.
 - `http-health` — polls HTTP endpoints.
+- `tls-certificate` — checks TLS certificate validity and expiry.
 - `static-observations` — local smoke-test input.
 
 Destination plugins:

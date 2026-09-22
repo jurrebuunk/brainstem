@@ -9,6 +9,7 @@ node_modules/
 # Local Brainstem config
 brainstem.config.mjs
 !brainstem.config.example.mjs
+docker-compose.yml
 
 # Logs
 *.log

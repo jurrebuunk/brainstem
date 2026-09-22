@@ -21,6 +21,18 @@ export default {
       }
     },
     {
+      id: "example-tls",
+      module: "./plugins/tls-certificate/index.mjs",
+      input: "check",
+      config: {
+        host: "example.com",
+        warnDays: 14,
+        criticalDays: 3,
+        minimumDecisionOnWarning: "queue",
+        minimumDecisionOnCritical: "dispatch"
+      }
+    },
+    {
       id: "github-issues",
       module: "./plugins/github-issues/index.mjs",
       input: "issues",
@@ -56,8 +68,8 @@ export default {
       destination: "room",
       decisions: "all",
       routes: "all",
-      sources: "all",
-      types: "all",
+      sources: ["http", "tls"],
+      types: ["health_check", "certificate"],
       config: {
         homeserver: "https://matrix.example.org",
         roomId: "!roomid:example.org",

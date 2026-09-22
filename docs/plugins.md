@@ -8,6 +8,7 @@ Brainstem ships local plugins under `plugins/`.
 | --- | --- | --- | --- |
 | GitHub Issues | `./plugins/github-issues/index.mjs` | Poll open GitHub issues and emit issue observations. | [GitHub Issues](plugins/github-issues.md) |
 | HTTP Health | `./plugins/http-health/index.mjs` | Poll HTTP endpoints and emit health check observations. | [HTTP Health](http-health.md) |
+| TLS Certificate | `./plugins/tls-certificate/index.mjs` | Check TLS certificate validity and expiry. | [TLS Certificate](tls-certificate.md) |
 | Static Observations | `./plugins/static-observations/index.mjs` | Emit configured observations for smoke tests. | [Static Observations](plugins/static-observations.md) |
 
 ## Destination plugins
