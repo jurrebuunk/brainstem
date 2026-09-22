@@ -9,6 +9,8 @@ import config from "../brainstem.config.mjs";
 import { Brainstem, createObservation } from "../core.mjs";
 import { SqliteRecordStore } from "../record-stores.mjs";
 import { BrainstemRuntime } from "../runtime.mjs";
+import httpHealthPlugin from "../plugins/http-health/index.mjs";
+import matrixPlugin from "../plugins/matrix/index.mjs";
 
 const minimalPolicyConfig = {
   policy: config.policy,
@@ -126,6 +128,112 @@ test("sqlite core records are reused after restart", async () => {
   assert.equal(secondCounter.count, 0);
 });
 
+test("http health input emits unhealthy observations", async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async () => ({
+    status: 503,
+    statusText: "Service Unavailable"
+  });
+
+  try {
+    const observations = [];
+
+    for await (
+      const observation of httpHealthPlugin.inputs.check.poll({
+        config: {
+          url: "https://example.com/health",
+          name: "example",
+          minimumDecisionOnFailure: "dispatch"
+        },
+        signal: new AbortController().signal,
+        observation: createObservation
+      })
+    ) {
+      observations.push(observation);
+    }
+
+    assert.equal(observations.length, 1);
+    assert.equal(observations[0].payload.source.type, "http");
+    assert.equal(observations[0].payload.type, "health_check");
+    assert.equal(observations[0].payload.state, "unhealthy");
+    assert.equal(observations[0].payload.facts.minimum_decision, "dispatch");
+    assert.equal(observations[0].payload.data.status, 503);
+  }
+  finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("matrix destination sends room messages", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK"
+    };
+  };
+
+  try {
+    await matrixPlugin.destinations.room.handle(
+      {
+        config: {
+          homeserver: "https://matrix.example",
+          roomId: "!room:example",
+          accessToken: "secret"
+        },
+        signal: new AbortController().signal,
+        logger: console
+      },
+      {
+        decision: {
+          payload: {
+            decision: "dispatch",
+            route: "infrastructure",
+            reason: "test reason"
+          }
+        },
+        observation: {
+          payload: {
+            id: "http:example:health",
+            source: {
+              type: "http",
+              name: "example"
+            },
+            type: "health_check",
+            state: "unhealthy",
+            title: "example is unhealthy",
+            data: {
+              url: "https://example.com/health"
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(calls.length, 1);
+    assert.match(
+      calls[0].url,
+      /^https:\/\/matrix\.example\/_matrix\/client\/v3\/rooms\//
+    );
+    assert.equal(calls[0].options.method, "PUT");
+    assert.equal(calls[0].options.headers.authorization, "Bearer secret");
+
+    const body = JSON.parse(calls[0].options.body);
+    assert.equal(body.msgtype, "m.text");
+    assert.match(body.body, /Brainstem dispatch/);
+    assert.match(body.body, /example is unhealthy/);
+  }
+  finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("destinations can filter by decision, route, source, and type", async () => {
   const dir = await mkdtemp(join(tmpdir(), "brainstem-destination-filters-"));
   const destinationPath = join(dir, "destination.mjs");
@@ -144,7 +252,7 @@ test("destinations can filter by decision, route, source, and type", async () =>
     config: checkpointConfig(join(dir, "checkpoints.json")),
     plugins: [
       {
-        module: "./plugins/static-observations.mjs",
+        module: "./plugins/static-observations/index.mjs",
         config: {
           observations: [
             {

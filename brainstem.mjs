@@ -1,5 +1,9 @@
+import { existsSync, readFileSync } from "node:fs";
+
 import config from "./brainstem.config.mjs";
 import { BrainstemRuntime } from "./runtime.mjs";
+
+loadDotEnv();
 
 const args =
   new Set(process.argv.slice(2));
@@ -20,7 +24,10 @@ const inputs =
 
 const destinations =
   (config.destinations ?? []).map(entry => {
-    if (!printAll) {
+    if (
+      !printAll ||
+      !isLogDestination(entry)
+    ) {
       return entry;
     }
 
@@ -91,5 +98,57 @@ else {
   }
   finally {
     await runtime.close();
+  }
+}
+
+function isLogDestination(entry) {
+  return entry.module ===
+    "./plugins/log-decisions/index.mjs";
+}
+
+function loadDotEnv(path = ".env") {
+  if (!existsSync(path)) {
+    return;
+  }
+
+  const text =
+    readFileSync(path, "utf8");
+
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+
+    if (
+      !trimmed ||
+      trimmed.startsWith("#")
+    ) {
+      continue;
+    }
+
+    const index = trimmed.indexOf("=");
+
+    if (index === -1) {
+      continue;
+    }
+
+    const key =
+      trimmed.slice(0, index).trim();
+
+    let value =
+      trimmed.slice(index + 1).trim();
+
+    if (
+      (
+        value.startsWith("\"") &&
+        value.endsWith("\"")
+      ) ||
+      (
+        value.startsWith("'") &&
+        value.endsWith("'")
+      )
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    process.env[key] ??= value;
   }
 }

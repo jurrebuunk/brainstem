@@ -7,7 +7,7 @@ The current adapter logs decisions to the console:
 ```js
 destinations: [
   {
-    module: "./plugins/log-decisions.mjs",
+    module: "./plugins/log-decisions/index.mjs",
     destination: "default",
     decisions: ["queue", "dispatch", "escalate"],
     routes: ["coding", "security"],
@@ -30,7 +30,7 @@ Use `routes` to filter by the abstract route chosen by the core:
 
 ```js
 {
-  module: "./plugins/log-decisions.mjs",
+  module: "./plugins/log-decisions/index.mjs",
   destination: "default",
   decisions: ["queue", "dispatch"],
   routes: ["coding"],
@@ -42,7 +42,7 @@ Use `sources` to filter by `observation.payload.source.type`, and `types` to fil
 
 ```js
 {
-  module: "./plugins/log-decisions.mjs",
+  module: "./plugins/log-decisions/index.mjs",
   decisions: ["dispatch"],
   routes: ["security"],
   sources: ["github"],
@@ -56,7 +56,7 @@ Omit a filter or set it to `"all"` to receive every value for that field.
 A destination adapter exports:
 
 ```js
-import { defineDestinationPlugin } from "../sdk.mjs";
+import { defineDestinationPlugin } from "../../src/sdk/index.mjs";
 
 export default defineDestinationPlugin({
   apiVersion: "brainstem.destination/v1",
@@ -90,7 +90,7 @@ The same destination adapter can be configured multiple times:
 ```js
 destinations: [
   {
-    module: "./plugins/log-decisions.mjs",
+    module: "./plugins/log-decisions/index.mjs",
     decisions: ["queue", "dispatch"],
     routes: ["coding"],
     sources: ["github"],
@@ -98,7 +98,7 @@ destinations: [
     config: { prefix: "coding-agent" }
   },
   {
-    module: "./plugins/log-decisions.mjs",
+    module: "./plugins/log-decisions/index.mjs",
     decisions: ["dispatch", "escalate"],
     routes: ["security"],
     sources: "all",

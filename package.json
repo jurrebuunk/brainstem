@@ -3,6 +3,13 @@
   "version": "1.0.0",
   "description": "A lightweight decision and orchestration layer for autonomous AI agents.",
   "main": "core.mjs",
+  "exports": {
+    ".": "./src/core/brainstem.mjs",
+    "./runtime": "./src/runtime/runtime.mjs",
+    "./sdk": "./src/sdk/index.mjs",
+    "./record-stores": "./src/core/record-stores.mjs",
+    "./checkpoints": "./src/runtime/checkpoints.mjs"
+  },
   "scripts": {
     "start": "node brainstem.mjs",
     "start:once": "node brainstem.mjs --once",

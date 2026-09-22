@@ -5,7 +5,7 @@ const runtime = new BrainstemRuntime({
   config,
   plugins: [
     {
-      module: "./plugins/static-observations.mjs",
+      module: "./plugins/static-observations/index.mjs",
       config: {
         observations: [
           {
@@ -26,7 +26,7 @@ const runtime = new BrainstemRuntime({
   ],
   destinations: [
     {
-      module: "./plugins/log-decisions.mjs",
+      module: "./plugins/log-decisions/index.mjs",
       destination: "default",
       decisions: "all",
       config: {

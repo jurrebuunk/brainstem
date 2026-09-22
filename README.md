@@ -153,6 +153,19 @@ Monitor
 
 This avoids having every external system maintain its own webhook or direct integration with an agent.
 
+## Project Layout
+
+Brainstem is split into a small core, runtime, SDK, and directory-based plugins:
+
+```text
+src/core/                 decision engine and record stores
+src/runtime/              plugin loading, routing, checkpoints
+src/sdk/                  adapter author helpers
+plugins/<name>/index.mjs  plugin entrypoints
+```
+
+Root files such as `core.mjs`, `runtime.mjs`, and `sdk.mjs` are compatibility re-exports.
+
 ## Input Plugins
 
 Input plugins are loadable source adapters. They observe one external system and emit standardized Brainstem observations.
@@ -160,7 +173,7 @@ Input plugins are loadable source adapters. They observe one external system and
 A plugin exports a small object:
 
 ```js
-import { defineInputPlugin } from "./sdk.mjs";
+import { defineInputPlugin } from "./src/sdk/index.mjs";
 
 export default defineInputPlugin({
   apiVersion: "brainstem.input/v1",
@@ -196,7 +209,7 @@ const runtime = new BrainstemRuntime({
   config,
   plugins: [
     {
-      module: "./plugins/github-issues.mjs",
+      module: "./plugins/github-issues/index.mjs",
       input: "issues",
       config: {
         repo: "owner/repo",
@@ -206,7 +219,7 @@ const runtime = new BrainstemRuntime({
   ],
   destinations: [
     {
-      module: "./plugins/log-decisions.mjs",
+      module: "./plugins/log-decisions/index.mjs",
       destination: "default"
     }
   ]
@@ -239,7 +252,7 @@ Keep tokens in environment variables, not in committed config files:
 ```js
 inputs: [
   {
-    module: "./plugins/github-issues.mjs",
+    module: "./plugins/github-issues/index.mjs",
     input: "issues",
     config: {
       repo: "owner/repo",
@@ -264,6 +277,28 @@ For a one-shot local smoke test:
 node run-plugin-test.mjs
 ```
 
+## HTTP Health Input
+
+Brainstem includes a simple HTTP health input adapter:
+
+```js
+inputs: [
+  {
+    id: "api-health",
+    module: "./plugins/http-health/index.mjs",
+    input: "check",
+    config: {
+      url: "https://example.com/health",
+      timeoutMs: 10_000,
+      expectedStatuses: [[200, 399]],
+      minimumDecisionOnFailure: "dispatch"
+    }
+  }
+]
+```
+
+For multiple endpoints, use `config.checks`.
+
 ## Destination Adapters
 
 Destination adapters receive decisions after Brainstem processes observations.
@@ -273,7 +308,7 @@ The first destination adapter simply logs non-ignored decisions:
 ```js
 destinations: [
   {
-    module: "./plugins/log-decisions.mjs",
+    module: "./plugins/log-decisions/index.mjs",
     destination: "default",
     decisions: ["queue", "dispatch", "escalate"],
     routes: ["coding", "security"],
@@ -287,6 +322,30 @@ destinations: [
 ```
 
 Destinations can filter by decision level, the core's abstract route, observation source, and observation type. Use `"all"` or omit a filter to receive every value for that field.
+
+Brainstem also includes a Matrix room destination:
+
+```js
+destinations: [
+  {
+    module: "./plugins/matrix/index.mjs",
+    destination: "room",
+    decisions: ["dispatch", "escalate"],
+    routes: "all",
+    config: {
+      homeserver: "https://matrix.org",
+      roomId: "!roomid:matrix.org",
+      tokenEnv: "MATRIX_ACCESS_TOKEN"
+    }
+  }
+]
+```
+
+Keep the Matrix access token in the environment:
+
+```sh
+MATRIX_ACCESS_TOKEN=... node brainstem.mjs
+```
 
 This keeps decision handling outside the core. Later adapters can wake agents, call webhooks, or enqueue tasks.
 
