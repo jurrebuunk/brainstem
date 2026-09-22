@@ -1,14 +1,14 @@
 {
-  "name": "laya-test",
+  "name": "brainstem",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "A lightweight decision and orchestration layer for autonomous AI agents.",
+  "main": "core.mjs",
   "scripts": {
     "start": "node brainstem.mjs",
     "start:once": "node brainstem.mjs --once",
     "start:once:all": "node brainstem.mjs --once --all",
     "plugin:test": "node run-plugin-test.mjs",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test tests/*.test.mjs"
   },
   "keywords": [],
   "author": "",
