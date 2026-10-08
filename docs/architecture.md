@@ -1,14 +1,16 @@
 # Architecture
 
-Brainstem is split into four layers:
+Brainstem is split into a headless runtime plus optional read-only presentation layers:
 
 ```text
 Input plugins → Runtime → Core → Destination plugins
+                      │
+                      └── telemetry → Web UI
 ```
 
 ## Input plugins
 
-Input plugins observe external systems and emit standardized observations.
+Input plugins observe external systems and emit standardized observations. They should deduplicate at the source with checkpoints so unchanged source data does not repeatedly enter the core.
 
 Examples:
 
@@ -29,6 +31,7 @@ The runtime owns operational behavior around the core:
 - validating observations
 - calling the core
 - routing decisions to destinations
+- structured telemetry for live read-only views
 
 ## Core
 
@@ -50,13 +53,14 @@ The core does not know about GitHub, Matrix, Hermes, webhooks, or other concrete
 
 ## Destination plugins
 
-Destination plugins react to decisions.
+Destination plugins react to decisions. Destination failures are isolated from input checkpoints by default, so output outages do not force inputs to reprocess old source items.
 
 Examples:
 
 - logging to stdout
 - sending Matrix messages
-- webhooks or agent runners in the future
+- HTTP JSON/webhook output
+- agent runners in the future
 
 Destinations can be filtered by:
 
@@ -65,9 +69,13 @@ Destinations can be filtered by:
 - observation source
 - observation type
 
+## Telemetry and Web UI
+
+The runtime can emit structured telemetry over HTTP. The Web UI consumes this telemetry and output envelopes to show a live graph of inputs, the core, and destinations. The Web UI is a separate app under `web/`; it does not own config or run Brainstem logic.
+
 ## State
 
-Brainstem has two state types:
+Brainstem has two durable state types:
 
 1. Core records — durable SQLite cache of latest decision per observation ID.
 2. Input checkpoints — adapter cursors or stability state.

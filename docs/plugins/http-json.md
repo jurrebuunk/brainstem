@@ -10,13 +10,7 @@ Sends each matching Brainstem output event as JSON to an HTTP endpoint.
 
 ## Example
 
-Start the local logging server:
-
-```sh
-npm run http-log-server
-```
-
-Configure the destination:
+Send envelopes to the Web UI:
 
 ```js
 destinations: [
@@ -24,11 +18,28 @@ destinations: [
     module: "./plugins/http-json/index.mjs",
     destination: "default",
     decisions: "all",
+    routes: "all",
+    sources: "all",
+    types: "all",
     config: {
-      url: "http://127.0.0.1:8787"
+      url: "http://127.0.0.1:5173/api/events"
     }
   }
 ]
+```
+
+Or start the standalone local logging server:
+
+```sh
+npm run http-log-server
+```
+
+and send to:
+
+```js
+config: {
+  url: "http://127.0.0.1:8787"
+}
 ```
 
 ## Options
@@ -49,6 +60,7 @@ The destination POSTs:
   kind: "brainstem.output",
   payload: {
     timestamp,
+    pollId,
     decision,
     observation,
     input,

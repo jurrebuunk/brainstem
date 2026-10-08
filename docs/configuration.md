@@ -125,6 +125,12 @@ runtime: {
     blockInputOnFailure: false
   },
 
+  telemetry: {
+    // optional: send structured runtime events to the Web UI or another receiver
+    url: "http://127.0.0.1:5173/api/events",
+    snapshotIntervalMs: 5000
+  },
+
   laya: {
     cacheDir: "data/laya-cache"
     // or modelDir: "data/laya-model"
@@ -142,6 +148,8 @@ Use `pretty` for local/Docker Compose logs and `json` when shipping logs to a co
 `runtime.startupRetry` controls retries while starting the core. This is useful because the first startup may download the Laya model bundle and can fail on temporary network/DNS timeouts.
 
 `runtime.destinations.blockInputOnFailure` defaults to `false`, so destination outages do not cause inputs to reprocess the same source items. Set it to `true` only if you want destination failure to prevent input checkpoint commits.
+
+`runtime.telemetry` sends structured runtime events to an HTTP endpoint such as the Web UI. It emits snapshots, input poll events, observations, decisions, destination activity, failures, and plugin logs.
 
 `runtime.laya` is passed to `Laya.load()`. Useful options:
 

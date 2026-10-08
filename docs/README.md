@@ -9,6 +9,8 @@ Documentation is kept in the repository so it is versioned with the code.
 - [Configuration](configuration.md) — full config file structure and common examples.
 - [Architecture](architecture.md) — how inputs, core, runtime, state, and destinations fit together.
 - [State](state.md) — SQLite records and input checkpoints.
+- [Web UI](web-ui.md) — minimal read-only React Flow live view.
+- [Runtime telemetry](telemetry.md) — structured events emitted by the runtime.
 
 ## Plugin docs
 
@@ -25,6 +27,7 @@ Built-in plugin pages:
 - [Static Observations input](plugins/static-observations.md)
 - [Log Decisions destination](plugins/log-decisions.md)
 - [Matrix destination](matrix-destination.md)
+- [HTTP JSON destination](plugins/http-json.md)
 
 ## Maintainer docs
 

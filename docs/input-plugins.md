@@ -42,7 +42,7 @@ Phase 1 supports polling inputs only.
 ```js
 ctx.config       // plugin entry config from brainstem.config.mjs
 ctx.signal       // AbortSignal for shutdown/cancellation
-ctx.logger       // logger, usually console
+ctx.logger       // scoped plugin logger; also forwarded to telemetry when configured
 ctx.observation  // helper around createObservation()
 ctx.checkpoint   // scoped checkpoint API for this configured input
 ```
@@ -161,6 +161,19 @@ data: {
 ```
 
 Prefer top-level `timestamp`, which `ctx.observation()` sets automatically when omitted.
+
+## Plugin logs
+
+Input plugins can write scoped logs with `ctx.logger`:
+
+```js
+ctx.logger.debug("github issues poll result", {
+  fetched: issues.length,
+  emitted
+});
+```
+
+When runtime telemetry is configured, these logs are emitted as `brainstem.plugin.log` and shown under the relevant input node in the Web UI.
 
 ## Deterministic minimum decisions
 

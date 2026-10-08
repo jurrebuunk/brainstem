@@ -6,10 +6,10 @@ Brainstem ships local plugins under `plugins/`.
 
 | Plugin | Module | Purpose | Docs |
 | --- | --- | --- | --- |
-| GitHub Issues | `./plugins/github-issues/index.mjs` | Poll open GitHub issues and emit issue observations. | [GitHub Issues](plugins/github-issues.md) |
+| GitHub Issues | `./plugins/github-issues/index.mjs` | Poll GitHub issues and emit only new/changed issue observations. | [GitHub Issues](plugins/github-issues.md) |
 | Email IMAP | `./plugins/email-imap/index.mjs` | Poll an IMAP inbox and emit new email observations. | [Email IMAP](email-imap.md) |
-| HTTP Health | `./plugins/http-health/index.mjs` | Poll HTTP endpoints and emit health check observations. | [HTTP Health](http-health.md) |
-| TLS Certificate | `./plugins/tls-certificate/index.mjs` | Check TLS certificate validity and expiry. | [TLS Certificate](tls-certificate.md) |
+| HTTP Health | `./plugins/http-health/index.mjs` | Poll HTTP endpoints and emit health state changes. | [HTTP Health](http-health.md) |
+| TLS Certificate | `./plugins/tls-certificate/index.mjs` | Check TLS certificate validity/expiry and emit certificate state changes. | [TLS Certificate](tls-certificate.md) |
 | Static Observations | `./plugins/static-observations/index.mjs` | Emit configured observations for smoke tests. | [Static Observations](plugins/static-observations.md) |
 
 ## Destination plugins

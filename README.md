@@ -10,14 +10,14 @@
 
 Brainstem is a lightweight decision and orchestration layer for autonomous AI agents.
 
-It watches external systems, normalizes what it sees into observations, uses a small local Laya decision model to decide whether the observation matters, and only then routes actionable decisions to destinations such as logs, Matrix rooms, webhooks, or future agent runners.
+It watches external systems, normalizes what it sees into observations, uses a small local Laya decision model to decide whether the observation matters, and only then routes actionable decisions to destinations such as logs, Matrix rooms, HTTP endpoints, or future agent runners.
 
 ```text
 Inputs                Brainstem Core                 Destinations
 ------                --------------                 ------------
 GitHub issues ─┐      dedupe/cache ─┐                console log
 HTTP health ───┼──▶   Laya signals  ├──▶ decision ─▶ Matrix room
-logs/chats ────┘      policy/route  ┘                agent/webhook later
+email/IMAP ────┘      policy/route  ┘                HTTP JSON / web UI
 ```
 
 The goal is simple:
@@ -28,11 +28,13 @@ The goal is simple:
 
 - Polls configured input plugins.
 - Converts source data into standardized observations.
-- Deduplicates observations with durable SQLite records.
+- Deduplicates at the input source with checkpoints so unchanged issues, emails, health checks, and certificates do not flood the core.
+- Deduplicates semantic decisions with durable SQLite records.
 - Uses [Laya](https://github.com/receptron/laya) for bounded local decisions.
 - Produces decision envelopes: `ignore`, `queue`, `dispatch`, or `escalate`.
 - Routes decisions by decision level, route, source, and type.
 - Sends matching decisions to destination plugins.
+- Emits structured runtime telemetry for the read-only Web UI.
 
 ## Current plugins
 
@@ -48,12 +50,15 @@ Destination plugins:
 
 - `log-decisions` — logs decisions to stdout.
 - `matrix` — sends decisions to a Matrix room.
+- `http-json` — posts output envelopes to an HTTP endpoint, including the Web UI ingest endpoint.
 
 See the [plugin catalog](docs/plugins.md) for all built-in plugins and configuration examples.
 
-## Logging
+## Logging and telemetry
 
 Brainstem has built-in runtime logs for startup, plugin polling, retries, decisions, destination delivery, and shutdown. These logs are independent from the optional `log-decisions` destination, which is intended for full decision/audit dumps.
+
+Brainstem also supports structured runtime telemetry for machine consumers such as the Web UI. Telemetry includes runtime snapshots, input polls, emitted observations, core decisions, destination runs, output envelopes, and plugin logs.
 
 Configure runtime logs with:
 
@@ -71,6 +76,19 @@ CLI overrides:
 ```sh
 node brainstem.mjs --log-level debug --log-format json
 ```
+
+Telemetry example:
+
+```js
+runtime: {
+  telemetry: {
+    url: "http://127.0.0.1:5173/api/events",
+    snapshotIntervalMs: 5000
+  }
+}
+```
+
+See [`docs/telemetry.md`](docs/telemetry.md).
 
 ## Requirements
 
@@ -125,6 +143,12 @@ cp .env.example .env
 npm run start:once
 ```
 
+Optional Web UI dependencies:
+
+```sh
+npm --prefix web install
+```
+
 `brainstem.config.mjs`, `.env`, and `data/` are local runtime files and are ignored by git.
 
 ## CLI
@@ -133,6 +157,7 @@ npm run start:once
 npm start              # run continuously
 npm run start:once     # poll each input once and exit
 npm run start:once:all # poll once and also print ignored decisions through log destinations
+npm run web            # start the read-only Web UI on http://127.0.0.1:5173
 ```
 
 Direct CLI usage:
@@ -201,7 +226,48 @@ export default {
 };
 ```
 
-See [`brainstem.config.example.mjs`](brainstem.config.example.mjs) for a fuller example with GitHub, HTTP health, logging, and Matrix.
+See [`brainstem.config.example.mjs`](brainstem.config.example.mjs) for a fuller example with GitHub, HTTP health, logging, Matrix, HTTP JSON, and Web UI telemetry.
+
+## Web UI
+
+Brainstem ships a minimal read-only Web UI built with React Flow. It is separate from the headless runtime and receives events over HTTP.
+
+Run it with:
+
+```sh
+npm --prefix web install
+npm run web
+```
+
+Open:
+
+```text
+http://127.0.0.1:5173
+```
+
+Configure Brainstem to send telemetry and output envelopes:
+
+```js
+runtime: {
+  telemetry: {
+    url: "http://127.0.0.1:5173/api/events",
+    snapshotIntervalMs: 5000
+  }
+},
+
+destinations: [
+  {
+    module: "./plugins/http-json/index.mjs",
+    destination: "default",
+    decisions: "all",
+    config: {
+      url: "http://127.0.0.1:5173/api/events"
+    }
+  }
+]
+```
+
+The UI shows inputs, the core, destinations, live poll/decision/destination activity, plugin logs, and raw JSON envelopes. See [`docs/web-ui.md`](docs/web-ui.md).
 
 ## Matrix notifications
 
@@ -281,12 +347,14 @@ The core returns a decision envelope like:
 
 ## Durable state
 
-Brainstem keeps two kinds of state:
+Brainstem keeps two kinds of durable runtime state:
 
 1. **Core records** in SQLite — latest fingerprint and decision per observation ID.
-2. **Input checkpoints** — small adapter cursors such as `lastSeenAt` or `lastMessageId`.
+2. **Input checkpoints** — adapter cursors, fingerprints, and stability state.
 
-This keeps repeated polling cheap while avoiding unbounded event history by default.
+Input plugins are expected to use checkpoints for source-side deduplication. For example, the GitHub plugin only emits new or changed issues, HTTP health emits state changes by default, and TLS emits certificate/status changes by default.
+
+The Web UI stores its received telemetry in memory only; it is a live readout, not durable history.
 
 See [`docs/state.md`](docs/state.md).
 
@@ -345,10 +413,11 @@ Docs:
 
 ```text
 src/core/                 decision engine and record stores
-src/runtime/              plugin loading, routing, checkpoints
+src/runtime/              plugin loading, routing, checkpoints, telemetry
 src/sdk/                  adapter author helpers
 plugins/<name>/index.mjs  plugin entrypoints
 plugins/<name>/*.mjs      plugin implementation modules
+web/                      separate read-only React Flow Web UI
 docs/                     user and plugin documentation
 ```
 
@@ -358,6 +427,7 @@ docs/                     user and plugin documentation
 npm run check
 npm test
 npm run plugin:test
+npm run web:build
 npm pack --dry-run
 ```
 

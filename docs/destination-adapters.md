@@ -79,9 +79,12 @@ event.decision     // Brainstem decision envelope
 event.observation  // original observation envelope
 event.input        // source input metadata
 event.destination  // destination metadata
+event.pollId       // poll correlation id when available
 ```
 
 Destination adapters should not change Brainstem decisions. They should only react to them.
+
+Destination adapters can write scoped logs with `ctx.logger`. When runtime telemetry is configured, these logs are emitted as `brainstem.plugin.log` and shown under the destination node in the Web UI.
 
 ## Failure handling
 
