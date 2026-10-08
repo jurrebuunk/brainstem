@@ -124,15 +124,16 @@ export function buildGraph(events, now = Date.now()) {
   const destinationItems = Array.from(destinations.values());
   const rows = Math.max(inputItems.length, destinationItems.length, 1);
   const rowGap = 155;
-  const coreHeight = Math.max(130, rows * 42 + 70);
+  const handleCount = Math.max(inputItems.length, destinationItems.length);
+  const coreHeight = coreHeightForHandles(handleCount);
   const coreY = ((rows - 1) * rowGap) / 2 - coreHeight / 2 + 65;
   const inputHandles = inputItems.map((input, index) => ({
     id: `in-${safeHandleId(input.id)}`,
-    top: handleTop(index, inputItems.length)
+    top: handleTop(index, inputItems.length, coreHeight)
   }));
   const outputHandles = destinationItems.map((destination, index) => ({
     id: `out-${safeHandleId(destination.id)}`,
-    top: handleTop(index, destinationItems.length)
+    top: handleTop(index, destinationItems.length, coreHeight)
   }));
 
   return {
@@ -313,17 +314,27 @@ function graphEdge({ id, source, sourceHandle, target, targetHandle, active, col
     target,
     targetHandle,
     animated: active,
-    type: "siphon",
+    type: "default",
     className: active ? "edge-active" : "",
     style: { stroke: active ? color : "#4b5563", strokeWidth: active ? 2.5 : 1.5 }
   };
 }
 
-function handleTop(index, count) {
+function coreHeightForHandles(count) {
+  const minHeight = 130;
+  const reserved = 88;
+  const minGap = 12;
+  return Math.max(minHeight, reserved + Math.max(0, count - 1) * minGap);
+}
+
+function handleTop(index, count, height) {
   if (count <= 1) return 50;
 
-  const spread = Math.min(42, Math.max(14, (count - 1) * 8));
-  return 50 - spread / 2 + (index * spread) / (count - 1);
+  const minGap = 12;
+  const maxSpread = Math.max(0, height - 88);
+  const spread = Math.min(maxSpread, (count - 1) * minGap);
+  const topPx = height / 2 - spread / 2 + (index * spread) / (count - 1);
+  return (topPx / height) * 100;
 }
 
 function safeHandleId(value) {
