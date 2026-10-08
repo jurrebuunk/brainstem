@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.0-alpha.1
+
+Release hardening for headless agent routing and the Web UI.
+
+Includes:
+
+- Source-side dedupe/checkpointing improvements for GitHub, HTTP health, and TLS inputs.
+- Destination failures isolated from input checkpointing by default.
+- HTTP JSON output destination and local Web UI event ingestion.
+- Structured runtime telemetry and scoped plugin telemetry.
+- React Flow Web UI with live flow, node logs, stats, and CodeMirror config editor.
+- Persistent Web UI stats in SQLite.
+- OpenCode runner destination using the OpenCode server API with output logging.
+- Web server hardening for invalid JSON, request limits, atomic config saves, stats pruning, and safer static serving.
+- Documentation updates for telemetry, Web UI, HTTP JSON, and OpenCode runner.
+
 ## 0.1.0-alpha.0
 
 Initial alpha release.
