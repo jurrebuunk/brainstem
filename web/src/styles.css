@@ -92,39 +92,42 @@ table {
 }
 
 .node-input .node-header {
-  background: #2563eb;
+  background: #1e3a8a;
 }
 
 .node-core .node-header {
-  background: #7c3aed;
+  background: #4c1d95;
 }
 
 .node-destination .node-header {
-  background: #059669;
+  background: #064e3b;
 }
 
 .node-input.is-active {
-  border-color: #60a5fa;
+  border-color: #38bdf8;
 }
 
 .node-input.is-active .node-header {
-  background: #1d4ed8;
+  background: #0284c7;
+  color: #ffffff;
 }
 
 .node-core.is-active {
-  border-color: #a78bfa;
+  border-color: #d8b4fe;
 }
 
 .node-core.is-active .node-header {
-  background: #6d28d9;
+  background: #a855f7;
+  color: #ffffff;
 }
 
 .node-destination.is-active {
-  border-color: #34d399;
+  border-color: #6ee7b7;
 }
 
 .node-destination.is-active .node-header {
-  background: #047857;
+  background: #10b981;
+  color: #052e1d;
 }
 
 .react-flow__node.selected .node-card {
