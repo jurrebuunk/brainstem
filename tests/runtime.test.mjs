@@ -617,66 +617,102 @@ test("http json destination posts output envelope", async () => {
   assert.equal(body.payload.input.id, "api-health");
 });
 
-test("opencode runner destination runs until completion and logs events", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "brainstem-opencode-runner-"));
-  const fakePath = join(dir, "fake-opencode.mjs");
+test("opencode runner destination calls server API and logs events", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
   const logs = [];
 
-  await writeFile(
-    fakePath,
-    `
-console.log(JSON.stringify({ type: "session", sessionID: "test-session" }));
-console.log(JSON.stringify({ type: "message", role: "assistant", text: "done" }));
-`
-  );
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
 
-  await opencodeRunnerPlugin.destinations.default.handle(
-    {
-      config: {
-        executable: process.execPath,
-        baseArgs: [fakePath],
-        systemPrompt: "Use the test instructions.",
-        timeoutMs: 5_000
+    if (String(url).includes("/event")) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: asyncIterable([
+          "event: message\n" +
+          "data: {\"type\":\"message\",\"sessionID\":\"ses_test\",\"text\":\"done\"}\n\n"
+        ])
+      };
+    }
+
+    if (String(url).endsWith("/session?directory=%2Ftmp%2Fbrainstem-test")) {
+      return jsonResponse({
+        id: "ses_test",
+        title: "Brainstem task"
+      });
+    }
+
+    if (String(url).includes("/session/ses_test/message")) {
+      return jsonResponse({
+        info: {
+          id: "msg_test",
+          role: "assistant",
+          sessionID: "ses_test"
+        },
+        parts: []
+      });
+    }
+
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  try {
+    await opencodeRunnerPlugin.destinations.default.handle(
+      {
+        config: {
+          serverUrl: "http://opencode.test",
+          dir: "/tmp/brainstem-test",
+          systemPrompt: "Use the test instructions.",
+          timeoutMs: 5_000
+        },
+        signal: new AbortController().signal,
+        logger: captureLogger(logs)
       },
-      signal: new AbortController().signal,
-      logger: captureLogger(logs)
-    },
-    {
-      decision: {
-        version: "1",
-        kind: "decision",
-        payload: {
-          observation_id: "github:repo:issue:1",
-          decision: "queue",
-          route: "coding"
-        }
-      },
-      observation: {
-        version: "1",
-        kind: "observation",
-        payload: {
-          id: "github:repo:issue:1",
-          source: {
-            type: "github",
-            name: "repo"
-          },
-          type: "issue",
-          state: "open",
-          title: "Fix bug",
-          message: "Something is broken"
+      {
+        decision: {
+          version: "1",
+          kind: "decision",
+          payload: {
+            observation_id: "github:repo:issue:1",
+            decision: "queue",
+            route: "coding"
+          }
+        },
+        observation: {
+          version: "1",
+          kind: "observation",
+          payload: {
+            id: "github:repo:issue:1",
+            source: {
+              type: "github",
+              name: "repo"
+            },
+            type: "issue",
+            state: "open",
+            title: "Fix bug",
+            message: "Something is broken"
+          }
         }
       }
-    }
-  );
+    );
+  }
+  finally {
+    globalThis.fetch = originalFetch;
+  }
 
+  assert.ok(calls.some(call => call.url.includes("/session?")));
+  assert.ok(calls.some(call => call.url.includes("/event?")));
+  assert.ok(calls.some(call => call.url.includes("/session/ses_test/message")));
   assert.ok(
-    logs.some(log => log.message === "opencode runner started")
+    logs.some(log => log.message === "opencode api runner started")
   );
   assert.ok(
-    logs.some(log => log.message === "opencode event")
+    logs.some(log => log.message === "opencode api event")
   );
   assert.ok(
-    logs.some(log => log.message === "opencode runner completed")
+    logs.some(log => log.message === "opencode api runner completed")
   );
 });
 
@@ -1250,6 +1286,23 @@ function githubIssue({
       login: "alice"
     }
   };
+}
+
+function jsonResponse(value) {
+  return {
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    async text() {
+      return JSON.stringify(value);
+    }
+  };
+}
+
+async function* asyncIterable(chunks) {
+  for (const chunk of chunks) {
+    yield Buffer.from(chunk);
+  }
 }
 
 function captureLogger(logs) {

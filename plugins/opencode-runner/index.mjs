@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { defineDestinationPlugin } from "../../src/sdk/index.mjs";
 
 export default defineDestinationPlugin({
@@ -10,139 +9,320 @@ export default defineDestinationPlugin({
       async handle(ctx, event) {
         const config = normalizeConfig(ctx.config);
         const prompt = buildPrompt(config, event);
-        const args = buildArgs(config, prompt);
         const startedAt = Date.now();
 
         ctx.logger.info?.(
-          "opencode runner started",
+          "opencode api runner started",
           {
             observationId: event.observation.payload.id,
             decision: event.decision.payload.decision,
             route: event.decision.payload.route,
-            executable: config.executable,
-            args: redactArgs(args)
+            serverUrl: config.serverUrl
           }
         );
 
-        const result = await runCommand({
-          executable: config.executable,
-          args,
-          cwd: config.cwd,
-          env: config.env,
-          timeoutMs: config.timeoutMs,
-          signal: ctx.signal,
-          logger: ctx.logger
-        });
+        const session = await createSession(config, event, ctx);
 
-        const durationMs = Date.now() - startedAt;
+        ctx.logger.info?.(
+          "opencode session created",
+          {
+            sessionId: session.id,
+            title: session.title,
+            url: `${config.serverUrl}/session/${session.id}`
+          }
+        );
 
-        if (result.code !== 0) {
-          const error = new Error(
-            `opencode exited with code ${result.code}`
+        const eventStream = streamEvents(config, ctx, session.id);
+
+        try {
+          const result = await sendPrompt(
+            config,
+            session.id,
+            prompt,
+            ctx
           );
-          error.code = result.code;
-          error.stderr = result.stderrTail.join("\n");
 
-          ctx.logger.error?.(
-            "opencode runner failed",
+          ctx.logger.info?.(
+            "opencode api runner completed",
             {
               observationId: event.observation.payload.id,
               decision: event.decision.payload.decision,
-              code: result.code,
-              signal: result.signal,
-              durationMs,
-              stderr: result.stderrTail
+              sessionId: session.id,
+              durationMs: Date.now() - startedAt,
+              response: summarizeResponse(result)
             }
           );
-
-          throw error;
         }
-
-        ctx.logger.info?.(
-          "opencode runner completed",
-          {
-            observationId: event.observation.payload.id,
-            decision: event.decision.payload.decision,
-            durationMs,
-            events: result.eventCount,
-            stdoutLines: result.stdoutLines,
-            stderrLines: result.stderrLines
-          }
-        );
+        finally {
+          eventStream.abort();
+          await eventStream.done.catch(() => {});
+        }
       }
     }
   }
 });
 
 function normalizeConfig(config) {
+  const serverUrl = (
+    config.serverUrl ??
+    config.url ??
+    config.attach ??
+    "http://127.0.0.1:4096"
+  ).replace(/\/$/, "");
+
   return {
-    executable: config.executable ?? "opencode",
-    baseArgs: array(config.baseArgs),
-    attach: config.attach ?? null,
-    model: config.model ?? null,
+    serverUrl,
+    directory: config.dir ?? config.directory ?? process.cwd(),
+    workspace: config.workspace ?? null,
+    title: config.title ?? "Brainstem task",
     agent: config.agent ?? null,
-    dir: config.dir ?? null,
-    title: config.title ?? null,
-    username: config.username ?? null,
-    password: resolvePassword(config),
+    model: normalizeModel(config.model),
+    permission: config.permission ?? null,
     systemPrompt: config.systemPrompt ?? null,
     promptTemplate: config.promptTemplate,
-    extraArgs: array(config.extraArgs),
-    cwd: config.cwd ?? process.cwd(),
-    env: {
-      ...process.env,
-      ...(config.env ?? {})
-    },
+    username: config.username ?? process.env.OPENCODE_SERVER_USERNAME ?? "opencode",
+    password: resolvePassword(config),
+    headers: config.headers ?? {},
     timeoutMs: config.timeoutMs ?? null,
-    dangerouslySkipPermissions:
-      config.dangerouslySkipPermissions === true
+    eventLogLimit: config.eventLogLimit ?? 200
   };
 }
 
-function buildArgs(config, prompt) {
-  const args = [
-    ...config.baseArgs,
-    "run",
-    prompt,
-    "--format",
-    "json"
-  ];
+async function createSession(config, event, ctx) {
+  const body = {
+    title: config.titleForEvent?.(event) ?? config.title
+  };
 
-  if (config.attach) {
-    args.push("--attach", config.attach);
+  if (config.agent) body.agent = config.agent;
+  if (config.model) body.model = config.model;
+  if (config.permission) body.permission = config.permission;
+
+  const response = await apiFetch(
+    config,
+    "/session",
+    {
+      method: "POST",
+      body,
+      signal: ctx.signal
+    }
+  );
+
+  return await parseJsonResponse(response, "create opencode session");
+}
+
+async function sendPrompt(config, sessionId, prompt, ctx) {
+  const body = {
+    parts: [
+      {
+        type: "text",
+        text: prompt
+      }
+    ]
+  };
+
+  if (config.systemPrompt) body.system = config.systemPrompt;
+  if (config.agent) body.agent = config.agent;
+  if (config.model) body.model = config.model;
+
+  const signal = timeoutSignal(
+    ctx.signal,
+    config.timeoutMs
+  );
+
+  try {
+    const response = await apiFetch(
+      config,
+      `/session/${encodeURIComponent(sessionId)}/message`,
+      {
+        method: "POST",
+        body,
+        signal
+      }
+    );
+
+    return await parseJsonResponse(response, "send opencode prompt");
+  }
+  finally {
+    signal.clear?.();
+  }
+}
+
+function streamEvents(config, ctx, sessionId) {
+  const controller = new AbortController();
+  const relayAbort = () => controller.abort();
+  let count = 0;
+
+  ctx.signal?.addEventListener(
+    "abort",
+    relayAbort,
+    { once: true }
+  );
+
+  const done = (async () => {
+    try {
+      const response = await apiFetch(
+        config,
+        "/event",
+        {
+          method: "GET",
+          signal: controller.signal
+        }
+      );
+
+      if (!response.ok) {
+        return;
+      }
+
+      for await (const event of sseEvents(response.body)) {
+        if (count >= config.eventLogLimit) {
+          continue;
+        }
+
+        count += 1;
+
+        const data = typeof event.data === "string"
+          ? parseJson(event.data) ?? event.data
+          : event.data;
+
+        if (
+          data &&
+          typeof data === "object" &&
+          data.sessionID &&
+          data.sessionID !== sessionId
+        ) {
+          continue;
+        }
+
+        ctx.logger.debug?.(
+          "opencode api event",
+          {
+            event: event.event ?? null,
+            data: summarizeEventData(data),
+            raw: data
+          }
+        );
+      }
+    }
+    catch (error) {
+      if (!controller.signal.aborted) {
+        ctx.logger.debug?.(
+          "opencode event stream ended",
+          { error }
+        );
+      }
+    }
+    finally {
+      ctx.signal?.removeEventListener(
+        "abort",
+        relayAbort
+      );
+    }
+  })();
+
+  return {
+    abort() {
+      controller.abort();
+    },
+    done
+  };
+}
+
+async function apiFetch(config, path, {
+  method,
+  body,
+  signal
+}) {
+  const url = new URL(path, `${config.serverUrl}/`);
+
+  if (config.directory) {
+    url.searchParams.set("directory", config.directory);
   }
 
-  if (config.model) {
-    args.push("--model", config.model);
+  if (config.workspace) {
+    url.searchParams.set("workspace", config.workspace);
   }
 
-  if (config.agent) {
-    args.push("--agent", config.agent);
-  }
+  const headers = {
+    ...config.headers
+  };
 
-  if (config.dir) {
-    args.push("--dir", config.dir);
-  }
-
-  if (config.title) {
-    args.push("--title", config.title);
-  }
-
-  if (config.username) {
-    args.push("--username", config.username);
+  if (body !== undefined) {
+    headers["content-type"] = "application/json";
   }
 
   if (config.password) {
-    args.push("--password", config.password);
+    headers.authorization =
+      `Basic ${Buffer.from(`${config.username}:${config.password}`).toString("base64")}`;
   }
 
-  if (config.dangerouslySkipPermissions) {
-    args.push("--dangerously-skip-permissions");
+  return await fetch(url, {
+    method,
+    signal,
+    headers,
+    body:
+      body === undefined
+        ? undefined
+        : JSON.stringify(body)
+  });
+}
+
+async function parseJsonResponse(response, action) {
+  const text = await response.text();
+  const json = text ? parseJson(text) : null;
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to ${action}: ${response.status} ${response.statusText}${text ? ` - ${truncate(text)}` : ""}`
+    );
   }
 
-  args.push(...config.extraArgs);
+  return json;
+}
 
-  return args;
+async function* sseEvents(body) {
+  if (!body) return;
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  for await (const chunk of body) {
+    buffer += decoder.decode(chunk, { stream: true });
+
+    const messages = buffer.split(/\n\n/);
+    buffer = messages.pop() ?? "";
+
+    for (const message of messages) {
+      const event = parseSseMessage(message);
+      if (event) yield event;
+    }
+  }
+
+  if (buffer.trim()) {
+    const event = parseSseMessage(buffer);
+    if (event) yield event;
+  }
+}
+
+function parseSseMessage(message) {
+  const result = {
+    event: null,
+    data: ""
+  };
+
+  for (const line of message.split(/\r?\n/)) {
+    if (line.startsWith("event:")) {
+      result.event = line.slice(6).trim();
+    }
+    else if (line.startsWith("data:")) {
+      result.data += `${line.slice(5).trimStart()}\n`;
+    }
+  }
+
+  result.data = result.data.replace(/\n$/, "");
+
+  return result.data || result.event
+    ? result
+    : null;
 }
 
 function buildPrompt(config, event) {
@@ -153,263 +333,96 @@ function buildPrompt(config, event) {
   const observation = event.observation.payload;
   const decision = event.decision.payload;
 
-  const sections = [];
-
-  if (config.systemPrompt) {
-    sections.push(
-      "System/context instructions for the agent:\n" +
-      config.systemPrompt
-    );
-  }
-
-  sections.push(
-    "You are being invoked by Brainstem because an observation was classified as actionable.\n" +
-    "Investigate the observation and perform the appropriate coding or operational work.\n" +
-    "Be careful, explain what you do, and stop when the task is complete."
-  );
-
-  sections.push(
-    "Brainstem decision:\n" +
-    JSON.stringify(decision, null, 2)
-  );
-
-  sections.push(
-    "Observation:\n" +
+  return [
+    "You are being invoked by Brainstem because an observation was classified as actionable.",
+    "Investigate the observation and perform the appropriate coding or operational work.",
+    "Be careful, explain what you do, and stop when the task is complete.",
+    "",
+    "Brainstem decision:",
+    JSON.stringify(decision, null, 2),
+    "",
+    "Observation:",
     JSON.stringify(observation, null, 2)
-  );
-
-  return sections.join("\n\n");
+  ].join("\n");
 }
 
-function runCommand({
-  executable,
-  args,
-  cwd,
-  env,
-  timeoutMs,
-  signal,
-  logger
-}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      executable,
-      args,
-      {
-        cwd,
-        env,
-        stdio: ["ignore", "pipe", "pipe"]
-      }
-    );
+function normalizeModel(value) {
+  if (!value) return null;
+  if (typeof value === "object") return value;
 
-    let settled = false;
-    let stdoutBuffer = "";
-    let stderrBuffer = "";
-    let eventCount = 0;
-    let stdoutLines = 0;
-    let stderrLines = 0;
-    const stderrTail = [];
+  const [providerID, ...rest] = String(value).split("/");
+  const modelID = rest.join("/");
 
-    const timeout = timeoutMs
-      ? setTimeout(() => {
-          logger.warn?.(
-            "opencode runner timed out",
-            { timeoutMs }
-          );
-          child.kill("SIGTERM");
-        }, timeoutMs)
-      : null;
+  return modelID
+    ? { providerID, modelID }
+    : { modelID: providerID };
+}
 
-    timeout?.unref?.();
+function timeoutSignal(parentSignal, timeoutMs) {
+  if (!timeoutMs) return parentSignal;
 
-    const abort = () => {
-      logger.warn?.(
-        "opencode runner aborted"
-      );
-      child.kill("SIGTERM");
-    };
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    timeoutMs
+  );
 
-    signal?.addEventListener(
-      "abort",
-      abort,
-      { once: true }
-    );
+  const abort = () => controller.abort();
+  parentSignal?.addEventListener("abort", abort, { once: true });
 
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-
-    child.stdout.on("data", chunk => {
-      stdoutBuffer = consumeLines(
-        stdoutBuffer + chunk,
-        line => {
-          stdoutLines += 1;
-          const parsed = parseJsonLine(line);
-
-          if (parsed) {
-            eventCount += 1;
-            logger.debug?.(
-              "opencode event",
-              summarizeOpencodeEvent(parsed)
-            );
-          }
-          else if (line.trim()) {
-            logger.debug?.(
-              "opencode stdout",
-              { line }
-            );
-          }
-        }
-      );
-    });
-
-    child.stderr.on("data", chunk => {
-      stderrBuffer = consumeLines(
-        stderrBuffer + chunk,
-        line => {
-          stderrLines += 1;
-          pushTail(stderrTail, line);
-          logger.debug?.(
-            "opencode stderr",
-            { line }
-          );
-        }
-      );
-    });
-
-    child.on("error", error => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
+  return Object.assign(controller.signal, {
+    clear() {
       clearTimeout(timeout);
-      signal?.removeEventListener("abort", abort);
-      reject(error);
-    });
-
-    child.on("close", (code, closeSignal) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", abort);
-
-      if (stdoutBuffer.trim()) {
-        stdoutLines += 1;
-        const parsed = parseJsonLine(stdoutBuffer);
-        if (parsed) {
-          eventCount += 1;
-          logger.debug?.(
-            "opencode event",
-            summarizeOpencodeEvent(parsed)
-          );
-        }
-      }
-
-      if (stderrBuffer.trim()) {
-        stderrLines += 1;
-        pushTail(stderrTail, stderrBuffer.trim());
-      }
-
-      resolve({
-        code,
-        signal: closeSignal,
-        eventCount,
-        stdoutLines,
-        stderrLines,
-        stderrTail
-      });
-    });
+      parentSignal?.removeEventListener("abort", abort);
+    }
   });
 }
 
-function consumeLines(text, onLine) {
-  const lines = text.split("\n");
-  const rest = lines.pop() ?? "";
-
-  for (const line of lines) {
-    onLine(line.replace(/\r$/, ""));
-  }
-
-  return rest;
-}
-
-function parseJsonLine(line) {
+function parseJson(value) {
   try {
-    return JSON.parse(line);
+    return JSON.parse(value);
   }
   catch {
     return null;
   }
 }
 
-function summarizeOpencodeEvent(event) {
+function summarizeEventData(data) {
+  if (!data || typeof data !== "object") return data;
+
   return {
-    type: event.type ?? event.kind ?? null,
-    sessionID: event.sessionID ?? event.sessionId ?? null,
-    messageID: event.messageID ?? event.messageId ?? null,
-    role: event.role ?? event.message?.role ?? null,
-    text: summarizeText(
-      event.text ??
-      event.message?.text ??
-      event.content
-    ),
-    raw: event
+    type: data.type ?? data.kind ?? null,
+    sessionID: data.sessionID ?? data.sessionId ?? null,
+    messageID: data.messageID ?? data.messageId ?? null,
+    role: data.role ?? data.message?.role ?? null,
+    text: summarizeText(data.text ?? data.message?.text ?? data.content)
+  };
+}
+
+function summarizeResponse(value) {
+  if (!value || typeof value !== "object") return value;
+
+  return {
+    messageID: value.info?.id ?? value.id ?? null,
+    role: value.info?.role ?? value.role ?? null,
+    sessionID: value.info?.sessionID ?? value.sessionID ?? null,
+    parts: Array.isArray(value.parts) ? value.parts.length : undefined
   };
 }
 
 function summarizeText(value) {
-  if (typeof value !== "string") {
-    return null;
-  }
+  if (typeof value !== "string") return null;
+  return truncate(value, 500);
+}
 
-  return value.length > 500
-    ? `${value.slice(0, 500)}…`
+function truncate(value, max = 500) {
+  return value.length > max
+    ? `${value.slice(0, max)}…`
     : value;
 }
 
-function pushTail(lines, line, max = 20) {
-  lines.push(line);
-
-  while (lines.length > max) {
-    lines.shift();
-  }
-}
-
-function array(value) {
-  if (!value) {
-    return [];
-  }
-
-  return Array.isArray(value)
-    ? value
-    : [value];
-}
-
 function resolvePassword(config) {
-  if (typeof config.password === "string") {
-    return config.password;
-  }
-
-  if (config.passwordEnv) {
-    return process.env[config.passwordEnv];
-  }
-
+  if (typeof config.password === "string") return config.password;
+  if (config.passwordEnv) return process.env[config.passwordEnv];
   return process.env.OPENCODE_SERVER_PASSWORD;
-}
-
-function redactArgs(args) {
-  const redacted = [];
-
-  for (let index = 0; index < args.length; index += 1) {
-    redacted.push(args[index]);
-
-    if (args[index] === "--password") {
-      index += 1;
-      redacted.push("<redacted>");
-    }
-  }
-
-  return redacted;
 }

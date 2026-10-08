@@ -51,7 +51,7 @@ Destination plugins:
 - `log-decisions` — logs decisions to stdout.
 - `matrix` — sends decisions to a Matrix room.
 - `http-json` — posts output envelopes to an HTTP endpoint, including the Web UI ingest endpoint.
-- `opencode-runner` — runs `opencode` for matching decisions, useful as a first agent-runner destination.
+- `opencode-runner` — calls an opencode server for matching decisions, useful as a first agent-runner destination.
 
 See the [plugin catalog](docs/plugins.md) for all built-in plugins and configuration examples.
 

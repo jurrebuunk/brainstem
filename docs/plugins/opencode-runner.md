@@ -1,6 +1,6 @@
 # OpenCode Runner Destination
 
-Runs [opencode](https://opencode.ai/) for each matching Brainstem decision and waits until the agent process exits.
+Calls a running [opencode](https://opencode.ai/) server for each matching Brainstem decision and waits until the agent request completes.
 
 This destination is intended as a first agent-runner output plugin. It keeps Brainstem core separate from agent execution while still surfacing agent activity through destination/plugin logs and runtime telemetry.
 
@@ -12,7 +12,7 @@ This destination is intended as a first agent-runner output plugin. It keeps Bra
 
 ## Example
 
-Start an opencode server if you want to use server attach mode:
+Start an opencode server:
 
 ```sh
 opencode serve --hostname 127.0.0.1 --port 4096
@@ -30,7 +30,7 @@ destinations: [
     sources: ["github"],
     types: ["issue"],
     config: {
-      attach: "http://127.0.0.1:4096",
+      serverUrl: "http://127.0.0.1:4096",
       model: "anthropic/claude-sonnet-4-20250514",
       systemPrompt: "You are working in this repository. Prefer small, tested changes. Do not commit unless asked.",
       timeoutMs: 30 * 60 * 1000
@@ -39,28 +39,29 @@ destinations: [
 ]
 ```
 
-Without `attach`, the plugin runs `opencode run ...` locally and lets opencode manage its own server/session behavior.
+The plugin uses opencode's HTTP API directly. It does not spawn a local `opencode run` process.
 
 ## Options
 
 ```js
-executable                  // default: "opencode"
-baseArgs                    // optional args before "run", useful for wrappers/tests
-attach                      // optional opencode server URL
-model                       // optional provider/model
-agent                       // optional opencode agent name
-dir                         // optional working directory for opencode
-cwd                         // process cwd for spawning opencode; default process.cwd()
-title                       // optional session title
-username                    // optional server basic auth username
-password                    // optional server basic auth password
-passwordEnv                 // env var for server password; default OPENCODE_SERVER_PASSWORD
-env                         // extra environment variables
-systemPrompt                // context instructions prepended to the agent prompt
-promptTemplate(event)       // optional function returning the complete prompt
-timeoutMs                   // optional kill timeout
-dangerouslySkipPermissions  // passes --dangerously-skip-permissions when true
-extraArgs                   // optional args appended at the end
+serverUrl             // default: http://127.0.0.1:4096
+url                   // alias for serverUrl
+attach                // alias for serverUrl, for compatibility with opencode CLI wording
+model                 // optional provider/model string or { providerID, modelID }
+agent                 // optional opencode agent name
+dir                   // optional working directory sent as API directory query
+directory             // alias for dir
+workspace             // optional workspace query
+title                 // optional opencode session title
+username              // optional basic auth username; default opencode
+password              // optional basic auth password
+passwordEnv           // env var for server password; default OPENCODE_SERVER_PASSWORD
+headers               // extra HTTP headers
+systemPrompt          // context instructions sent as opencode message system field
+promptTemplate(event) // optional function returning the complete prompt
+timeoutMs             // optional request timeout
+eventLogLimit         // max streamed opencode SSE events to log; default 200
+permission            // optional opencode session permission config
 ```
 
 ## Prompt
@@ -77,11 +78,11 @@ If `promptTemplate(event)` is provided, it replaces the default prompt builder.
 
 The plugin logs:
 
-- `opencode runner started`
-- `opencode event` for parsed JSON events from `opencode run --format json`
-- `opencode stdout` / `opencode stderr` for non-JSON output
-- `opencode runner completed`
-- `opencode runner failed`
+- `opencode api runner started`
+- `opencode session created`
+- `opencode api event` for streamed opencode SSE events
+- `opencode api runner completed`
+- API errors as destination failures
 
 When runtime telemetry is enabled, these logs appear under the OpenCode destination node in the Web UI.
 
