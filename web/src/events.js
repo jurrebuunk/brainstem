@@ -7,12 +7,12 @@ export function eventTimestamp(event) {
 }
 
 export function eventTitle(event) {
-  if (event.kind === "brainstem.log") return event.payload.message;
+  if (event.kind === "brainstem.log") return event.payload?.message ?? "log";
   if (event.kind === "brainstem.output") {
-    const decision = event.payload.decision.payload;
-    return `${decision.observation_id} -> ${decision.decision}`;
+    const decision = event.payload?.decision?.payload ?? {};
+    return `${decision.observation_id ?? "observation"} -> ${decision.decision ?? "output"}`;
   }
-  return event.kind.replace(/^brainstem\./, "");
+  return String(event.kind ?? "event").replace(/^brainstem\./, "");
 }
 
 export function eventSummary(event) {
@@ -20,9 +20,9 @@ export function eventSummary(event) {
 
   if (event.kind === "brainstem.log") return logSummary(p);
   if (event.kind === "brainstem.output") {
-    const d = p.decision.payload;
-    const o = p.observation.payload;
-    return `${o.source.type}/${o.type} ${o.state} -> ${d.decision}`;
+    const d = p.decision?.payload ?? {};
+    const o = p.observation?.payload ?? {};
+    return `${o.source?.type ?? "source"}/${o.type ?? "observation"} ${o.state ?? ""} -> ${d.decision ?? "output"}`;
   }
   if (event.kind === "brainstem.snapshot") {
     return `${p.inputs?.length ?? 0} inputs, ${p.destinations?.length ?? 0} destinations`;
@@ -59,9 +59,12 @@ export function eventNodeIds(event) {
   }
 
   if (event.kind === "brainstem.output") {
-    ids.push(`input:${p.input.id ?? p.input.plugin}`);
+    const inputId = p.input?.id ?? p.input?.plugin;
+    const destinationPlugin = p.destination?.plugin;
+    const destinationName = p.destination?.name;
+    if (inputId) ids.push(`input:${inputId}`);
     ids.push("core");
-    ids.push(`destination:${p.destination.plugin}:${p.destination.name}`);
+    if (destinationPlugin && destinationName) ids.push(`destination:${destinationPlugin}:${destinationName}`);
   }
 
   if (event.kind === "brainstem.plugin.log") {
@@ -116,8 +119,13 @@ export function buildGraph(events, now = Date.now()) {
       nodeActivity.set(id, timestamp);
     }
 
-    collectTopology(event, inputs, destinations);
-    collectActivity(event, timestamp, edgeActivity, nodeStatus);
+    try {
+      collectTopology(event, inputs, destinations);
+      collectActivity(event, timestamp, edgeActivity, nodeStatus);
+    }
+    catch {
+      // Ignore malformed telemetry instead of letting one bad event blank the flow view.
+    }
   }
 
   const inputItems = Array.from(inputs.values());
@@ -129,11 +137,13 @@ export function buildGraph(events, now = Date.now()) {
   const coreY = ((rows - 1) * rowGap) / 2 - coreHeight / 2 + 65;
   const inputHandles = inputItems.map((input, index) => ({
     id: `in-${safeHandleId(input.id)}`,
-    top: handleTop(index, inputItems.length, coreHeight)
+    top: handleTop(index, inputItems.length, coreHeight),
+    active: isActive(edgeActivity.get(`edge-input-${input.id}`), now)
   }));
   const outputHandles = destinationItems.map((destination, index) => ({
     id: `out-${safeHandleId(destination.id)}`,
-    top: handleTop(index, destinationItems.length, coreHeight)
+    top: handleTop(index, destinationItems.length, coreHeight),
+    active: isActive(edgeActivity.get(`edge-destination-${destination.id}`), now)
   }));
 
   return {
@@ -151,7 +161,8 @@ export function buildGraph(events, now = Date.now()) {
         }),
         x: 0,
         y: index * rowGap,
-        active: isActive(nodeActivity.get(`input:${input.id}`), now)
+        active: isActive(nodeActivity.get(`input:${input.id}`), now),
+        handleActive: isActive(edgeActivity.get(`edge-input-${input.id}`), now)
       })),
       graphNode({
         id: "core",
@@ -184,7 +195,8 @@ export function buildGraph(events, now = Date.now()) {
         }),
         x: 910,
         y: index * rowGap,
-        active: isActive(nodeActivity.get(`destination:${destination.id}`), now)
+        active: isActive(nodeActivity.get(`destination:${destination.id}`), now),
+        handleActive: isActive(edgeActivity.get(`edge-destination-${destination.id}`), now)
       }))
     ],
     edges: [
@@ -238,10 +250,14 @@ function collectTopology(event, inputs, destinations) {
     destinations.set(id, { id, plugin: p.plugin, destination: p.destination });
   }
   if (event.kind === "brainstem.output") {
-    const inputId = p.input.id ?? p.input.plugin;
-    const destinationId = `${p.destination.plugin}:${p.destination.name}`;
-    inputs.set(inputId, { id: inputId, plugin: p.input.plugin, input: p.input.name });
-    destinations.set(destinationId, { id: destinationId, plugin: p.destination.plugin, destination: p.destination.name });
+    const inputId = p.input?.id ?? p.input?.plugin;
+    const destinationPlugin = p.destination?.plugin;
+    const destinationName = p.destination?.name;
+    if (inputId) inputs.set(inputId, { id: inputId, plugin: p.input?.plugin, input: p.input?.name });
+    if (destinationPlugin && destinationName) {
+      const destinationId = `${destinationPlugin}:${destinationName}`;
+      destinations.set(destinationId, { id: destinationId, plugin: destinationPlugin, destination: destinationName });
+    }
   }
   if (event.kind === "brainstem.log") {
     if (p.id) inputs.set(p.id, { id: p.id, plugin: p.plugin, input: p.input });
@@ -272,12 +288,16 @@ function collectActivity(event, timestamp, edgeActivity, nodeStatus) {
     edgeActivity.set(`edge-destination-${id}`, timestamp);
   }
   if (event.kind === "brainstem.output") {
-    const inputId = p.input.id ?? p.input.plugin;
-    const destinationId = `${p.destination.plugin}:${p.destination.name}`;
-    edgeActivity.set(`edge-input-${inputId}`, timestamp);
-    edgeActivity.set(`edge-destination-${destinationId}`, timestamp);
+    const inputId = p.input?.id ?? p.input?.plugin;
+    const destinationPlugin = p.destination?.plugin;
+    const destinationName = p.destination?.name;
+    if (inputId) edgeActivity.set(`edge-input-${inputId}`, timestamp);
+    if (destinationPlugin && destinationName) {
+      const destinationId = `${destinationPlugin}:${destinationName}`;
+      edgeActivity.set(`edge-destination-${destinationId}`, timestamp);
+      nodeStatus.set(`destination:${destinationId}`, "running");
+    }
     nodeStatus.set("core", "deciding");
-    nodeStatus.set(`destination:${destinationId}`, "running");
   }
   if (event.kind === "brainstem.log" && p.message === "observation decided" && p.inputId) {
     edgeActivity.set(`edge-input-${p.inputId}`, timestamp);
@@ -296,13 +316,14 @@ function graphNode({
   active,
   height = null,
   inputHandles = [],
-  outputHandles = []
+  outputHandles = [],
+  handleActive = false
 }) {
   return {
     id,
     type: "brainstemNode",
     position: { x, y },
-    data: { label, subtitle, status, meta, nodeType, active, height, inputHandles, outputHandles }
+    data: { label, subtitle, status, meta, nodeType, active, height, inputHandles, outputHandles, handleActive }
   };
 }
 
@@ -344,17 +365,19 @@ function safeHandleId(value) {
 
 function touch(stats, nodeId, event, timestamp) {
   const current = stats.get(nodeId) ?? { polls: 0, decisions: 0, outputs: 0, errors: 0, lastAt: null };
+  const payload = event.payload ?? {};
+
   if (event.kind === "brainstem.log") {
-    if (event.payload.message === "input poll started") current.polls += 1;
-    if (event.payload.message === "observation decided") current.decisions += 1;
-    if (event.payload.level === "error") current.errors += 1;
+    if (payload.message === "input poll started") current.polls += 1;
+    if (payload.message === "observation decided") current.decisions += 1;
+    if (payload.level === "error") current.errors += 1;
   }
   if (event.kind === "brainstem.input.poll.started") current.polls += 1;
   if (event.kind === "brainstem.input.observation") current.outputs += 1;
   if (event.kind === "brainstem.core.decision") current.decisions += 1;
   if (event.kind === "brainstem.output") current.outputs += 1;
-  if (event.kind === "brainstem.plugin.log" && event.payload.level === "error") current.errors += 1;
-  if (event.kind.includes("failed")) current.errors += 1;
+  if (event.kind === "brainstem.plugin.log" && payload.level === "error") current.errors += 1;
+  if (String(event.kind ?? "").includes("failed")) current.errors += 1;
   current.lastAt = timestamp;
   stats.set(nodeId, current);
 }

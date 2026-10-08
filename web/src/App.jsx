@@ -42,7 +42,15 @@ export default function App() {
     const stored = Number(localStorage.getItem("brainstem-sidebar-width"));
     return Number.isFinite(stored) && stored >= 160 ? stored : 220;
   });
-  const graph = useMemo(() => buildGraph(events, clock), [events, clock]);
+  const graph = useMemo(() => {
+    try {
+      return buildGraph(events, clock);
+    }
+    catch (error) {
+      console.error("Failed to build flow graph", error);
+      return { nodes: [], edges: [] };
+    }
+  }, [events, clock]);
   const [nodes, setNodes, onNodesChange] = useNodesState(graph.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(graph.edges);
 
@@ -252,7 +260,7 @@ function BrainstemNode({ data }) {
           id={handle.id}
           type="target"
           position={Position.Left}
-          className="node-handle stacked-handle"
+          className={`node-handle stacked-handle${handle.active ? " is-handle-active" : ""}`}
           style={{ top: `${handle.top}%` }}
         />
       ))}
@@ -262,12 +270,12 @@ function BrainstemNode({ data }) {
           id={handle.id}
           type="source"
           position={Position.Right}
-          className="node-handle stacked-handle"
+          className={`node-handle stacked-handle${handle.active ? " is-handle-active" : ""}`}
           style={{ top: `${handle.top}%` }}
         />
       ))}
       {isDestination && (
-        <Handle id="in" type="target" position={Position.Left} className="node-handle" />
+        <Handle id="in" type="target" position={Position.Left} className={`node-handle${data.handleActive ? " is-handle-active" : ""}`} />
       )}
 
       <div className="node-header">
@@ -288,7 +296,7 @@ function BrainstemNode({ data }) {
       </div>
 
       {isInput && (
-        <Handle id="out" type="source" position={Position.Right} className="node-handle" />
+        <Handle id="out" type="source" position={Position.Right} className={`node-handle${data.handleActive ? " is-handle-active" : ""}`} />
       )}
     </div>
   );

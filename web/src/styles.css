@@ -282,7 +282,7 @@ button { cursor: pointer; }
   color: #1e3a8a;
 }
 
-.node-input.is-active .react-flow__handle.node-handle {
+.node-input .react-flow__handle.node-handle.is-handle-active {
   background: #0284c7 !important;
   color: #0284c7;
 }
@@ -292,7 +292,7 @@ button { cursor: pointer; }
   color: #4c1d95;
 }
 
-.node-core.is-active .react-flow__handle.node-handle {
+.node-core .react-flow__handle.node-handle.is-handle-active {
   background: #a855f7 !important;
   color: #a855f7;
 }
@@ -302,7 +302,7 @@ button { cursor: pointer; }
   color: #064e3b;
 }
 
-.node-destination.is-active .react-flow__handle.node-handle {
+.node-destination .react-flow__handle.node-handle.is-handle-active {
   background: #10b981 !important;
   color: #10b981;
 }
