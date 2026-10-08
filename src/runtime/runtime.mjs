@@ -640,6 +640,9 @@ export class BrainstemRuntime {
         source: observationPayload.source.type,
         type: observationPayload.type,
         state: observationPayload.state,
+        inputId: event.entry.id ?? null,
+        inputPlugin: event.plugin.name,
+        inputName: event.input,
         decision: decisionPayload.decision,
         route: decisionPayload.route,
         reason: decisionPayload.reason

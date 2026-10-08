@@ -78,6 +78,10 @@ export function eventNodeIds(event) {
       ids.push(`input:${payload.id}`);
     }
 
+    if (payload.inputId) {
+      ids.push(`input:${payload.inputId}`);
+    }
+
     if (payload.plugin && payload.destination) {
       ids.push(`destination:${payload.plugin}:${payload.destination}`);
     }
@@ -125,16 +129,25 @@ export function buildGraph(events, now = Date.now()) {
           input: payload.input,
           intervalMs: payload.intervalMs ?? null
         });
+      }
 
-        if (
-          payload.message === "input poll started" ||
-          payload.message === "input poll completed"
-        ) {
-          edgeActivity.set(
-            `edge-input-${payload.id}`,
-            timestamp
-          );
-        }
+      if (payload.inputId) {
+        inputs.set(payload.inputId, {
+          id: payload.inputId,
+          plugin: payload.inputPlugin,
+          input: payload.inputName,
+          intervalMs: null
+        });
+      }
+
+      if (
+        payload.message === "observation decided" &&
+        payload.inputId
+      ) {
+        edgeActivity.set(
+          `edge-input-${payload.inputId}`,
+          timestamp
+        );
       }
 
       if (payload.plugin && payload.destination) {

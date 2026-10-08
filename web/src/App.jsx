@@ -91,6 +91,11 @@ export default function App() {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        edgesFocusable={false}
+        nodesFocusable={false}
+        deleteKeyCode={null}
         fitView
         minZoom={0.35}
         maxZoom={1.4}

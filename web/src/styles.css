@@ -64,30 +64,56 @@ table {
 .node-card {
   position: relative;
   width: 260px;
+  overflow: hidden;
   border: 1px solid #3d3d3d;
-  border-left-width: 4px;
   border-radius: 8px;
   background: #282828;
   color: #e5e5e5;
-  padding: 12px 14px;
+  padding: 38px 14px 12px;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
 }
 
-.node-input {
-  border-left-color: #60a5fa;
+.node-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 26px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.18);
+  background: #525252;
 }
 
-.node-core {
-  border-left-color: #a78bfa;
+.node-card::after {
+  content: "";
+  position: absolute;
+  top: 9px;
+  left: 10px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 14px 0 0 rgba(255, 255, 255, 0.45), 28px 0 0 rgba(255, 255, 255, 0.28);
 }
 
-.node-destination {
-  border-left-color: #34d399;
+.node-input::before {
+  background: #2563eb;
+}
+
+.node-core::before {
+  background: #7c3aed;
+}
+
+.node-destination::before {
+  background: #059669;
 }
 
 .node-card.is-active {
   border-color: #f59e0b;
-  border-left-color: #f59e0b;
+}
+
+.node-card.is-active::before {
+  background: #d97706;
 }
 
 .react-flow__node.selected .node-card {
@@ -321,6 +347,8 @@ table {
 
 .event-detail {
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   background: #222;
@@ -336,6 +364,7 @@ table {
 }
 
 .event-detail pre {
+  min-height: 0;
   flex: 1;
   margin: 0;
   overflow: auto;
