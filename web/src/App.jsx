@@ -25,7 +25,8 @@ const nodeTypes = {
 export default function App() {
   const [events, setEvents] = useState([]);
   const [selectedNode, setSelectedNode] = useState(null);
-  const graph = useMemo(() => buildGraph(events), [events]);
+  const [clock, setClock] = useState(Date.now());
+  const graph = useMemo(() => buildGraph(events, clock), [events, clock]);
   const [nodes, setNodes, onNodesChange] = useNodesState(graph.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(graph.edges);
 
@@ -33,6 +34,14 @@ export default function App() {
     setNodes(graph.nodes);
     setEdges(graph.edges);
   }, [graph, setEdges, setNodes]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setClock(Date.now());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     fetch("/api/events")

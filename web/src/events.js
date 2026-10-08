@@ -99,7 +99,7 @@ export function eventNodeIds(event) {
   return ids;
 }
 
-export function buildGraph(events) {
+export function buildGraph(events, now = Date.now()) {
   const inputs = new Map();
   const destinations = new Map();
   const nodeActivity = new Map();
@@ -125,6 +125,16 @@ export function buildGraph(events) {
           input: payload.input,
           intervalMs: payload.intervalMs ?? null
         });
+
+        if (
+          payload.message === "input poll started" ||
+          payload.message === "input poll completed"
+        ) {
+          edgeActivity.set(
+            `edge-input-${payload.id}`,
+            timestamp
+          );
+        }
       }
 
       if (payload.plugin && payload.destination) {
@@ -134,6 +144,11 @@ export function buildGraph(events) {
           plugin: payload.plugin,
           destination: payload.destination
         });
+
+        edgeActivity.set(
+          `edge-destination-${id}`,
+          timestamp
+        );
       }
     }
 
@@ -164,7 +179,6 @@ export function buildGraph(events) {
   const inputItems = Array.from(inputs.values());
   const destinationItems = Array.from(destinations.values());
   const rows = Math.max(inputItems.length, destinationItems.length, 1);
-  const now = Date.now();
 
   const nodes = [
     ...inputItems.map((input, index) => graphNode({
@@ -319,5 +333,5 @@ function isActive(timestamp, now) {
     return false;
   }
 
-  return now - Date.parse(timestamp) < 5000;
+  return now - Date.parse(timestamp) < 15_000;
 }
