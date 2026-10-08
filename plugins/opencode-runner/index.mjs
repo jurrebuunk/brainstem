@@ -42,6 +42,13 @@ export default defineDestinationPlugin({
             ctx
           );
 
+          const completion = config.waitForCompletion
+            ? await waitForSessionIdle(config, session.id, ctx)
+            : { skipped: true };
+
+          const messages = await getMessages(config, session.id, ctx)
+            .catch(error => ({ error: error.message }));
+
           ctx.logger.info?.(
             "opencode api runner completed",
             {
@@ -49,7 +56,9 @@ export default defineDestinationPlugin({
               decision: event.decision.payload.decision,
               sessionId: session.id,
               durationMs: Date.now() - startedAt,
-              response: summarizeResponse(result)
+              response: summarizeResponse(result),
+              completion,
+              messages: summarizeMessages(messages)
             }
           );
         }
@@ -84,6 +93,9 @@ function normalizeConfig(config) {
     password: resolvePassword(config),
     headers: config.headers ?? {},
     timeoutMs: config.timeoutMs ?? null,
+    waitForCompletion: config.waitForCompletion ?? false,
+    statusPollIntervalMs: config.statusPollIntervalMs ?? 1000,
+    initialStatusDelayMs: config.initialStatusDelayMs ?? 1000,
     eventLogLimit: config.eventLogLimit ?? 200
   };
 }
@@ -124,27 +136,71 @@ async function sendPrompt(config, sessionId, prompt, ctx) {
   if (config.agent) body.agent = config.agent;
   if (config.model) body.model = config.model;
 
+  const response = await apiFetch(
+    config,
+    `/session/${encodeURIComponent(sessionId)}/prompt_async`,
+    {
+      method: "POST",
+      body,
+      signal: ctx.signal
+    }
+  );
+
+  await parseJsonResponse(response, "send opencode prompt");
+
+  return {
+    accepted: true,
+    mode: "prompt_async"
+  };
+}
+
+async function waitForSessionIdle(config, sessionId, ctx) {
   const signal = timeoutSignal(
     ctx.signal,
     config.timeoutMs
   );
 
   try {
-    const response = await apiFetch(
-      config,
-      `/session/${encodeURIComponent(sessionId)}/message`,
-      {
-        method: "POST",
-        body,
-        signal
-      }
-    );
+    await sleep(config.initialStatusDelayMs, signal);
 
-    return await parseJsonResponse(response, "send opencode prompt");
+    while (true) {
+      const response = await apiFetch(
+        config,
+        "/session/status",
+        {
+          method: "GET",
+          signal
+        }
+      );
+
+      const status = await parseJsonResponse(response, "check opencode session status");
+
+      if (!sessionIsBusy(status, sessionId)) {
+        return {
+          status: "idle",
+          raw: status
+        };
+      }
+
+      await sleep(config.statusPollIntervalMs, signal);
+    }
   }
   finally {
     signal.clear?.();
   }
+}
+
+async function getMessages(config, sessionId, ctx) {
+  const response = await apiFetch(
+    config,
+    `/session/${encodeURIComponent(sessionId)}/message`,
+    {
+      method: "GET",
+      signal: ctx.signal
+    }
+  );
+
+  return await parseJsonResponse(response, "fetch opencode messages");
 }
 
 function streamEvents(config, ctx, sessionId) {
@@ -378,6 +434,77 @@ function timeoutSignal(parentSignal, timeoutMs) {
   });
 }
 
+function sessionIsBusy(status, sessionId) {
+  if (!status) return false;
+
+  if (Array.isArray(status)) {
+    return status.some(item => sessionIsBusy(item, sessionId));
+  }
+
+  if (typeof status !== "object") return false;
+
+  if (Object.keys(status).length === 0) return false;
+
+  if (status[sessionId]) {
+    return statusValueIsBusy(status[sessionId]);
+  }
+
+  const statusSessionId =
+    status.sessionID ??
+    status.sessionId ??
+    status.properties?.sessionID ??
+    status.properties?.sessionId;
+
+  if (statusSessionId && statusSessionId !== sessionId) {
+    return false;
+  }
+
+  if (statusSessionId === sessionId) {
+    return statusValueIsBusy(
+      status.status ??
+      status.properties?.status ??
+      status
+    );
+  }
+
+  return Object.values(status).some(value => sessionIsBusy(value, sessionId));
+}
+
+function statusValueIsBusy(value) {
+  if (!value) return false;
+  if (typeof value === "string") {
+    return ["busy", "queued", "running"].includes(value);
+  }
+
+  if (typeof value !== "object") return false;
+
+  const type = value.type ?? value.status;
+  if (typeof type === "string") {
+    return ["busy", "queued", "running"].includes(type);
+  }
+
+  return Object.values(value).some(statusValueIsBusy);
+}
+
+function sleep(ms, signal) {
+  if (!ms) return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+
+    const timeout = setTimeout(resolve, ms);
+    const abort = () => {
+      clearTimeout(timeout);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
 function parseJson(value) {
   try {
     return JSON.parse(value);
@@ -392,10 +519,15 @@ function summarizeEventData(data) {
 
   return {
     type: data.type ?? data.kind ?? null,
-    sessionID: data.sessionID ?? data.sessionId ?? null,
-    messageID: data.messageID ?? data.messageId ?? null,
-    role: data.role ?? data.message?.role ?? null,
-    text: summarizeText(data.text ?? data.message?.text ?? data.content)
+    sessionID: data.sessionID ?? data.sessionId ?? data.properties?.sessionID ?? data.properties?.sessionId ?? null,
+    messageID: data.messageID ?? data.messageId ?? data.properties?.messageID ?? data.properties?.messageId ?? null,
+    role: data.role ?? data.message?.role ?? data.properties?.info?.role ?? null,
+    text: summarizeText(
+      data.text ??
+      data.message?.text ??
+      data.content ??
+      data.properties?.part?.text
+    )
   };
 }
 
@@ -403,10 +535,35 @@ function summarizeResponse(value) {
   if (!value || typeof value !== "object") return value;
 
   return {
+    accepted: value.accepted ?? undefined,
+    mode: value.mode ?? undefined,
     messageID: value.info?.id ?? value.id ?? null,
     role: value.info?.role ?? value.role ?? null,
     sessionID: value.info?.sessionID ?? value.sessionID ?? null,
     parts: Array.isArray(value.parts) ? value.parts.length : undefined
+  };
+}
+
+function summarizeMessages(value) {
+  if (!Array.isArray(value)) return value;
+
+  const last = value.at(-1);
+
+  return {
+    count: value.length,
+    last: last
+      ? {
+          messageID: last.info?.id ?? null,
+          role: last.info?.role ?? null,
+          parts: Array.isArray(last.parts) ? last.parts.length : undefined,
+          text: summarizeText(
+            last.parts
+              ?.filter(part => part.type === "text")
+              .map(part => part.text)
+              .join("\n") ?? ""
+          )
+        }
+      : null
   };
 }
 

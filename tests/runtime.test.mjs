@@ -644,15 +644,25 @@ test("opencode runner destination calls server API and logs events", async () =>
       });
     }
 
+    if (String(url).includes("/session/ses_test/prompt_async")) {
+      return noContentResponse();
+    }
+
+    if (String(url).includes("/session/status")) {
+      return jsonResponse({});
+    }
+
     if (String(url).includes("/session/ses_test/message")) {
-      return jsonResponse({
-        info: {
-          id: "msg_test",
-          role: "assistant",
-          sessionID: "ses_test"
-        },
-        parts: []
-      });
+      return jsonResponse([
+        {
+          info: {
+            id: "msg_test",
+            role: "assistant",
+            sessionID: "ses_test"
+          },
+          parts: []
+        }
+      ]);
     }
 
     throw new Error(`unexpected fetch ${url}`);
@@ -665,7 +675,9 @@ test("opencode runner destination calls server API and logs events", async () =>
           serverUrl: "http://opencode.test",
           dir: "/tmp/brainstem-test",
           systemPrompt: "Use the test instructions.",
-          timeoutMs: 5_000
+          timeoutMs: 5_000,
+          waitForCompletion: true,
+          initialStatusDelayMs: 0
         },
         signal: new AbortController().signal,
         logger: captureLogger(logs)
@@ -704,6 +716,8 @@ test("opencode runner destination calls server API and logs events", async () =>
 
   assert.ok(calls.some(call => call.url.includes("/session?")));
   assert.ok(calls.some(call => call.url.includes("/event?")));
+  assert.ok(calls.some(call => call.url.includes("/session/ses_test/prompt_async")));
+  assert.ok(calls.some(call => call.url.includes("/session/status")));
   assert.ok(calls.some(call => call.url.includes("/session/ses_test/message")));
   assert.ok(
     logs.some(log => log.message === "opencode api runner started")
@@ -1284,6 +1298,17 @@ function githubIssue({
     html_url: `https://github.com/owner/repo/issues/${number}`,
     user: {
       login: "alice"
+    }
+  };
+}
+
+function noContentResponse() {
+  return {
+    ok: true,
+    status: 204,
+    statusText: "No Content",
+    async text() {
+      return "";
     }
   };
 }

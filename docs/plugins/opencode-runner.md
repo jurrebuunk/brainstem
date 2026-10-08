@@ -33,13 +33,14 @@ destinations: [
       serverUrl: "http://127.0.0.1:4096",
       model: "anthropic/claude-sonnet-4-20250514",
       systemPrompt: "You are working in this repository. Prefer small, tested changes. Do not commit unless asked.",
-      timeoutMs: 30 * 60 * 1000
+      waitForCompletion: false,
+      timeoutMs: 2 * 60 * 1000
     }
   }
 ]
 ```
 
-The plugin uses opencode's HTTP API directly. It does not spawn a local `opencode run` process.
+The plugin uses opencode's HTTP API directly. It does not spawn a local `opencode run` process. By default it submits the prompt with `prompt_async` and returns after OpenCode accepts it, so a long or stuck agent run does not block Brainstem.
 
 ## Options
 
@@ -59,7 +60,10 @@ passwordEnv           // env var for server password; default OPENCODE_SERVER_PA
 headers               // extra HTTP headers
 systemPrompt          // context instructions sent as opencode message system field
 promptTemplate(event) // optional function returning the complete prompt
-timeoutMs             // optional request timeout
+waitForCompletion     // optional; false by default to avoid blocking Brainstem
+timeoutMs             // optional request/status-wait timeout
+statusPollIntervalMs  // status poll interval when waitForCompletion is true; default 1000
+initialStatusDelayMs  // first status poll delay when waitForCompletion is true; default 1000
 eventLogLimit         // max streamed opencode SSE events to log; default 200
 permission            // optional opencode session permission config
 ```
