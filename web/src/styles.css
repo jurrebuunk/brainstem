@@ -270,32 +270,30 @@ button { cursor: pointer; }
   white-space: nowrap;
 }
 
-.node-handle {
-  width: 15px;
-  height: 15px;
-  border: 0;
-  border-radius: 5px;
+.react-flow__handle.node-handle {
+  width: 16px !important;
+  height: 16px !important;
+  border: 0 !important;
+  border-radius: 5px !important;
 }
 
-.node-input .node-handle {
-  background: #38bdf8;
+.node-input .react-flow__handle.node-handle {
+  background: #38bdf8 !important;
   color: #38bdf8;
 }
 
-.node-core .node-handle[type="target"],
-.node-core .node-handle.react-flow__handle-left {
-  background: #60a5fa;
+.node-core .react-flow__handle.node-handle.react-flow__handle-left {
+  background: #60a5fa !important;
   color: #60a5fa;
 }
 
-.node-core .node-handle[type="source"],
-.node-core .node-handle.react-flow__handle-right {
-  background: #34d399;
+.node-core .react-flow__handle.node-handle.react-flow__handle-right {
+  background: #34d399 !important;
   color: #34d399;
 }
 
-.node-destination .node-handle {
-  background: #6ee7b7;
+.node-destination .react-flow__handle.node-handle {
+  background: #6ee7b7 !important;
   color: #6ee7b7;
 }
 
