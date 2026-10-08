@@ -37,8 +37,12 @@ export default function App() {
   const [events, setEvents] = useState([]);
   const [selectedNode, setSelectedNode] = useState(null);
   const [clock, setClock] = useState(Date.now());
-  const [page, setPage] = useState("flow");
+  const [page, setPageState] = useState(pageFromPath(window.location.pathname));
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const stored = Number(localStorage.getItem("brainstem-sidebar-width"));
+    return Number.isFinite(stored) && stored >= 160 ? stored : 220;
+  });
   const graph = useMemo(() => buildGraph(events, clock), [events, clock]);
   const [nodes, setNodes, onNodesChange] = useNodesState(graph.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(graph.edges);
@@ -47,6 +51,23 @@ export default function App() {
     setNodes(graph.nodes);
     setEdges(graph.edges);
   }, [graph, setEdges, setNodes]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      setPageState(pageFromPath(window.location.pathname));
+    };
+
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  const setPage = useCallback(pageId => {
+    setPageState(pageId);
+    const path = pathForPage(pageId);
+    if (window.location.pathname !== path) {
+      window.history.pushState({}, "", path);
+    }
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -96,12 +117,17 @@ export default function App() {
   }, [events, selectedNode]);
 
   return (
-    <main className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+    <main
+      className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
+      style={{ "--sidebar-width": `${sidebarWidth}px` }}
+    >
       <Sidebar
         page={page}
         setPage={setPage}
         collapsed={sidebarCollapsed}
         setCollapsed={setSidebarCollapsed}
+        width={sidebarWidth}
+        setWidth={setSidebarWidth}
       />
 
       <section className="page">
@@ -129,11 +155,39 @@ export default function App() {
   );
 }
 
-function Sidebar({ page, setPage, collapsed, setCollapsed }) {
+function Sidebar({ page, setPage, collapsed, setCollapsed, width, setWidth }) {
+  const startResize = useCallback(event => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = width;
+
+    const onMove = moveEvent => {
+      const next = Math.min(420, Math.max(160, startWidth + moveEvent.clientX - startX));
+      setWidth(next);
+    };
+
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      localStorage.setItem("brainstem-sidebar-width", String(width));
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, [setWidth, width]);
+
+  useEffect(() => {
+    if (!collapsed) {
+      localStorage.setItem("brainstem-sidebar-width", String(width));
+    }
+  }, [collapsed, width]);
+
   return (
     <aside className="sidebar">
       <button className="sidebar-toggle" onClick={() => setCollapsed(!collapsed)}>
-        {collapsed ? "→" : "←"}
+        <span className="material-symbols-outlined" aria-hidden="true">
+          {collapsed ? "chevron_right" : "chevron_left"}
+        </span>
       </button>
       <div className="sidebar-brand">
         <span className="brand-mark">B</span>
@@ -152,6 +206,7 @@ function Sidebar({ page, setPage, collapsed, setCollapsed }) {
           </button>
         ))}
       </nav>
+      {!collapsed && <div className="sidebar-resizer" onPointerDown={startResize} title="Resize sidebar" />}
     </aside>
   );
 }
@@ -504,6 +559,18 @@ function escapeHtml(value) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+function pageFromPath(pathname) {
+  if (pathname === "/stats") return "stats";
+  if (pathname === "/config") return "config";
+  return "flow";
+}
+
+function pathForPage(pageId) {
+  if (pageId === "stats") return "/stats";
+  if (pageId === "config") return "/config";
+  return "/";
 }
 
 function formatTime(value) {

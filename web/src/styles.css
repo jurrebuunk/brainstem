@@ -44,7 +44,7 @@ button { cursor: pointer; }
   height: 100%;
   width: 100%;
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width, 220px) minmax(0, 1fr);
   background: #1f1f1f;
   color: #e5e7eb;
 }
@@ -67,10 +67,13 @@ button { cursor: pointer; }
   z-index: 5;
   width: 26px;
   height: 26px;
+  display: grid;
+  place-items: center;
   border: 1px solid #3f3f46;
   border-radius: 999px;
   background: #2a2a2a;
   color: #d4d4d4;
+  padding: 0;
 }
 
 .sidebar-brand {
@@ -124,6 +127,27 @@ button { cursor: pointer; }
   place-items: center;
   min-width: 22px;
   color: #93c5fd;
+}
+
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  z-index: 4;
+  width: 8px;
+  cursor: col-resize;
+}
+
+.sidebar-resizer:hover::after {
+  content: "";
+  position: absolute;
+  top: 12px;
+  right: 3px;
+  bottom: 12px;
+  width: 2px;
+  border-radius: 999px;
+  background: #52525b;
 }
 
 .page,
@@ -262,7 +286,7 @@ button { cursor: pointer; }
   min-height: 100%;
   overflow: auto;
   padding: 24px;
-  background: radial-gradient(circle at 35% 0%, rgba(76, 29, 149, 0.16), transparent 30%), #1f1f1f;
+  background: #1f1f1f;
 }
 
 .page-header {
