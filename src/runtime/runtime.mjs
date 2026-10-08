@@ -506,7 +506,7 @@ export class BrainstemRuntime {
         checkpoint: checkpoint.api
       });
 
-    this.logger.debug?.(
+    this.logger.info?.(
       "input poll started",
       {
         id: checkpointKey,
