@@ -22,7 +22,8 @@ export function createRuntimeLogger(config = {}) {
   return new RuntimeLogger({
     level,
     format,
-    stream: config.stream ?? process.stderr
+    stream: config.stream ?? process.stderr,
+    http: normalizeHttpSink(config.http ?? config.sink)
   });
 }
 
@@ -36,10 +37,11 @@ export function createSilentLogger() {
 }
 
 class RuntimeLogger {
-  constructor({ level, format, stream }) {
+  constructor({ level, format, stream, http }) {
     this.level = level;
     this.format = format;
     this.stream = stream;
+    this.http = http;
   }
 
   debug(message, fields) {
@@ -75,6 +77,26 @@ class RuntimeLogger {
       : formatPretty(entry);
 
     this.stream.write(`${line}\n`);
+    this.#sendHttp(entry);
+  }
+
+  #sendHttp(entry) {
+    if (!this.http) {
+      return;
+    }
+
+    fetch(this.http.url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...this.http.headers
+      },
+      body: JSON.stringify({
+        version: "1",
+        kind: "brainstem.log",
+        payload: entry
+      })
+    }).catch(() => {});
   }
 }
 
@@ -140,6 +162,34 @@ function serializeError(error) {
     code: error.code,
     status: error.status,
     stack: error.stack
+  };
+}
+
+function normalizeHttpSink(config) {
+  if (!config) {
+    return null;
+  }
+
+  if (typeof config === "string") {
+    return {
+      url: config,
+      headers: {}
+    };
+  }
+
+  if (
+    typeof config !== "object" ||
+    typeof config.url !== "string" ||
+    config.url.length === 0
+  ) {
+    throw new Error(
+      "Runtime logging HTTP sink requires a url"
+    );
+  }
+
+  return {
+    url: config.url,
+    headers: config.headers ?? {}
   };
 }
 
