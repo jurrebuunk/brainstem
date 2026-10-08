@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Background,
+  BaseEdge,
   Controls,
   Handle,
   Position,
@@ -20,6 +21,10 @@ import {
 
 const nodeTypes = {
   brainstemNode: BrainstemNode
+};
+
+const edgeTypes = {
+  siphon: SiphonEdge
 };
 
 const pages = [
@@ -158,6 +163,7 @@ function FlowPage({ nodes, edges, onNodesChange, onEdgesChange, onNodeClick }) {
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
@@ -174,6 +180,23 @@ function FlowPage({ nodes, edges, onNodesChange, onEdgesChange, onNodeClick }) {
         <Controls />
       </ReactFlow>
     </div>
+  );
+}
+
+function SiphonEdge({ id, sourceX, sourceY, targetX, targetY, markerEnd, style }) {
+  const direction = targetX >= sourceX ? 1 : -1;
+  const gap = Math.abs(targetX - sourceX);
+  const elbowOffset = Math.min(Math.max(gap * 0.46, 70), 230);
+  const elbowX = sourceX + direction * elbowOffset;
+  const path = `M ${sourceX},${sourceY} H ${elbowX} V ${targetY} H ${targetX}`;
+
+  return (
+    <BaseEdge
+      id={id}
+      path={path}
+      markerEnd={markerEnd}
+      style={style}
+    />
   );
 }
 

@@ -313,7 +313,7 @@ function graphEdge({ id, source, sourceHandle, target, targetHandle, active, col
     target,
     targetHandle,
     animated: active,
-    type: "smoothstep",
+    type: "siphon",
     className: active ? "edge-active" : "",
     style: { stroke: active ? color : "#4b5563", strokeWidth: active ? 2.5 : 1.5 }
   };
@@ -321,7 +321,9 @@ function graphEdge({ id, source, sourceHandle, target, targetHandle, active, col
 
 function handleTop(index, count) {
   if (count <= 1) return 50;
-  return 18 + (index * 64) / (count - 1);
+
+  const spread = Math.min(42, Math.max(14, (count - 1) * 8));
+  return 50 - spread / 2 + (index * spread) / (count - 1);
 }
 
 function safeHandleId(value) {
