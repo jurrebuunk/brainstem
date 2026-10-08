@@ -378,7 +378,6 @@ function MiniChart({ title, metric, stats, color }) {
 function ConfigPage() {
   const [config, setConfig] = useState({ path: "", content: "" });
   const [draft, setDraft] = useState("");
-  const [status, setStatus] = useState("Loading config…");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -387,14 +386,12 @@ function ConfigPage() {
       .then(value => {
         setConfig(value);
         setDraft(value.content ?? "");
-        setStatus("Loaded");
       })
-      .catch(error => setStatus(error.message));
+      .catch(error => alert(error.message));
   }, []);
 
   const save = async () => {
     setSaving(true);
-    setStatus("Checking and saving…");
     try {
       const response = await fetch("/api/config", {
         method: "PUT",
@@ -404,10 +401,9 @@ function ConfigPage() {
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? "Save failed");
       setConfig({ path: body.path, content: draft });
-      setStatus(`Saved ${new Date(body.savedAt).toLocaleTimeString()}`);
     }
     catch (error) {
-      setStatus(error.message);
+      alert(error.message);
     }
     finally {
       setSaving(false);
@@ -418,13 +414,11 @@ function ConfigPage() {
     <div className="panel-page config-page">
       <PageHeader title="Configuration" subtitle={`${config.path || "brainstem.config.mjs"} · save writes the real file; restart Brainstem to reload it`} />
       <div className="config-toolbar">
-        <span className={draft === config.content ? "clean" : "dirty"}>
-          {draft === config.content ? "No changes" : "Unsaved changes"}
-        </span>
-        <button onClick={save} disabled={saving || draft === config.content}>Save config</button>
+        <button onClick={save} disabled={saving || draft === config.content}>
+          {saving ? "Saving…" : "Save config"}
+        </button>
       </div>
       <CodeEditor value={draft} onChange={setDraft} />
-      <div className="config-status">{status}</div>
     </div>
   );
 }
