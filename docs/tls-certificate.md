@@ -59,10 +59,15 @@ warnDays                   // default: 14
 criticalDays               // default: 3
 checkAuthorization          // default: true
 emitHealthy                // default: true
+repeatAfterMs              // default: null; repeat unchanged warning/error state after this interval
 minimumDecisionOnWarning   // default: queue
 minimumDecisionOnCritical  // default: dispatch
 targets                    // array for multiple targets
 ```
+
+## Deduplication
+
+The plugin stores a per-target certificate fingerprint in the input checkpoint. It emits when certificate state or meaningful certificate details change. Unchanged warnings/errors are not repeated unless `repeatAfterMs` is configured.
 
 ## Emitted observations
 

@@ -47,9 +47,29 @@ ctx.observation  // helper around createObservation()
 ctx.checkpoint   // scoped checkpoint API for this configured input
 ```
 
+## Source-side deduplication
+
+Input plugins should emit only observations that are new or meaningfully changed at the source. The core has a decision cache, but that cache is a safety net; plugins should avoid sending unchanged source data into the core in the first place.
+
+Default behavior for polling plugins should be:
+
+- new source item/entity: emit once
+- changed source item/entity: emit again
+- unchanged source item/entity: do not emit
+- intentional reminders/repeats: opt in with config such as `repeatAfterMs`
+
+Examples:
+
+- GitHub issues: store issue number plus a fingerprint or `updated_at`; emit only new or updated issues.
+- Logs: store file offset, journal cursor, or timestamp; emit only new log lines.
+- Health checks: emit state transitions and optionally repeated failures after `repeatAfterMs`.
+- TLS certificates: emit validity/expiry state changes and optionally reminders after `repeatAfterMs`.
+
+This keeps Laya calls, destination deliveries, agent spawns, and future Web UI history bounded.
+
 ## Checkpoints
 
-Adapters can use checkpoints to avoid repeatedly fetching old append-only data such as chat messages, emails, or logs.
+Adapters should use checkpoints to avoid repeatedly fetching or emitting old data such as issues, chat messages, emails, logs, or unchanged status checks.
 
 Adapters do not access storage directly. The runtime provides a scoped API:
 
@@ -70,6 +90,30 @@ ctx.checkpoint.defer({
 ```
 
 `defer()` does not write immediately. The runtime commits the deferred checkpoint only after the adapter finishes polling and all emitted observations have been processed successfully. If the process crashes before then, the checkpoint is not advanced and the next poll may safely refetch overlapping items.
+
+For entity-style sources, checkpoint the last fingerprint per entity:
+
+```js
+const checkpoint = await ctx.checkpoint.get() ?? {};
+const previous = checkpoint.items?.[item.id];
+const fingerprint = stableFingerprint(item);
+
+if (previous?.fingerprint !== fingerprint) {
+  yield ctx.observation(...);
+}
+
+ctx.checkpoint.defer({
+  items: {
+    ...(checkpoint.items ?? {}),
+    [item.id]: {
+      fingerprint,
+      updatedAt: item.updatedAt
+    }
+  }
+});
+```
+
+If a plugin supports `startFromNow`, the first poll should checkpoint current source state without emitting it.
 
 Checkpoint values must be JSON-only. Use `null` to clear a checkpoint.
 

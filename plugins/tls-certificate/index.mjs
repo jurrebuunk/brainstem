@@ -3,6 +3,7 @@ import { defineInputPlugin } from "../../src/sdk/index.mjs";
 import { checkCertificate } from "./check.mjs";
 import { normalizeTargets } from "./config.mjs";
 import { toObservation } from "./observation.mjs";
+import { shouldEmitCertificateObservation } from "./state.mjs";
 
 export default defineInputPlugin({
   apiVersion: "brainstem.input/v1",
@@ -17,6 +18,15 @@ export default defineInputPlugin({
         const targets =
           normalizeTargets(ctx.config);
 
+        const checkpoint =
+          await ctx.checkpoint?.get() ?? {};
+
+        const state = {
+          targets: {
+            ...(checkpoint.targets ?? {})
+          }
+        };
+
         for (const target of targets) {
           const result =
             await checkCertificate(
@@ -24,10 +34,17 @@ export default defineInputPlugin({
               ctx.signal
             );
 
-          if (
-            result.state !== "valid" ||
-            target.emitHealthy !== false
-          ) {
+          const emission =
+            shouldEmitCertificateObservation({
+              target,
+              result,
+              previous: state.targets[target.id]
+            });
+
+          state.targets[target.id] =
+            emission.next;
+
+          if (emission.emit) {
             yield toObservation(
               ctx,
               target,
@@ -35,6 +52,8 @@ export default defineInputPlugin({
             );
           }
         }
+
+        ctx.checkpoint?.defer(state);
       }
     }
   }

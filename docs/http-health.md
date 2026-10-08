@@ -60,9 +60,12 @@ emitHealthy                 // default: true
 failureThreshold            // default: 1; failed polls required before unhealthy
 recoveryThreshold           // default: 1; healthy polls required before recovery
 minimumDecisionOnFailure    // optional: queue, dispatch, escalate
+repeatAfterMs               // default: null; repeat unchanged unhealthy state after this interval
 ```
 
 `failureThreshold` and `recoveryThreshold` are backed by the standard input checkpoint API. This prevents one transient timeout from immediately producing an alert.
+
+The plugin emits only state changes by default: first observed healthy/unhealthy state, unhealthy transition after the failure threshold, and healthy recovery after the recovery threshold. It does not repeat unchanged unhealthy observations unless `repeatAfterMs` is set.
 
 The adapter emits observations with:
 

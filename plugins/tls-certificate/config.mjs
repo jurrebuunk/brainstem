@@ -43,6 +43,10 @@ function normalizeTarget(target, index, defaults) {
   validatePositiveInteger(port, `TLS certificate target ${index} port`);
   validateNonNegativeNumber(warnDays, `TLS certificate target ${index} warnDays`);
   validateNonNegativeNumber(criticalDays, `TLS certificate target ${index} criticalDays`);
+  validateRepeatAfterMs(
+    target.repeatAfterMs ?? defaults.repeatAfterMs ?? null,
+    `TLS certificate target ${index} repeatAfterMs`
+  );
 
   if (criticalDays > warnDays) {
     throw new Error(
@@ -84,6 +88,11 @@ function normalizeTarget(target, index, defaults) {
       defaults.emitHealthy ??
       true,
 
+    repeatAfterMs:
+      target.repeatAfterMs ??
+      defaults.repeatAfterMs ??
+      null,
+
     minimumDecisionOnWarning:
       target.minimumDecisionOnWarning ??
       defaults.minimumDecisionOnWarning ??
@@ -108,6 +117,20 @@ function validateNonNegativeNumber(value, name) {
   if (typeof value !== "number" || value < 0) {
     throw new Error(
       `${name} must be a non-negative number`
+    );
+  }
+}
+
+function validateRepeatAfterMs(value, name) {
+  if (
+    value !== null &&
+    (
+      typeof value !== "number" ||
+      value < 0
+    )
+  ) {
+    throw new Error(
+      `${name} must be a non-negative number or null`
     );
   }
 }

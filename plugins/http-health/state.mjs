@@ -1,4 +1,9 @@
-export function applyThresholds(check, result, previous = {}) {
+export function applyThresholds(
+  check,
+  result,
+  previous = {},
+  now = Date.now()
+) {
   const consecutiveSuccesses = result.healthy
     ? (previous.consecutiveSuccesses ?? 0) + 1
     : 0;
@@ -14,13 +19,15 @@ export function applyThresholds(check, result, previous = {}) {
     reportedState,
     consecutiveSuccesses,
     consecutiveFailures,
-    lastCheckedAt: new Date().toISOString()
+    lastEmittedAt: previous.lastEmittedAt ?? null,
+    lastCheckedAt: new Date(now).toISOString()
   };
 
   if (result.healthy) {
     if (reportedState === "unhealthy") {
       if (consecutiveSuccesses >= check.recoveryThreshold) {
         next.reportedState = "healthy";
+        next.lastEmittedAt = next.lastCheckedAt;
 
         return {
           emit: true,
@@ -38,9 +45,25 @@ export function applyThresholds(check, result, previous = {}) {
 
     next.reportedState = "healthy";
 
+    const firstHealthy =
+      reportedState !== "healthy";
+
+    if (
+      firstHealthy &&
+      check.emitHealthy !== false
+    ) {
+      next.lastEmittedAt = next.lastCheckedAt;
+
+      return {
+        emit: true,
+        stateChanged: true,
+        next
+      };
+    }
+
     return {
-      emit: check.emitHealthy !== false,
-      stateChanged: reportedState !== "healthy",
+      emit: false,
+      stateChanged: firstHealthy,
       next
     };
   }
@@ -48,8 +71,18 @@ export function applyThresholds(check, result, previous = {}) {
   if (reportedState === "unhealthy") {
     next.reportedState = "unhealthy";
 
+    if (repeatDue(check, previous, now)) {
+      next.lastEmittedAt = next.lastCheckedAt;
+
+      return {
+        emit: true,
+        stateChanged: false,
+        next
+      };
+    }
+
     return {
-      emit: true,
+      emit: false,
       stateChanged: false,
       next
     };
@@ -57,6 +90,7 @@ export function applyThresholds(check, result, previous = {}) {
 
   if (consecutiveFailures >= check.failureThreshold) {
     next.reportedState = "unhealthy";
+    next.lastEmittedAt = next.lastCheckedAt;
 
     return {
       emit: true,
@@ -70,4 +104,19 @@ export function applyThresholds(check, result, previous = {}) {
     stateChanged: false,
     next
   };
+}
+
+function repeatDue(check, previous, now) {
+  if (check.repeatAfterMs === null) {
+    return false;
+  }
+
+  if (!previous.lastEmittedAt) {
+    return true;
+  }
+
+  return (
+    now - Date.parse(previous.lastEmittedAt) >=
+    check.repeatAfterMs
+  );
 }

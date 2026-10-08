@@ -10,9 +10,11 @@ import { Brainstem, createObservation } from "../src/core/brainstem.mjs";
 import { SqliteRecordStore } from "../src/core/record-stores.mjs";
 import { BrainstemRuntime } from "../src/runtime/runtime.mjs";
 import httpHealthPlugin from "../plugins/http-health/index.mjs";
+import githubPlugin from "../plugins/github-issues/index.mjs";
 import matrixPlugin from "../plugins/matrix/index.mjs";
 import { resetNotificationState } from "../plugins/matrix/notify.mjs";
 import { evaluateCertificate } from "../plugins/tls-certificate/check.mjs";
+import { shouldEmitCertificateObservation } from "../plugins/tls-certificate/state.mjs";
 import { fetchIssues } from "../plugins/github-issues/api.mjs";
 import { normalizeConfig as normalizeGithubConfig } from "../plugins/github-issues/config.mjs";
 import { toObservation as emailToObservation } from "../plugins/email-imap/observation.mjs";
@@ -283,6 +285,53 @@ test("http health input respects failure and recovery thresholds", async () => {
   ]);
 });
 
+test("http health input does not repeat unchanged unhealthy observations", async () => {
+  const originalFetch = globalThis.fetch;
+  let checkpoint;
+  const emitted = [];
+
+  globalThis.fetch = async () => ({
+    status: 503,
+    statusText: "Service Unavailable"
+  });
+
+  try {
+    for (let index = 0; index < 3; index += 1) {
+      const deferred = { value: undefined };
+
+      for await (
+        const observation of httpHealthPlugin.inputs.check.poll({
+          config: {
+            url: "https://example.com/health",
+            name: "example"
+          },
+          signal: new AbortController().signal,
+          observation: createObservation,
+          checkpoint: {
+            async get() {
+              return checkpoint;
+            },
+            defer(value) {
+              deferred.value = value;
+            }
+          }
+        })
+      ) {
+        emitted.push(observation.payload.state);
+      }
+
+      checkpoint = deferred.value;
+    }
+  }
+  finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(emitted, [
+    "unhealthy"
+  ]);
+});
+
 test("email imap parser extracts body without transport headers", async () => {
   const message = await normalizeEmailMessage(
     {
@@ -338,6 +387,56 @@ test("email imap input normalizes email observations", () => {
   assert.equal(observation.payload.source.type, "email");
   assert.equal(observation.payload.type, "message");
   assert.match(observation.payload.message, /production API/);
+});
+
+test("tls certificate emission only repeats when changed or due", () => {
+  const target = {
+    emitHealthy: true,
+    repeatAfterMs: null
+  };
+
+  const result = {
+    state: "expiring",
+    ok: false,
+    error: "Certificate expires soon",
+    authorized: true,
+    authorizationError: null,
+    validTo: "2026-01-05T00:00:00.000Z",
+    fingerprint256: "AA:BB",
+    subject: null,
+    issuer: null,
+    checkedAt: "2026-01-01T00:00:00.000Z"
+  };
+
+  const first = shouldEmitCertificateObservation({
+    target,
+    result,
+    now: Date.parse("2026-01-01T00:00:00.000Z")
+  });
+
+  const second = shouldEmitCertificateObservation({
+    target,
+    result: {
+      ...result,
+      checkedAt: "2026-01-01T01:00:00.000Z"
+    },
+    previous: first.next,
+    now: Date.parse("2026-01-01T01:00:00.000Z")
+  });
+
+  const repeated = shouldEmitCertificateObservation({
+    target: {
+      ...target,
+      repeatAfterMs: 60 * 60 * 1000
+    },
+    result,
+    previous: first.next,
+    now: Date.parse("2026-01-01T02:00:00.000Z")
+  });
+
+  assert.equal(first.emit, true);
+  assert.equal(second.emit, false);
+  assert.equal(repeated.emit, true);
 });
 
 test("tls certificate evaluation detects expiring certificates", () => {
@@ -645,6 +744,133 @@ test("matrix destination retries rate limits and threads repeats", async () => {
   );
 });
 
+test("github issues input emits only new or changed observations", async () => {
+  const originalFetch = globalThis.fetch;
+  let issue = githubIssue({
+    number: 7,
+    title: "Initial issue",
+    updatedAt: "2026-01-01T00:00:00Z"
+  });
+  let checkpoint;
+
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    async json() {
+      return [issue];
+    }
+  });
+
+  async function poll() {
+    const deferred = { value: undefined };
+    const observations = [];
+
+    for await (
+      const observation of githubPlugin.inputs.issues.poll({
+        config: {
+          repo: "owner/repo",
+          state: "all",
+          startFromNow: false,
+          perPage: 10,
+          maxPages: 1
+        },
+        signal: new AbortController().signal,
+        observation: createObservation,
+        checkpoint: {
+          async get() {
+            return checkpoint;
+          },
+          defer(value) {
+            deferred.value = value;
+          }
+        }
+      })
+    ) {
+      observations.push(observation.payload.title);
+    }
+
+    checkpoint = deferred.value;
+    return observations;
+  }
+
+  try {
+    assert.deepEqual(await poll(), [
+      "Initial issue"
+    ]);
+    assert.deepEqual(await poll(), []);
+
+    issue = githubIssue({
+      number: 7,
+      title: "Updated issue",
+      updatedAt: "2026-01-01T01:00:00Z"
+    });
+
+    assert.deepEqual(await poll(), [
+      "Updated issue"
+    ]);
+  }
+  finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("github issues input can start from current state without emitting old issues", async () => {
+  const originalFetch = globalThis.fetch;
+  let checkpoint;
+
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    async json() {
+      return [
+        githubIssue({
+          number: 8,
+          title: "Existing issue",
+          updatedAt: "2026-01-01T00:00:00Z"
+        })
+      ];
+    }
+  });
+
+  const deferred = { value: undefined };
+  const observations = [];
+
+  try {
+    for await (
+      const observation of githubPlugin.inputs.issues.poll({
+        config: {
+          repo: "owner/repo"
+        },
+        signal: new AbortController().signal,
+        observation: createObservation,
+        checkpoint: {
+          async get() {
+            return checkpoint;
+          },
+          defer(value) {
+            deferred.value = value;
+          }
+        }
+      })
+    ) {
+      observations.push(observation);
+    }
+  }
+  finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  checkpoint = deferred.value;
+
+  assert.deepEqual(observations, []);
+  assert.equal(
+    checkpoint.issues[8].state,
+    "open"
+  );
+});
+
 test("github issues input paginates and defaults to all states", async () => {
   const originalFetch = globalThis.fetch;
   const pages = [];
@@ -782,6 +1008,32 @@ test("destinations can filter by decision, route, source, and type", async () =>
 
   assert.equal(output.trim(), "matched");
 });
+
+function githubIssue({
+  number,
+  title,
+  updatedAt,
+  state = "open"
+}) {
+  return {
+    number,
+    state,
+    title,
+    body: `${title} body`,
+    labels: [],
+    comments: 0,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: updatedAt,
+    closed_at:
+      state === "closed"
+        ? updatedAt
+        : null,
+    html_url: `https://github.com/owner/repo/issues/${number}`,
+    user: {
+      login: "alice"
+    }
+  };
+}
 
 function matrixEvent({
   id,

@@ -45,6 +45,11 @@ function normalizeCheck(check, index, defaults) {
     `HTTP health check ${index} recoveryThreshold`
   );
 
+  validateRepeatAfterMs(
+    check.repeatAfterMs ?? defaults.repeatAfterMs ?? null,
+    `HTTP health check ${index} repeatAfterMs`
+  );
+
   return {
     id:
       check.id ??
@@ -75,6 +80,11 @@ function normalizeCheck(check, index, defaults) {
       defaults.emitHealthy ??
       true,
 
+    repeatAfterMs:
+      check.repeatAfterMs ??
+      defaults.repeatAfterMs ??
+      null,
+
     failureThreshold,
     recoveryThreshold,
 
@@ -91,6 +101,20 @@ function validateThreshold(value, name) {
   ) {
     throw new Error(
       `${name} must be an integer >= 1`
+    );
+  }
+}
+
+function validateRepeatAfterMs(value, name) {
+  if (
+    value !== null &&
+    (
+      typeof value !== "number" ||
+      value < 0
+    )
+  ) {
+    throw new Error(
+      `${name} must be a non-negative number or null`
     );
   }
 }

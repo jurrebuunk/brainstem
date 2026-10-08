@@ -21,6 +21,7 @@ export function normalizeConfig(config) {
     labels: config.labels,
     sort: config.sort ?? "updated",
     direction: config.direction ?? "desc",
+    startFromNow: config.startFromNow ?? true,
     token: resolveToken(config)
   };
 }

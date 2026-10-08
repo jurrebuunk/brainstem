@@ -56,7 +56,8 @@ export default {
         tokenEnv: "GITHUB_TOKEN",
         state: "all",
         perPage: 10,
-        maxPages: 10
+        maxPages: 10,
+        startFromNow: true
       }
     }
     */

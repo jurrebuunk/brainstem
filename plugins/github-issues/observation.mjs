@@ -31,6 +31,9 @@ export function toObservation(ctx, repo, issue) {
       author: issue.user?.login ?? null,
       labels,
       comments: issue.comments,
+      createdAt: issue.created_at ?? null,
+      updatedAt: issue.updated_at ?? null,
+      closedAt: issue.closed_at ?? null,
       url: issue.html_url
     }
   });

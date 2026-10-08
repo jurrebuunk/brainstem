@@ -3,6 +3,10 @@ import { defineInputPlugin } from "../../src/sdk/index.mjs";
 import { fetchIssues } from "./api.mjs";
 import { normalizeConfig } from "./config.mjs";
 import { toObservation } from "./observation.mjs";
+import {
+  nextIssueCheckpoint,
+  shouldEmitIssueObservation
+} from "./state.mjs";
 
 export default defineInputPlugin({
   apiVersion: "brainstem.input/v1",
@@ -17,23 +21,51 @@ export default defineInputPlugin({
         const config =
           normalizeConfig(ctx.config);
 
+        const checkpoint =
+          await ctx.checkpoint?.get() ?? {};
+
         const issues =
           await fetchIssues(
             config,
             ctx.signal
           );
 
+        const observations = [];
+
         for (const issue of issues) {
           if (issue.pull_request) {
             continue;
           }
 
-          yield toObservation(
-            ctx,
-            config.repo,
-            issue
+          const observation =
+            toObservation(
+              ctx,
+              config.repo,
+              issue
+            );
+
+          observations.push(
+            observation
           );
+
+          const result =
+            shouldEmitIssueObservation({
+              config,
+              checkpoint,
+              observation
+            });
+
+          if (result.emit) {
+            yield observation;
+          }
         }
+
+        ctx.checkpoint?.defer(
+          nextIssueCheckpoint({
+            checkpoint,
+            observations
+          })
+        );
       }
     }
   }
