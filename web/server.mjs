@@ -1,5 +1,5 @@
 import { createReadStream, existsSync, mkdirSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
@@ -14,6 +14,8 @@ const root = new URL(".", import.meta.url).pathname;
 const repoRoot = resolve(root, "..");
 const isProduction = process.env.NODE_ENV === "production";
 const maxEvents = Number(process.env.MAX_EVENTS ?? 2000);
+const maxBodyBytes = Number(process.env.MAX_BODY_BYTES ?? 1024 * 1024);
+const statsPruneAfterDays = Number(process.env.STATS_PRUNE_AFTER_DAYS ?? 14);
 const configPath = resolve(repoRoot, process.env.BRAINSTEM_CONFIG ?? "brainstem.config.mjs");
 const statsDbPath = resolve(repoRoot, process.env.WEB_STATS_DB ?? "data/web-stats.sqlite");
 
@@ -42,9 +44,14 @@ const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${host}:${port}`);
 
+    if (request.method === "OPTIONS") {
+      sendNoContent(response, 204);
+      return;
+    }
+
     if (url.pathname === "/api/events" && request.method === "POST") {
       const event = normalizeIncomingEvent(
-        JSON.parse(await readBody(request) || "null")
+        await readJsonBody(request, null)
       );
 
       addEvent(event);
@@ -74,7 +81,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (url.pathname === "/api/config" && request.method === "PUT") {
-      const body = JSON.parse(await readBody(request) || "{}");
+      const body = await readJsonBody(request, {});
       sendJson(response, await saveConfig(String(body.content ?? "")));
       return;
     }
@@ -103,8 +110,9 @@ const server = http.createServer(async (request, response) => {
     await serveStatic(request, response);
   }
   catch (error) {
-    console.error(error);
-    sendJson(response, { error: error.message }, 500);
+    const status = error.statusCode ?? 500;
+    if (status >= 500) console.error(error);
+    sendJson(response, { error: error.message }, status);
   }
 });
 
@@ -114,9 +122,24 @@ server.listen(port, host, () => {
   console.log(`Stats database: ${statsDbPath}`);
 });
 
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.once(signal, () => {
+    server.close(() => {
+      statsDb.close();
+      process.exit(0);
+    });
+  });
+}
+
 function addEvent(event) {
   events.push(event);
-  recordStatsEvent(event);
+
+  try {
+    recordStatsEvent(event);
+  }
+  catch (error) {
+    console.error("failed to record web stats", error);
+  }
 
   while (events.length > maxEvents) {
     events.shift();
@@ -151,12 +174,11 @@ function normalizeIncomingEvent(value) {
 }
 
 function streamEvents(response) {
-  response.writeHead(200, {
+  response.writeHead(200, responseHeaders({
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
-    connection: "keep-alive",
-    "access-control-allow-origin": "*"
-  });
+    connection: "keep-alive"
+  }));
 
   response.write(`data: ${JSON.stringify({
     version: "1",
@@ -175,6 +197,9 @@ function streamEvents(response) {
 
 function initStatsDb(db) {
   db.exec(`
+    pragma journal_mode = wal;
+    pragma busy_timeout = 5000;
+
     create table if not exists stat_counters (
       key text primary key,
       value integer not null default 0
@@ -211,12 +236,23 @@ function recordStatsEvent(event) {
       counter.run(metric, 1);
       series.run(bucket, metric, 1);
     }
+    pruneOldStats(bucket);
     statsDb.exec("commit");
   }
   catch (error) {
     statsDb.exec("rollback");
     throw error;
   }
+}
+
+function pruneOldStats(currentBucket) {
+  if (!Number.isFinite(statsPruneAfterDays) || statsPruneAfterDays <= 0) return;
+
+  const cutoff = new Date(
+    Date.parse(currentBucket) - statsPruneAfterDays * 24 * 60 * 60 * 1000
+  ).toISOString();
+
+  statsDb.prepare("delete from stat_timeseries where bucket < ?").run(cutoff);
 }
 
 function metricsForEvent(event) {
@@ -237,7 +273,7 @@ function metricsForEvent(event) {
   if (kind === "brainstem.destination.failed") metrics.add("destinations.failed");
   if (kind === "brainstem.plugin.log" && payload.level === "error") metrics.add("plugin.errors");
   if (kind === "brainstem.log" && payload.level === "error") metrics.add("runtime.errors");
-  if (kind.includes("failed") || metrics.has("plugin.errors") || metrics.has("runtime.errors")) metrics.add("errors.total");
+  if (String(kind ?? "").includes("failed") || metrics.has("plugin.errors") || metrics.has("runtime.errors")) metrics.add("errors.total");
 
   return [...metrics];
 }
@@ -248,12 +284,13 @@ function getStats() {
       .map(row => [row.key, row.value])
   );
 
+  const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
   const rows = statsDb.prepare(`
     select bucket, metric, value
     from stat_timeseries
-    where bucket >= datetime('now', '-6 hours')
+    where bucket >= ?
     order by bucket asc
-  `).all();
+  `).all(cutoff);
 
   return {
     counters,
@@ -271,13 +308,33 @@ async function readConfig() {
 
 async function saveConfig(content) {
   await assertValidModule(content);
-  await writeFile(configPath, content, "utf8");
+  await writeFileAtomic(configPath, content);
 
   return {
     ok: true,
     path: configPath,
     savedAt: new Date().toISOString()
   };
+}
+
+async function writeFileAtomic(path, content) {
+  const directory = dirname(path);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backup = `${path}.${stamp}.bak`;
+  const temporary = join(directory, `.${stamp}.${Math.random().toString(16).slice(2)}.tmp`);
+
+  if (existsSync(path)) {
+    await copyFile(path, backup);
+  }
+
+  try {
+    await writeFile(temporary, content, "utf8");
+    await rename(temporary, path);
+  }
+  catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
 }
 
 async function assertValidModule(content) {
@@ -305,15 +362,42 @@ function minuteBucket(value) {
   return date.toISOString();
 }
 
+async function readJsonBody(request, fallback) {
+  const body = await readBody(request);
+  if (!body) return fallback;
+
+  try {
+    return JSON.parse(body);
+  }
+  catch {
+    throw new HttpError(400, "Invalid JSON request body");
+  }
+}
+
 function readBody(request) {
   return new Promise((resolveBody, reject) => {
     const chunks = [];
+    let size = 0;
+    let tooLarge = false;
 
     request.on("data", chunk => {
-      chunks.push(chunk);
+      size += chunk.length;
+
+      if (size > maxBodyBytes) {
+        tooLarge = true;
+        chunks.length = 0;
+        return;
+      }
+
+      if (!tooLarge) chunks.push(chunk);
     });
 
     request.on("end", () => {
+      if (tooLarge) {
+        reject(new HttpError(413, `Request body too large; max ${maxBodyBytes} bytes`));
+        return;
+      }
+
       resolveBody(Buffer.concat(chunks).toString("utf8"));
     });
 
@@ -322,11 +406,31 @@ function readBody(request) {
 }
 
 function sendJson(response, value, status = 200) {
-  response.writeHead(status, {
-    "content-type": "application/json",
-    "access-control-allow-origin": "*"
-  });
+  response.writeHead(status, responseHeaders({
+    "content-type": "application/json"
+  }));
   response.end(JSON.stringify(value));
+}
+
+function sendNoContent(response, status = 204) {
+  response.writeHead(status, responseHeaders());
+  response.end();
+}
+
+function responseHeaders(headers = {}) {
+  return {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,POST,PUT,OPTIONS",
+    "access-control-allow-headers": "content-type",
+    ...headers
+  };
+}
+
+class HttpError extends Error {
+  constructor(statusCode, message) {
+    super(message);
+    this.statusCode = statusCode;
+  }
 }
 
 async function serveStatic(request, response) {
@@ -334,7 +438,11 @@ async function serveStatic(request, response) {
   const pathname = decodeURIComponent(new URL(request.url, "http://localhost").pathname);
   const requested = pathname === "/"
     ? join(dist, "index.html")
-    : join(dist, pathname);
+    : resolve(dist, `.${pathname}`);
+
+  if (!requested.startsWith(`${dist}/`) && requested !== join(dist, "index.html")) {
+    throw new HttpError(403, "Forbidden");
+  }
 
   const path = existsSync(requested)
     ? requested
@@ -346,9 +454,9 @@ async function serveStatic(request, response) {
     return;
   }
 
-  response.writeHead(200, {
+  response.writeHead(200, responseHeaders({
     "content-type": contentType(path)
-  });
+  }));
   createReadStream(path).pipe(response);
 }
 

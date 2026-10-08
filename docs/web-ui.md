@@ -85,7 +85,9 @@ GET  /api/health   health check
 
 The Web UI stores events in memory only. Restarting the Web UI clears its current event buffer, but Brainstem emits periodic `brainstem.snapshot` events so the graph can repopulate while the runtime is running.
 
-Stats are persisted in SQLite at `data/web-stats.sqlite` by default. Override with `WEB_STATS_DB=/path/to/web-stats.sqlite`. Override the editable config path with `BRAINSTEM_CONFIG=/path/to/brainstem.config.mjs`.
+Stats are persisted in SQLite at `data/web-stats.sqlite` by default. Override with `WEB_STATS_DB=/path/to/web-stats.sqlite`. Old time-series rows are pruned after 14 days by default; override with `STATS_PRUNE_AFTER_DAYS`.
+
+The config editor writes atomically after `node --check` validation and creates a timestamped `.bak` file next to the config before replacement. Override the editable config path with `BRAINSTEM_CONFIG=/path/to/brainstem.config.mjs`. Request bodies are capped at 1 MiB by default; override with `MAX_BODY_BYTES`.
 
 ## HTTP JSON output
 
