@@ -1,4 +1,27 @@
 export async function fetchIssues(config, signal) {
+  const issues = [];
+
+  for (let page = 1; page <= config.maxPages; page += 1) {
+    const pageIssues =
+      await fetchIssuePage(
+        config,
+        page,
+        signal
+      );
+
+    issues.push(
+      ...pageIssues
+    );
+
+    if (pageIssues.length < config.perPage) {
+      break;
+    }
+  }
+
+  return issues;
+}
+
+async function fetchIssuePage(config, page, signal) {
   const url =
     new URL(
       `https://api.github.com/repos/${config.repo}/issues`
@@ -6,6 +29,9 @@ export async function fetchIssues(config, signal) {
 
   url.searchParams.set("state", config.state);
   url.searchParams.set("per_page", String(config.perPage));
+  url.searchParams.set("page", String(page));
+  url.searchParams.set("sort", config.sort);
+  url.searchParams.set("direction", config.direction);
 
   if (config.labels) {
     url.searchParams.set(

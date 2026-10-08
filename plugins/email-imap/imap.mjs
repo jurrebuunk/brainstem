@@ -1,7 +1,7 @@
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 
-export async function fetchNewMessages(config, checkpoint = {}) {
+export async function fetchNewMessages(config, checkpoint = {}, signal) {
   const client = new ImapFlow({
     host: config.host,
     port: config.port,
@@ -16,9 +16,28 @@ export async function fetchNewMessages(config, checkpoint = {}) {
     socketTimeout: config.timeoutMs
   });
 
-  await client.connect();
+  let aborted = false;
+
+  const abort = () => {
+    aborted = true;
+    client.close();
+  };
+
+  if (signal?.aborted) {
+    abort();
+    throw abortError();
+  }
+
+  signal?.addEventListener(
+    "abort",
+    abort,
+    { once: true }
+  );
 
   try {
+    await client.connect();
+
+    throwIfAborted(aborted);
     const lock = await client.getMailboxLock(config.mailbox);
 
     try {
@@ -62,7 +81,7 @@ export async function fetchNewMessages(config, checkpoint = {}) {
 
       const range = `${lastUid + 1}:*`;
       const messages = [];
-      let newestUid = lastUid;
+      let newestEmittedUid = lastUid;
 
       for await (const message of client.fetch(
         range,
@@ -76,12 +95,19 @@ export async function fetchNewMessages(config, checkpoint = {}) {
           uid: true
         }
       )) {
-        newestUid = Math.max(newestUid, message.uid);
+        throwIfAborted(aborted);
 
-        if (messages.length < config.maxMessages) {
-          messages.push(
-            await normalizeMessage(message, config)
-          );
+        messages.push(
+          await normalizeMessage(message, config)
+        );
+
+        newestEmittedUid = Math.max(
+          newestEmittedUid,
+          message.uid
+        );
+
+        if (messages.length >= config.maxMessages) {
+          break;
         }
       }
 
@@ -89,7 +115,7 @@ export async function fetchNewMessages(config, checkpoint = {}) {
         messages,
         checkpoint: {
           uidValidity,
-          lastUid: newestUid
+          lastUid: newestEmittedUid
         }
       };
     }
@@ -97,8 +123,25 @@ export async function fetchNewMessages(config, checkpoint = {}) {
       lock.release();
     }
   }
+  catch (error) {
+    if (aborted) {
+      throw abortError();
+    }
+
+    throw error;
+  }
   finally {
-    await client.logout().catch(() => {});
+    signal?.removeEventListener(
+      "abort",
+      abort
+    );
+
+    if (aborted) {
+      client.close();
+    }
+    else {
+      await client.logout().catch(() => {});
+    }
   }
 }
 
@@ -171,4 +214,17 @@ function stripHtml(html) {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'");
+}
+
+function throwIfAborted(aborted) {
+  if (aborted) {
+    throw abortError();
+  }
+}
+
+function abortError() {
+  return new DOMException(
+    "IMAP poll aborted",
+    "AbortError"
+  );
 }

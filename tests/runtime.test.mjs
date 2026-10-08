@@ -13,6 +13,8 @@ import httpHealthPlugin from "../plugins/http-health/index.mjs";
 import matrixPlugin from "../plugins/matrix/index.mjs";
 import { resetNotificationState } from "../plugins/matrix/notify.mjs";
 import { evaluateCertificate } from "../plugins/tls-certificate/check.mjs";
+import { fetchIssues } from "../plugins/github-issues/api.mjs";
+import { normalizeConfig as normalizeGithubConfig } from "../plugins/github-issues/config.mjs";
 import { toObservation as emailToObservation } from "../plugins/email-imap/observation.mjs";
 import { normalizeMessage as normalizeEmailMessage } from "../plugins/email-imap/imap.mjs";
 
@@ -139,6 +141,50 @@ test("sqlite core records are reused after restart", async () => {
 
   assert.ok(firstCounter.count > 0);
   assert.equal(secondCounter.count, 0);
+});
+
+test("destination failures fail the poll and do not commit checkpoint", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "brainstem-destination-failure-"));
+  const pluginPath = join(dir, "checkpoint-plugin.mjs");
+  const destinationPath = join(dir, "failing-destination.mjs");
+  const checkpointPath = join(dir, "checkpoints.json");
+
+  await writeFile(pluginPath, checkpointPluginSource());
+  await writeFile(destinationPath, failingDestinationPluginSource());
+
+  const runtime = new BrainstemRuntime({
+    brainstem: fakeBrainstem({
+      decision: "queue",
+      route: "coding"
+    }),
+    config: checkpointConfig(checkpointPath),
+    logger: silentLogger,
+    plugins: [
+      {
+        id: "checkpoint-test-input",
+        module: pluginPath,
+        retry: {
+          attempts: 1
+        }
+      }
+    ],
+    destinations: [
+      {
+        module: destinationPath,
+        decisions: ["queue"]
+      }
+    ]
+  });
+
+  await assert.rejects(
+    () => runtime.runOnce(),
+    /destinations failed/i
+  );
+
+  assert.equal(
+    existsSync(checkpointPath),
+    false
+  );
 });
 
 test("http health input emits unhealthy observations", async () => {
@@ -453,6 +499,70 @@ test("matrix destination suppresses repeats and sends recovery", async () => {
   assert.match(secondBody, /Brainstem recovery/);
 });
 
+test("matrix notification state handles concurrent file commits", async () => {
+  resetNotificationState();
+
+  const dir = await mkdtemp(join(tmpdir(), "brainstem-matrix-state-"));
+  const statePath = join(dir, "matrix-notifications.json");
+  const originalFetch = globalThis.fetch;
+  let count = 0;
+
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    async json() {
+      count += 1;
+      return {
+        event_id: `$event${count}`
+      };
+    }
+  });
+
+  const ctx = {
+    config: {
+      homeserver: "https://matrix.example",
+      roomId: "!room:example",
+      accessToken: "secret",
+      notify: {
+        statePath
+      }
+    },
+    signal: new AbortController().signal,
+    logger: silentLogger
+  };
+
+  try {
+    await Promise.all([
+      matrixPlugin.destinations.room.handle(
+        ctx,
+        matrixEvent({
+          id: "http:concurrent-a",
+          decision: "dispatch",
+          state: "unhealthy"
+        })
+      ),
+      matrixPlugin.destinations.room.handle(
+        ctx,
+        matrixEvent({
+          id: "http:concurrent-b",
+          decision: "dispatch",
+          state: "unhealthy"
+        })
+      )
+    ]);
+  }
+  finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const saved = JSON.parse(
+    await readFile(statePath, "utf8")
+  );
+
+  assert.equal(Object.keys(saved).length, 2);
+});
+
 test("matrix destination retries rate limits and threads repeats", async () => {
   resetNotificationState();
 
@@ -533,6 +643,64 @@ test("matrix destination retries rate limits and threads repeats", async () => {
     repeated["m.relates_to"].event_id,
     "$event2"
   );
+});
+
+test("github issues input paginates and defaults to all states", async () => {
+  const originalFetch = globalThis.fetch;
+  const pages = [];
+
+  globalThis.fetch = async url => {
+    const parsed = new URL(url);
+    const page = Number(parsed.searchParams.get("page"));
+
+    pages.push({
+      page,
+      state: parsed.searchParams.get("state"),
+      sort: parsed.searchParams.get("sort")
+    });
+
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      async json() {
+        if (page === 1) {
+          return [
+            { number: 1, state: "open" },
+            { number: 2, state: "closed" }
+          ];
+        }
+
+        return [
+          { number: 3, state: "open" }
+        ];
+      }
+    };
+  };
+
+  try {
+    const issues = await fetchIssues(
+      normalizeGithubConfig({
+        repo: "owner/repo",
+        perPage: 2,
+        maxPages: 3
+      })
+    );
+
+    assert.deepEqual(
+      issues.map(issue => issue.number),
+      [1, 2, 3]
+    );
+    assert.deepEqual(
+      pages.map(page => page.page),
+      [1, 2]
+    );
+    assert.equal(pages[0].state, "all");
+    assert.equal(pages[0].sort, "updated");
+  }
+  finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("destinations can filter by decision, route, source, and type", async () => {
@@ -771,6 +939,22 @@ export default {
     default: {
       async handle(ctx) {
         await appendFile(${JSON.stringify(outputPath)}, ctx.config.name + "\\n");
+      }
+    }
+  }
+};
+`;
+}
+
+function failingDestinationPluginSource() {
+  return `
+export default {
+  apiVersion: "brainstem.destination/v1",
+  name: "failing-destination-test",
+  destinations: {
+    default: {
+      async handle() {
+        throw new Error("destination exploded");
       }
     }
   }

@@ -19,8 +19,9 @@ inputs: [
     config: {
       repo: "owner/repo",
       tokenEnv: "GITHUB_TOKEN",
-      state: "open",
-      perPage: 100
+      state: "all",
+      perPage: 100,
+      maxPages: 10
     }
   }
 ]
@@ -30,8 +31,9 @@ inputs: [
 
 ```js
 repo       // required, owner/repo
-state      // default: open
-perPage    // default: 100
+state      // default: all
+perPage    // default: 100, capped at 100
+maxPages   // default: 10
 labels     // optional GitHub labels query
 tokenEnv   // env var containing token
 token      // string or { env: "GITHUB_TOKEN" }

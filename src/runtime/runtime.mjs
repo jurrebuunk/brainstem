@@ -640,6 +640,8 @@ export class BrainstemRuntime {
       }
     );
 
+    const failures = [];
+
     for (const destinationEntry of this.destinationEntries) {
       if (
         !eventMatchesDestination(
@@ -697,6 +699,8 @@ export class BrainstemRuntime {
         );
       }
       catch (error) {
+        failures.push(error);
+
         this.logger.error?.(
           "destination failed",
           {
@@ -708,6 +712,13 @@ export class BrainstemRuntime {
           }
         );
       }
+    }
+
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `One or more destinations failed for observation '${observationPayload.id}'`
+      );
     }
   }
 }

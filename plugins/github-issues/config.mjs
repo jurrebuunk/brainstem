@@ -7,11 +7,20 @@ export function normalizeConfig(config) {
     );
   }
 
+  const perPage = config.perPage ?? 100;
+  const maxPages = config.maxPages ?? 10;
+
+  validatePositiveInteger(perPage, "perPage");
+  validatePositiveInteger(maxPages, "maxPages");
+
   return {
     repo,
-    state: config.state ?? "open",
-    perPage: config.perPage ?? 100,
+    state: config.state ?? "all",
+    perPage: Math.min(perPage, 100),
+    maxPages,
     labels: config.labels,
+    sort: config.sort ?? "updated",
+    direction: config.direction ?? "desc",
     token: resolveToken(config)
   };
 }
@@ -34,4 +43,12 @@ function resolveToken(config) {
   }
 
   return process.env.GITHUB_TOKEN;
+}
+
+function validatePositiveInteger(value, name) {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(
+      `GitHub issues input config.${name} must be an integer >= 1`
+    );
+  }
 }

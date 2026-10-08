@@ -54,7 +54,9 @@ export default {
       config: {
         repo: "owner/repo",
         tokenEnv: "GITHUB_TOKEN",
-        perPage: 10
+        state: "all",
+        perPage: 10,
+        maxPages: 10
       }
     }
     */

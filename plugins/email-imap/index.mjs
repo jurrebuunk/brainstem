@@ -19,7 +19,8 @@ export default defineInputPlugin({
 
         const result = await fetchNewMessages(
           config,
-          checkpoint ?? {}
+          checkpoint ?? {},
+          ctx.signal
         );
 
         ctx.logger?.debug?.(

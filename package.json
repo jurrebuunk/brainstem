@@ -51,6 +51,8 @@
   "homepage": "https://github.com/jurrebuunk/brainstem#readme",
   "files": [
     "brainstem.mjs",
+    "run-plugin-test.mjs",
+    "flake.nix",
     "brainstem.config.example.mjs",
     "docker-compose.example.yml",
     "Dockerfile",

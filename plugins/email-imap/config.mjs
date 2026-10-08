@@ -9,6 +9,12 @@ export function normalizeConfig(config) {
     );
   }
 
+  const maxMessages = config.maxMessages ?? 25;
+  const maxBytes = config.maxBytes ?? 8192;
+
+  validatePositiveInteger(maxMessages, "maxMessages");
+  validatePositiveInteger(maxBytes, "maxBytes");
+
   return {
     host,
     port: config.port ?? 993,
@@ -17,8 +23,8 @@ export function normalizeConfig(config) {
     user,
     password,
     startFromNow: config.startFromNow ?? true,
-    maxMessages: config.maxMessages ?? 25,
-    maxBytes: config.maxBytes ?? 8192,
+    maxMessages,
+    maxBytes,
     timeoutMs: config.timeoutMs ?? 10_000
   };
 }
@@ -54,4 +60,12 @@ function required(value, name) {
   }
 
   return value;
+}
+
+function validatePositiveInteger(value, name) {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(
+      `Email IMAP input config.${name} must be an integer >= 1`
+    );
+  }
 }

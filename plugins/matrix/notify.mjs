@@ -15,6 +15,12 @@ const memoryStates =
 const fileCache =
   new Map();
 
+const loadQueues =
+  new Map();
+
+const writeQueues =
+  new Map();
+
 export async function planNotification(ctx, event) {
   const notify =
     normalizeNotifyConfig(ctx.config.notify ?? {});
@@ -129,6 +135,8 @@ export async function planNotification(ctx, event) {
 export function resetNotificationState() {
   memoryStates.clear();
   fileCache.clear();
+  loadQueues.clear();
+  writeQueues.clear();
 }
 
 function suppressed() {
@@ -187,22 +195,37 @@ async function loadState(notify) {
     return fileCache.get(notify.statePath);
   }
 
-  try {
-    const data = JSON.parse(
-      await readFile(notify.statePath, "utf8")
+  if (!loadQueues.has(notify.statePath)) {
+    loadQueues.set(
+      notify.statePath,
+      loadStateFile(notify.statePath)
     );
+  }
+
+  try {
+    const data =
+      await loadQueues.get(notify.statePath);
 
     fileCache.set(notify.statePath, data);
     return data;
+  }
+  finally {
+    loadQueues.delete(notify.statePath);
+  }
+}
+
+async function loadStateFile(path) {
+  try {
+    return JSON.parse(
+      await readFile(path, "utf8")
+    );
   }
   catch (error) {
     if (error.code !== "ENOENT") {
       throw error;
     }
 
-    const data = {};
-    fileCache.set(notify.statePath, data);
-    return data;
+    return {};
   }
 }
 
@@ -217,22 +240,53 @@ async function saveState(notify, state) {
     return;
   }
 
-  await mkdir(dirname(notify.statePath), {
-    recursive: true
-  });
-
-  const temporaryPath =
-    `${notify.statePath}.tmp`;
-
-  await writeFile(
-    temporaryPath,
-    JSON.stringify(state, null, 2) + "\n"
+  fileCache.set(
+    notify.statePath,
+    state
   );
 
-  await rename(
-    temporaryPath,
-    notify.statePath
+  const previous =
+    writeQueues.get(notify.statePath) ??
+    Promise.resolve();
+
+  const next =
+    previous
+      .catch(() => {})
+      .then(async () => {
+        await mkdir(dirname(notify.statePath), {
+          recursive: true
+        });
+
+        const temporaryPath =
+          `${notify.statePath}.${process.pid}.tmp`;
+
+        await writeFile(
+          temporaryPath,
+          JSON.stringify(state, null, 2) + "\n"
+        );
+
+        await rename(
+          temporaryPath,
+          notify.statePath
+        );
+      });
+
+  writeQueues.set(
+    notify.statePath,
+    next
   );
+
+  try {
+    await next;
+  }
+  finally {
+    if (
+      writeQueues.get(notify.statePath) ===
+      next
+    ) {
+      writeQueues.delete(notify.statePath);
+    }
+  }
 }
 
 function objectFromMap(map) {
