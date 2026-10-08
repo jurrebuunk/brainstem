@@ -18,6 +18,7 @@ Brainstem ships local plugins under `plugins/`.
 | --- | --- | --- | --- |
 | Log Decisions | `./plugins/log-decisions/index.mjs` | Print matching decisions to stdout. | [Log Decisions](plugins/log-decisions.md) |
 | Matrix | `./plugins/matrix/index.mjs` | Send matching decisions to a Matrix room. | [Matrix](matrix-destination.md) |
+| HTTP JSON | `./plugins/http-json/index.mjs` | POST output envelopes to an HTTP endpoint. | [HTTP JSON](plugins/http-json.md) |
 
 ## Plugin APIs
 

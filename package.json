@@ -14,6 +14,7 @@
     "start": "node brainstem.mjs",
     "start:once": "node brainstem.mjs --once",
     "start:once:all": "node brainstem.mjs --once --all",
+    "http-log-server": "node http-log-server.mjs",
     "plugin:test": "node run-plugin-test.mjs",
     "check": "node --check brainstem.mjs && find src plugins -name '*.mjs' -exec node --check {} \\;",
     "test": "node --test tests/*.test.mjs",
@@ -51,6 +52,7 @@
   "homepage": "https://github.com/jurrebuunk/brainstem#readme",
   "files": [
     "brainstem.mjs",
+    "http-log-server.mjs",
     "run-plugin-test.mjs",
     "flake.nix",
     "brainstem.config.example.mjs",

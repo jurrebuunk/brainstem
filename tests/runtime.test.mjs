@@ -11,6 +11,7 @@ import { SqliteRecordStore } from "../src/core/record-stores.mjs";
 import { BrainstemRuntime } from "../src/runtime/runtime.mjs";
 import httpHealthPlugin from "../plugins/http-health/index.mjs";
 import githubPlugin from "../plugins/github-issues/index.mjs";
+import httpJsonPlugin from "../plugins/http-json/index.mjs";
 import matrixPlugin from "../plugins/matrix/index.mjs";
 import { resetNotificationState } from "../plugins/matrix/notify.mjs";
 import { evaluateCertificate } from "../plugins/tls-certificate/check.mjs";
@@ -516,6 +517,103 @@ test("tls certificate evaluation detects expiring certificates", () => {
 
   assert.equal(result.state, "expiring");
   assert.equal(result.daysRemaining, 4);
+});
+
+test("http json destination posts output envelope", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+
+    return {
+      ok: true,
+      status: 204,
+      statusText: "No Content"
+    };
+  };
+
+  try {
+    await httpJsonPlugin.destinations.default.handle(
+      {
+        config: {
+          url: "http://127.0.0.1:8787",
+          headers: {
+            "x-test": "yes"
+          }
+        },
+        signal: new AbortController().signal,
+        logger: silentLogger
+      },
+      {
+        decision: {
+          version: "1",
+          kind: "decision",
+          payload: {
+            observation_id: "http:example:health",
+            decision: "dispatch",
+            route: "infrastructure"
+          }
+        },
+        observation: {
+          version: "1",
+          kind: "observation",
+          payload: {
+            id: "http:example:health",
+            source: {
+              type: "http",
+              name: "example"
+            },
+            type: "health_check",
+            state: "unhealthy",
+            title: "example is unhealthy",
+            message: "example failed"
+          }
+        },
+        input: {
+          plugin: {
+            name: "@brainstem/http-health"
+          },
+          name: "check",
+          entry: {
+            id: "api-health",
+            module: "./plugins/http-health/index.mjs"
+          }
+        },
+        destination: {
+          plugin: {
+            name: "@brainstem/http-json"
+          },
+          name: "default",
+          entry: {
+            module: "./plugins/http-json/index.mjs"
+          }
+        }
+      }
+    );
+  }
+  finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://127.0.0.1:8787");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.headers["content-type"], "application/json");
+  assert.equal(calls[0].options.headers["x-test"], "yes");
+
+  const body = JSON.parse(calls[0].options.body);
+  assert.equal(body.version, "1");
+  assert.equal(body.kind, "brainstem.output");
+  assert.equal(
+    body.payload.observation.payload.id,
+    "http:example:health"
+  );
+  assert.equal(
+    body.payload.decision.payload.decision,
+    "dispatch"
+  );
+  assert.equal(body.payload.input.id, "api-health");
 });
 
 test("matrix destination sends room messages", async () => {
