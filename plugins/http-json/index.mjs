@@ -48,6 +48,7 @@ function outputEnvelope(event) {
     kind: "brainstem.output",
     payload: {
       timestamp: new Date().toISOString(),
+      pollId: event.pollId ?? null,
       decision: event.decision,
       observation: event.observation,
       input: {

@@ -87,6 +87,11 @@ export class BrainstemRuntime {
     this.abortController = null;
     this.tasks = [];
     this.destinationEntries = [];
+    this.loadedInputs = new Map();
+    this.telemetry = createTelemetrySink(
+      this.config.runtime?.telemetry
+    );
+    this.telemetryInterval = null;
   }
 
   async start({ signal } = {}) {
@@ -125,6 +130,10 @@ export class BrainstemRuntime {
         checkpoints: storeInfo(this.checkpointStore)
       }
     );
+    this.#emitTelemetry("brainstem.runtime.starting", {
+      inputs: this.plugins.length,
+      destinations: this.destinations.length
+    });
 
     await this.#startBrainstem(
       this.abortController.signal
@@ -132,6 +141,9 @@ export class BrainstemRuntime {
 
     this.destinationEntries =
       await this.#loadDestinationEntries();
+
+    this.#emitSnapshot();
+    this.#startTelemetrySnapshots();
 
     this.tasks = this.plugins.map((entry, index) =>
       this.#runPluginEntry(
@@ -189,6 +201,11 @@ export class BrainstemRuntime {
           checkpoints: storeInfo(this.checkpointStore)
         }
       );
+      this.#emitTelemetry("brainstem.runtime.starting", {
+        once: true,
+        inputs: this.plugins.length,
+        destinations: this.destinations.length
+      });
 
       await this.#startBrainstem(
         this.abortController.signal
@@ -196,6 +213,8 @@ export class BrainstemRuntime {
 
       this.destinationEntries =
         await this.#loadDestinationEntries();
+
+      this.#emitSnapshot();
 
       await Promise.all(
         this.plugins.map((entry, index) =>
@@ -301,6 +320,13 @@ export class BrainstemRuntime {
       this.abortController.abort();
     }
 
+    if (this.telemetryInterval) {
+      clearInterval(this.telemetryInterval);
+      this.telemetryInterval = null;
+    }
+
+    this.#emitTelemetry("brainstem.runtime.stopping", {});
+
     await Promise.allSettled(
       this.tasks
     );
@@ -311,6 +337,9 @@ export class BrainstemRuntime {
     this.abortController = null;
     this.tasks = [];
     this.destinationEntries = [];
+    this.loadedInputs.clear();
+
+    this.#emitTelemetry("brainstem.runtime.stopped", {});
 
     this.logger.info?.(
       "runtime stopped"
@@ -396,6 +425,19 @@ export class BrainstemRuntime {
         index
       );
 
+    const loadedInput = {
+      id: checkpointKey,
+      plugin: plugin.name,
+      input: inputName,
+      module: entry.module,
+      intervalMs
+    };
+
+    this.loadedInputs.set(
+      checkpointKey,
+      loadedInput
+    );
+
     this.logger.info?.(
       "input loaded",
       {
@@ -405,6 +447,11 @@ export class BrainstemRuntime {
         intervalMs
       }
     );
+    this.#emitTelemetry(
+      "brainstem.input.loaded",
+      loadedInput
+    );
+    this.#emitSnapshot();
 
     return {
       entry,
@@ -415,6 +462,67 @@ export class BrainstemRuntime {
       checkpointKey,
       retry: this.#retryConfig(entry)
     };
+  }
+
+  #emitTelemetry(kind, payload = {}) {
+    this.telemetry?.send({
+      version: "1",
+      kind,
+      payload: {
+        timestamp: new Date().toISOString(),
+        ...payload
+      }
+    });
+  }
+
+  #emitSnapshot() {
+    this.#emitTelemetry("brainstem.snapshot", {
+      inputs: this.plugins.map((entry, index) => {
+        const id =
+          entry.id ??
+          this.loadedInputs.get(entry.id)?.id ??
+          `input.${index}`;
+
+        return {
+          id,
+          module: entry.module,
+          input: entry.input ?? "default",
+          ...(this.loadedInputs.get(id) ?? {})
+        };
+      }),
+      core: {
+        status: this.brainstem?.laya ? "running" : "starting"
+      },
+      destinations: this.destinationEntries.map(item => ({
+        plugin: item.plugin.name,
+        destination: item.destinationName,
+        module: item.entry.module,
+        decisions: item.entry.decisions ?? ["queue", "dispatch", "escalate"],
+        routes: item.entry.routes ?? "all",
+        sources: item.entry.sources ?? "all",
+        types: item.entry.types ?? "all"
+      }))
+    });
+  }
+
+  #startTelemetrySnapshots() {
+    if (
+      this.telemetryInterval ||
+      !this.telemetry
+    ) {
+      return;
+    }
+
+    const intervalMs =
+      this.config.runtime?.telemetry?.snapshotIntervalMs ??
+      5_000;
+
+    this.telemetryInterval = setInterval(
+      () => this.#emitSnapshot(),
+      intervalMs
+    );
+
+    this.telemetryInterval.unref?.();
   }
 
   #destinationFailuresBlockInput() {
@@ -506,14 +614,23 @@ export class BrainstemRuntime {
         checkpoint: checkpoint.api
       });
 
+    const pollId = `${checkpointKey}:${Date.now()}`;
+
     this.logger.info?.(
       "input poll started",
       {
         id: checkpointKey,
         plugin: plugin.name,
-        input: inputName
+        input: inputName,
+        pollId
       }
     );
+    this.#emitTelemetry("brainstem.input.poll.started", {
+      id: checkpointKey,
+      plugin: plugin.name,
+      input: inputName,
+      pollId
+    });
 
     const observations =
       input.poll(ctx);
@@ -535,6 +652,14 @@ export class BrainstemRuntime {
 
       observationCount += 1;
 
+      this.#emitTelemetry("brainstem.input.observation", {
+        id: checkpointKey,
+        plugin: plugin.name,
+        input: inputName,
+        pollId,
+        observation
+      });
+
       const decision =
         await this.brainstem.process(
           observation
@@ -546,7 +671,8 @@ export class BrainstemRuntime {
         plugin,
         input: inputName,
         entry,
-        signal
+        signal,
+        pollId
       });
     }
 
@@ -563,9 +689,17 @@ export class BrainstemRuntime {
           id: checkpointKey,
           plugin: plugin.name,
           input: inputName,
+          pollId,
           observations: observationCount
         }
       );
+      this.#emitTelemetry("brainstem.input.poll.completed", {
+        id: checkpointKey,
+        plugin: plugin.name,
+        input: inputName,
+        pollId,
+        observations: observationCount
+      });
     }
   }
 
@@ -599,16 +733,23 @@ export class BrainstemRuntime {
       );
     }
 
+    const loadedDestination = {
+      plugin: plugin.name,
+      destination: destinationName,
+      module: entry.module,
+      decisions: entry.decisions ?? ["queue", "dispatch", "escalate"],
+      routes: entry.routes ?? "all",
+      sources: entry.sources ?? "all",
+      types: entry.types ?? "all"
+    };
+
     this.logger.info?.(
       "destination loaded",
-      {
-        plugin: plugin.name,
-        destination: destinationName,
-        decisions: entry.decisions ?? ["queue", "dispatch", "escalate"],
-        routes: entry.routes ?? "all",
-        sources: entry.sources ?? "all",
-        types: entry.types ?? "all"
-      }
+      loadedDestination
+    );
+    this.#emitTelemetry(
+      "brainstem.destination.loaded",
+      loadedDestination
     );
 
     return {
@@ -633,19 +774,30 @@ export class BrainstemRuntime {
         ? "debug"
         : "info";
 
+    const decisionInfo = {
+      observationId: observationPayload.id,
+      source: observationPayload.source.type,
+      type: observationPayload.type,
+      state: observationPayload.state,
+      inputId: event.entry.id ?? null,
+      inputPlugin: event.plugin.name,
+      inputName: event.input,
+      pollId: event.pollId ?? null,
+      decision: decisionPayload.decision,
+      route: decisionPayload.route,
+      reason: decisionPayload.reason
+    };
+
     this.logger[decisionLogLevel]?.(
       "observation decided",
+      decisionInfo
+    );
+    this.#emitTelemetry(
+      "brainstem.core.decision",
       {
-        observationId: observationPayload.id,
-        source: observationPayload.source.type,
-        type: observationPayload.type,
-        state: observationPayload.state,
-        inputId: event.entry.id ?? null,
-        inputPlugin: event.plugin.name,
-        inputName: event.input,
-        decision: decisionPayload.decision,
-        route: decisionPayload.route,
-        reason: decisionPayload.reason
+        ...decisionInfo,
+        decision: event.decision,
+        observation: event.observation
       }
     );
 
@@ -669,14 +821,23 @@ export class BrainstemRuntime {
             logger: this.logger
           });
 
+        const destinationInfo = {
+          plugin: destinationEntry.plugin.name,
+          destination: destinationEntry.destinationName,
+          observationId: observationPayload.id,
+          decision: decisionPayload.decision,
+          pollId: event.pollId ?? null,
+          decisionEnvelope: event.decision,
+          observationEnvelope: event.observation
+        };
+
         this.logger.debug?.(
           "destination handling decision",
-          {
-            plugin: destinationEntry.plugin.name,
-            destination: destinationEntry.destinationName,
-            observationId: observationPayload.id,
-            decision: decisionPayload.decision
-          }
+          destinationInfo
+        );
+        this.#emitTelemetry(
+          "brainstem.destination.running",
+          destinationInfo
         );
 
         await destinationEntry.destination.handle(
@@ -684,6 +845,7 @@ export class BrainstemRuntime {
           {
             decision: event.decision,
             observation: event.observation,
+            pollId: event.pollId ?? null,
             input: {
               plugin: event.plugin,
               name: event.input,
@@ -699,26 +861,34 @@ export class BrainstemRuntime {
 
         this.logger.debug?.(
           "destination handled decision",
-          {
-            plugin: destinationEntry.plugin.name,
-            destination: destinationEntry.destinationName,
-            observationId: observationPayload.id,
-            decision: decisionPayload.decision
-          }
+          destinationInfo
+        );
+        this.#emitTelemetry(
+          "brainstem.destination.completed",
+          destinationInfo
         );
       }
       catch (error) {
         failures.push(error);
 
+        const failureInfo = {
+          plugin: destinationEntry.plugin.name,
+          destination: destinationEntry.destinationName,
+          observationId: observationPayload.id,
+          decision: decisionPayload.decision,
+          pollId: event.pollId ?? null,
+          decisionEnvelope: event.decision,
+          observationEnvelope: event.observation,
+          error
+        };
+
         this.logger.error?.(
           "destination failed",
-          {
-            plugin: destinationEntry.plugin.name,
-            destination: destinationEntry.destinationName,
-            observationId: observationPayload.id,
-            decision: decisionPayload.decision,
-            error
-          }
+          failureInfo
+        );
+        this.#emitTelemetry(
+          "brainstem.destination.failed",
+          failureInfo
         );
       }
     }
@@ -903,6 +1073,37 @@ function storeInfo(store) {
   return {
     type: store.constructor?.name ?? "unknown",
     path: store.path ?? null
+  };
+}
+
+function createTelemetrySink(config) {
+  if (!config) {
+    return null;
+  }
+
+  const url = typeof config === "string"
+    ? config
+    : config.url;
+
+  if (!url) {
+    return null;
+  }
+
+  const headers = typeof config === "object"
+    ? config.headers ?? {}
+    : {};
+
+  return {
+    send(event) {
+      fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...headers
+        },
+        body: JSON.stringify(event)
+      }).catch(() => {});
+    }
   };
 }
 
