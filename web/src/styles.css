@@ -271,10 +271,10 @@ button { cursor: pointer; }
 }
 
 .node-handle {
-  width: 11px;
-  height: 11px;
-  border: 2px solid #1f1f1f;
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08), 0 0 14px currentColor;
+  width: 15px;
+  height: 15px;
+  border: 0;
+  border-radius: 5px;
 }
 
 .node-input .node-handle {
@@ -297,10 +297,6 @@ button { cursor: pointer; }
 .node-destination .node-handle {
   background: #6ee7b7;
   color: #6ee7b7;
-}
-
-.node-card.is-active .node-handle {
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.16), 0 0 18px currentColor;
 }
 
 .stacked-handle { transform: translateY(-50%); }
