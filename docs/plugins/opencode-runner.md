@@ -1,6 +1,6 @@
 # OpenCode Runner Destination
 
-Calls a running [opencode](https://opencode.ai/) server for each matching Brainstem decision and waits until the agent request completes.
+Calls a running [opencode](https://opencode.ai/) server for each matching Brainstem decision.
 
 This destination is intended as a first agent-runner output plugin. It keeps Brainstem core separate from agent execution while still surfacing agent activity through destination/plugin logs and runtime telemetry.
 
@@ -40,7 +40,7 @@ destinations: [
 ]
 ```
 
-The plugin uses opencode's HTTP API directly. It does not spawn a local `opencode run` process. By default it submits the prompt with `prompt_async` and returns after OpenCode accepts it, so a long or stuck agent run does not block Brainstem.
+The plugin uses opencode's HTTP API directly. It does not spawn a local `opencode run` process. It submits the prompt with `prompt_async`. By default it waits briefly for assistant output so the Web UI can show the agent response, but that wait is bounded by `outputTimeoutMs`.
 
 ## Options
 
@@ -60,11 +60,14 @@ passwordEnv           // env var for server password; default OPENCODE_SERVER_PA
 headers               // extra HTTP headers
 systemPrompt          // context instructions sent as opencode message system field
 promptTemplate(event) // optional function returning the complete prompt
-waitForCompletion     // optional; false by default to avoid blocking Brainstem
+waitForCompletion     // optional; false by default; true treats timeout as a failure
+captureOutput         // optional; true by default; waits up to outputTimeoutMs and logs assistant text
+outputTimeoutMs       // optional output capture timeout; defaults to timeoutMs or 2 minutes
 timeoutMs             // optional request/status-wait timeout
-statusPollIntervalMs  // status poll interval when waitForCompletion is true; default 1000
-initialStatusDelayMs  // first status poll delay when waitForCompletion is true; default 1000
+statusPollIntervalMs  // status poll interval when waiting; default 1000
+initialStatusDelayMs  // first status poll delay when waiting; default 1000
 eventLogLimit         // max streamed opencode SSE events to log; default 200
+outputLogMaxChars     // max assistant output chars per log; default 4000
 permission            // optional opencode session permission config
 ```
 
@@ -85,6 +88,9 @@ The plugin logs:
 - `opencode api runner started`
 - `opencode session created`
 - `opencode api event` for streamed opencode SSE events
+- `opencode assistant output delta` for streamed assistant text chunks when available
+- `opencode assistant output` with the final assistant text found in session messages
+- `opencode assistant output unavailable` when OpenCode completes/returns without text parts
 - `opencode api runner completed`
 - API errors as destination failures
 
@@ -92,4 +98,4 @@ When runtime telemetry is enabled, these logs appear under the OpenCode destinat
 
 ## Failure behavior
 
-A non-zero opencode exit code throws from the destination. By default Brainstem logs destination failures but does not block input checkpoints. Set `runtime.destinations.blockInputOnFailure: true` only if you want agent-runner failure to prevent input checkpoint commits.
+OpenCode API errors throw from the destination. By default Brainstem logs destination failures but does not block input checkpoints. Set `runtime.destinations.blockInputOnFailure: true` only if you want agent-runner failure to prevent input checkpoint commits.

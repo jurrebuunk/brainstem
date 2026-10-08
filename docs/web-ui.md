@@ -1,8 +1,8 @@
 # Web UI
 
-Brainstem includes a minimal read-only Web UI under `web/`.
+Brainstem includes a minimal Web UI under `web/`.
 
-The Web UI is intentionally separate from the headless runtime. It does not run the core, edit config, or own plugin state. It receives runtime telemetry and output envelopes over HTTP and renders a live React Flow graph.
+The Web UI is intentionally separate from the headless runtime. It does not run the core or own plugin state. It receives runtime telemetry and output envelopes over HTTP, renders a live React Flow graph, stores simple stats in a local SQLite database, and includes a small config editor for `brainstem.config.mjs`.
 
 ## Run
 
@@ -52,6 +52,12 @@ It shows:
 
 Click a node to open a modal with recent events for that node. Select a row in the event table to inspect the full JSON event/envelope.
 
+The sidebar has three pages:
+
+- **Flow** — live inputs → core → destinations graph. Core edge handles are stacked vertically to avoid line congestion.
+- **Stats** — persisted counters and small six-hour charts for polls, decisions, outputs, and errors.
+- **Config** — a syntax-highlighted editor for `brainstem.config.mjs`; saves are checked with `node --check` before writing.
+
 ## Connection model
 
 Brainstem sends structured telemetry to the Web UI:
@@ -71,10 +77,15 @@ The Web UI exposes:
 POST /api/events   ingest telemetry and output events
 GET  /api/events   current in-memory event buffer
 GET  /api/stream   Server-Sent Events stream for browsers
+GET  /api/stats    persistent stats counters and time series
+GET  /api/config   read brainstem.config.mjs
+PUT  /api/config   syntax-check and write brainstem.config.mjs
 GET  /api/health   health check
 ```
 
 The Web UI stores events in memory only. Restarting the Web UI clears its current event buffer, but Brainstem emits periodic `brainstem.snapshot` events so the graph can repopulate while the runtime is running.
+
+Stats are persisted in SQLite at `data/web-stats.sqlite` by default. Override with `WEB_STATS_DB=/path/to/web-stats.sqlite`. Override the editable config path with `BRAINSTEM_CONFIG=/path/to/brainstem.config.mjs`.
 
 ## HTTP JSON output
 

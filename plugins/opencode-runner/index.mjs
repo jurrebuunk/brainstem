@@ -42,12 +42,15 @@ export default defineDestinationPlugin({
             ctx
           );
 
-          const completion = config.waitForCompletion
+          const completion = config.waitForCompletion || config.captureOutput
             ? await waitForSessionIdle(config, session.id, ctx)
+                .catch(error => handleCompletionWaitError(config, ctx, error))
             : { skipped: true };
 
           const messages = await getMessages(config, session.id, ctx)
             .catch(error => ({ error: error.message }));
+
+          logAssistantOutput(ctx, config, session.id, messages);
 
           ctx.logger.info?.(
             "opencode api runner completed",
@@ -94,6 +97,9 @@ function normalizeConfig(config) {
     headers: config.headers ?? {},
     timeoutMs: config.timeoutMs ?? null,
     waitForCompletion: config.waitForCompletion ?? false,
+    captureOutput: config.captureOutput ?? config.logOutput ?? true,
+    outputTimeoutMs: config.outputTimeoutMs ?? config.timeoutMs ?? 2 * 60 * 1000,
+    outputLogMaxChars: config.outputLogMaxChars ?? 4000,
     statusPollIntervalMs: config.statusPollIntervalMs ?? 1000,
     initialStatusDelayMs: config.initialStatusDelayMs ?? 1000,
     eventLogLimit: config.eventLogLimit ?? 200
@@ -157,7 +163,7 @@ async function sendPrompt(config, sessionId, prompt, ctx) {
 async function waitForSessionIdle(config, sessionId, ctx) {
   const signal = timeoutSignal(
     ctx.signal,
-    config.timeoutMs
+    config.outputTimeoutMs
   );
 
   try {
@@ -206,6 +212,8 @@ async function getMessages(config, sessionId, ctx) {
 function streamEvents(config, ctx, sessionId) {
   const controller = new AbortController();
   const relayAbort = () => controller.abort();
+  const messageRoles = new Map();
+  const partText = new Map();
   let count = 0;
 
   ctx.signal?.addEventListener(
@@ -242,11 +250,14 @@ function streamEvents(config, ctx, sessionId) {
 
         if (
           data &&
-          typeof data === "object" &&
-          data.sessionID &&
-          data.sessionID !== sessionId
+          typeof data === "object"
         ) {
-          continue;
+          const dataSessionId = getEventSessionId(data);
+          if (dataSessionId && dataSessionId !== sessionId) {
+            continue;
+          }
+
+          logAssistantOutputEvent(ctx, config, sessionId, data, messageRoles, partText);
         }
 
         ctx.logger.debug?.(
@@ -432,6 +443,115 @@ function timeoutSignal(parentSignal, timeoutMs) {
       parentSignal?.removeEventListener("abort", abort);
     }
   });
+}
+
+function handleCompletionWaitError(config, ctx, error) {
+  if (isAbortError(error) && !ctx.signal?.aborted && !config.waitForCompletion) {
+    return {
+      status: "timeout",
+      timeoutMs: config.outputTimeoutMs,
+      message: "stopped waiting for agent output; the OpenCode session may still continue"
+    };
+  }
+
+  throw error;
+}
+
+function logAssistantOutputEvent(ctx, config, sessionId, data, messageRoles, partText) {
+  const info = data.properties?.info ?? data.info;
+  if (info?.id && info.role) {
+    messageRoles.set(info.id, info.role);
+  }
+
+  const part = data.properties?.part ?? data.part;
+  if (!part || part.type !== "text" || typeof part.text !== "string") {
+    return;
+  }
+
+  const messageId = part.messageID ?? part.messageId;
+  if (!messageId || messageRoles.get(messageId) !== "assistant") {
+    return;
+  }
+
+  const partId = part.id ?? messageId;
+  const previous = partText.get(partId) ?? "";
+  const current = part.text;
+  const delta = current.startsWith(previous)
+    ? current.slice(previous.length)
+    : current;
+
+  partText.set(partId, current);
+
+  if (!delta.trim()) {
+    return;
+  }
+
+  ctx.logger.info?.(
+    "opencode assistant output delta",
+    {
+      sessionId,
+      messageId,
+      partId,
+      text: truncate(delta, config.outputLogMaxChars),
+      truncated: delta.length > config.outputLogMaxChars
+    }
+  );
+}
+
+function logAssistantOutput(ctx, config, sessionId, messages) {
+  const output = extractAssistantOutput(messages);
+
+  if (!output?.text) {
+    ctx.logger.info?.(
+      "opencode assistant output unavailable",
+      {
+        sessionId,
+        reason: Array.isArray(messages)
+          ? "no assistant text parts found"
+          : messages?.error ?? "messages unavailable"
+      }
+    );
+    return;
+  }
+
+  ctx.logger.info?.(
+    "opencode assistant output",
+    {
+      sessionId,
+      messageId: output.messageId,
+      text: truncate(output.text, config.outputLogMaxChars),
+      truncated: output.text.length > config.outputLogMaxChars
+    }
+  );
+}
+
+function extractAssistantOutput(messages) {
+  if (!Array.isArray(messages)) return null;
+
+  const assistantMessages = messages.filter(message => message.info?.role === "assistant");
+  const message = assistantMessages.at(-1);
+  if (!message) return null;
+
+  const text = message.parts
+    ?.filter(part => part.type === "text" && typeof part.text === "string")
+    .map(part => part.text)
+    .join("\n")
+    .trim();
+
+  return text
+    ? {
+        messageId: message.info?.id ?? null,
+        text
+      }
+    : null;
+}
+
+function getEventSessionId(data) {
+  return data.sessionID ?? data.sessionId ?? data.properties?.sessionID ?? data.properties?.sessionId ?? null;
+}
+
+function isAbortError(error) {
+  return error?.name === "AbortError";
 }
 
 function sessionIsBusy(status, sessionId) {

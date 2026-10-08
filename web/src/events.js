@@ -123,6 +123,17 @@ export function buildGraph(events, now = Date.now()) {
   const inputItems = Array.from(inputs.values());
   const destinationItems = Array.from(destinations.values());
   const rows = Math.max(inputItems.length, destinationItems.length, 1);
+  const rowGap = 155;
+  const coreHeight = Math.max(130, rows * 42 + 70);
+  const coreY = ((rows - 1) * rowGap) / 2 - coreHeight / 2 + 65;
+  const inputHandles = inputItems.map((input, index) => ({
+    id: `in-${safeHandleId(input.id)}`,
+    top: handleTop(index, inputItems.length)
+  }));
+  const outputHandles = destinationItems.map((destination, index) => ({
+    id: `out-${safeHandleId(destination.id)}`,
+    top: handleTop(index, destinationItems.length)
+  }));
 
   return {
     nodes: [
@@ -138,7 +149,7 @@ export function buildGraph(events, now = Date.now()) {
           last: relativeTime(stats.get(`input:${input.id}`)?.lastAt)
         }),
         x: 0,
-        y: index * 155,
+        y: index * rowGap,
         active: isActive(nodeActivity.get(`input:${input.id}`), now)
       })),
       graphNode({
@@ -153,8 +164,11 @@ export function buildGraph(events, now = Date.now()) {
           last: relativeTime(stats.get("core")?.lastAt)
         }),
         x: 455,
-        y: (rows - 1) * 77.5,
-        active: isActive(nodeActivity.get("core"), now)
+        y: coreY,
+        active: isActive(nodeActivity.get("core"), now),
+        height: coreHeight,
+        inputHandles,
+        outputHandles
       }),
       ...destinationItems.map((destination, index) => graphNode({
         id: `destination:${destination.id}`,
@@ -168,7 +182,7 @@ export function buildGraph(events, now = Date.now()) {
           last: relativeTime(stats.get(`destination:${destination.id}`)?.lastAt)
         }),
         x: 910,
-        y: index * 155,
+        y: index * rowGap,
         active: isActive(nodeActivity.get(`destination:${destination.id}`), now)
       }))
     ],
@@ -176,14 +190,18 @@ export function buildGraph(events, now = Date.now()) {
       ...inputItems.map(input => graphEdge({
         id: `edge-input-${input.id}`,
         source: `input:${input.id}`,
+        sourceHandle: "out",
         target: "core",
+        targetHandle: `in-${safeHandleId(input.id)}`,
         active: isActive(edgeActivity.get(`edge-input-${input.id}`), now),
         color: "#3b82f6"
       })),
       ...destinationItems.map(destination => graphEdge({
         id: `edge-destination-${destination.id}`,
         source: "core",
+        sourceHandle: `out-${safeHandleId(destination.id)}`,
         target: `destination:${destination.id}`,
+        targetHandle: "in",
         active: isActive(edgeActivity.get(`edge-destination-${destination.id}`), now),
         color: "#22c55e"
       }))
@@ -265,12 +283,49 @@ function collectActivity(event, timestamp, edgeActivity, nodeStatus) {
   }
 }
 
-function graphNode({ id, nodeType, label, subtitle, status, meta, x, y, active }) {
-  return { id, type: "brainstemNode", position: { x, y }, data: { label, subtitle, status, meta, nodeType, active } };
+function graphNode({
+  id,
+  nodeType,
+  label,
+  subtitle,
+  status,
+  meta,
+  x,
+  y,
+  active,
+  height = null,
+  inputHandles = [],
+  outputHandles = []
+}) {
+  return {
+    id,
+    type: "brainstemNode",
+    position: { x, y },
+    data: { label, subtitle, status, meta, nodeType, active, height, inputHandles, outputHandles }
+  };
 }
 
-function graphEdge({ id, source, target, active, color }) {
-  return { id, source, target, animated: active, type: "smoothstep", className: active ? "edge-active" : "", style: { stroke: active ? color : "#4b5563", strokeWidth: active ? 2.5 : 1.5 } };
+function graphEdge({ id, source, sourceHandle, target, targetHandle, active, color }) {
+  return {
+    id,
+    source,
+    sourceHandle,
+    target,
+    targetHandle,
+    animated: active,
+    type: "smoothstep",
+    className: active ? "edge-active" : "",
+    style: { stroke: active ? color : "#4b5563", strokeWidth: active ? 2.5 : 1.5 }
+  };
+}
+
+function handleTop(index, count) {
+  if (count <= 1) return 50;
+  return 18 + (index * 64) / (count - 1);
+}
+
+function safeHandleId(value) {
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
 function touch(stats, nodeId, event, timestamp) {

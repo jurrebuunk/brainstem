@@ -656,11 +656,29 @@ test("opencode runner destination calls server API and logs events", async () =>
       return jsonResponse([
         {
           info: {
+            id: "msg_user",
+            role: "user",
+            sessionID: "ses_test"
+          },
+          parts: [
+            {
+              type: "text",
+              text: "Fix bug"
+            }
+          ]
+        },
+        {
+          info: {
             id: "msg_test",
             role: "assistant",
             sessionID: "ses_test"
           },
-          parts: []
+          parts: [
+            {
+              type: "text",
+              text: "I would inspect the failing test and patch the runner."
+            }
+          ]
         }
       ]);
     }
@@ -724,6 +742,12 @@ test("opencode runner destination calls server API and logs events", async () =>
   );
   assert.ok(
     logs.some(log => log.message === "opencode api event")
+  );
+  assert.ok(
+    logs.some(log =>
+      log.message === "opencode assistant output" &&
+      log.fields.text === "I would inspect the failing test and patch the runner."
+    )
   );
   assert.ok(
     logs.some(log => log.message === "opencode api runner completed")
