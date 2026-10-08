@@ -69,76 +69,67 @@ table {
   border-radius: 8px;
   background: #282828;
   color: #e5e5e5;
-  padding: 38px 14px 12px;
+  padding: 32px 14px 12px;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
 }
 
-.node-card::before {
-  content: "";
+.node-header {
   position: absolute;
   top: 0;
   right: 0;
   left: 0;
-  height: 26px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   border-bottom: 1px solid rgba(0, 0, 0, 0.18);
-  background: #525252;
+  padding: 0 9px;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
-.node-card::after {
-  content: "";
-  position: absolute;
-  top: 9px;
-  left: 10px;
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: 14px 0 0 rgba(255, 255, 255, 0.45), 28px 0 0 rgba(255, 255, 255, 0.28);
-}
-
-.node-input::before {
+.node-input .node-header {
   background: #2563eb;
 }
 
-.node-core::before {
+.node-core .node-header {
   background: #7c3aed;
 }
 
-.node-destination::before {
+.node-destination .node-header {
   background: #059669;
 }
 
-.node-card.is-active {
-  border-color: #f59e0b;
+.node-input.is-active {
+  border-color: #60a5fa;
 }
 
-.node-card.is-active::before {
-  background: #d97706;
+.node-input.is-active .node-header {
+  background: #1d4ed8;
+}
+
+.node-core.is-active {
+  border-color: #a78bfa;
+}
+
+.node-core.is-active .node-header {
+  background: #6d28d9;
+}
+
+.node-destination.is-active {
+  border-color: #34d399;
+}
+
+.node-destination.is-active .node-header {
+  background: #047857;
 }
 
 .react-flow__node.selected .node-card {
   outline: 2px solid #e5e7eb;
   outline-offset: 2px;
-}
-
-.node-topline {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.node-type,
-.node-state {
-  color: #a3a3a3;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.node-card.is-active .node-state {
-  color: #fbbf24;
 }
 
 .node-title {

@@ -126,9 +126,9 @@ function BrainstemNode({ data }) {
         <Handle type="target" position={Position.Left} className="node-handle" />
       )}
 
-      <div className="node-topline">
-        <span className="node-type">{data.nodeType}</span>
-        <span className="node-state">{data.active ? "live" : "idle"}</span>
+      <div className="node-header">
+        <span>{data.nodeType}</span>
+        <span>{data.active ? "live" : "idle"}</span>
       </div>
 
       <div className="node-title">{data.label}</div>
