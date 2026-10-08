@@ -413,11 +413,13 @@ function ConfigPage() {
   return (
     <div className="panel-page config-page">
       <PageHeader title="Configuration" subtitle={`${config.path || "brainstem.config.mjs"} · save writes the real file; restart Brainstem to reload it`} />
-      <div className="config-toolbar">
-        <button onClick={save} disabled={saving || draft === config.content}>
-          {saving ? "Saving…" : "Save config"}
-        </button>
-      </div>
+      <button
+        className="config-save"
+        onClick={save}
+        disabled={saving || draft === config.content}
+      >
+        {saving ? "Saving…" : "Save config"}
+      </button>
       <CodeEditor value={draft} onChange={setDraft} />
     </div>
   );

@@ -271,10 +271,36 @@ button { cursor: pointer; }
 }
 
 .node-handle {
-  width: 9px;
-  height: 9px;
-  border: 1px solid #1f1f1f;
-  background: #d4d4d4;
+  width: 11px;
+  height: 11px;
+  border: 2px solid #1f1f1f;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08), 0 0 14px currentColor;
+}
+
+.node-input .node-handle {
+  background: #38bdf8;
+  color: #38bdf8;
+}
+
+.node-core .node-handle[type="target"],
+.node-core .node-handle.react-flow__handle-left {
+  background: #60a5fa;
+  color: #60a5fa;
+}
+
+.node-core .node-handle[type="source"],
+.node-core .node-handle.react-flow__handle-right {
+  background: #34d399;
+  color: #34d399;
+}
+
+.node-destination .node-handle {
+  background: #6ee7b7;
+  color: #6ee7b7;
+}
+
+.node-card.is-active .node-handle {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.16), 0 0 18px currentColor;
 }
 
 .stacked-handle { transform: translateY(-50%); }
@@ -313,7 +339,6 @@ button { cursor: pointer; }
 
 .stat-card,
 .chart-card,
-.config-toolbar,
 .code-editor {
   border: 1px solid #3b3b3b;
   border-radius: 10px;
@@ -381,16 +406,11 @@ button { cursor: pointer; }
   opacity: 0.9;
 }
 
-.config-toolbar {
-  display: flex;
+.config-save {
+  display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
+  justify-content: center;
   margin-bottom: 12px;
-  padding: 10px 12px;
-}
-
-.config-toolbar button {
   border: 1px solid #3f3f46;
   border-radius: 6px;
   background: #2f5f4f;
@@ -398,7 +418,7 @@ button { cursor: pointer; }
   padding: 7px 12px;
 }
 
-.config-toolbar button:disabled {
+.config-save:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
