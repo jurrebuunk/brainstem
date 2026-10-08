@@ -1,24 +1,25 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ReactFlow,
   Background,
   Controls,
-  MiniMap,
+  Handle,
+  Position,
+  ReactFlow,
   useEdgesState,
   useNodesState
 } from "@xyflow/react";
 import {
   buildGraph,
   eventId,
-  eventLabel,
+  eventLevel,
   eventNodeIds,
-  eventTimestamp
+  eventSummary,
+  eventTimestamp,
+  eventTitle
 } from "./events.js";
 
 const nodeTypes = {
-  input: NodeCard,
-  core: NodeCard,
-  destination: NodeCard
+  brainstemNode: BrainstemNode
 };
 
 export default function App() {
@@ -77,19 +78,20 @@ export default function App() {
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
-        nodeTypes={nodeTypes}
         fitView
+        minZoom={0.35}
+        maxZoom={1.4}
       >
-        <Background />
-        <MiniMap />
+        <Background color="#343a40" gap={22} size={1} />
         <Controls />
       </ReactFlow>
 
       {selectedNode && (
-        <NodePanel
+        <NodeModal
           node={selectedNode}
           events={nodeEvents}
           onClose={() => setSelectedNode(null)}
@@ -99,56 +101,121 @@ export default function App() {
   );
 }
 
-function NodeCard({ data }) {
+function BrainstemNode({ data }) {
+  const isInput = data.nodeType === "input";
+  const isCore = data.nodeType === "core";
+  const isDestination = data.nodeType === "destination";
+
   return (
-    <div className={`node-card node-card-${data.type}${data.active ? " node-card-active" : ""}`}>
-      <div className="node-type">{data.type}</div>
+    <div className={`node-card node-${data.nodeType}${data.active ? " is-active" : ""}`}>
+      {(isCore || isDestination) && (
+        <Handle type="target" position={Position.Left} className="node-handle" />
+      )}
+
+      <div className="node-topline">
+        <span className="node-type">{data.nodeType}</span>
+        <span className="node-state">{data.active ? "live" : "idle"}</span>
+      </div>
+
       <div className="node-title">{data.label}</div>
       <div className="node-subtitle">{data.subtitle}</div>
+
+      <div className="node-meta">
+        {data.meta.map(item => (
+          <span key={item.label}>
+            <strong>{item.value}</strong>
+            {item.label}
+          </span>
+        ))}
+      </div>
+
+      {(isInput || isCore) && (
+        <Handle type="source" position={Position.Right} className="node-handle" />
+      )}
     </div>
   );
 }
 
-function NodePanel({ node, events, onClose }) {
-  const [expanded, setExpanded] = useState(null);
+function NodeModal({ node, events, onClose }) {
+  const [selectedEventId, setSelectedEventId] = useState(null);
+  const selectedEvent = useMemo(() => {
+    return events.find(({ event, index }) =>
+      eventId(event, index) === selectedEventId
+    ) ?? events[0] ?? null;
+  }, [events, selectedEventId]);
+
+  useEffect(() => {
+    setSelectedEventId(null);
+  }, [node.id]);
 
   return (
-    <aside className="panel">
-      <button className="panel-close" onClick={onClose}>×</button>
-      <h2>{node.data.label}</h2>
-      <p>{node.data.subtitle}</p>
+    <div className="modal-backdrop" onClick={onClose}>
+      <section className="modal" onClick={event => event.stopPropagation()}>
+        <header className="modal-header">
+          <div>
+            <h2>{node.data.label}</h2>
+            <p>{node.data.subtitle}</p>
+          </div>
+          <button className="modal-close" onClick={onClose}>×</button>
+        </header>
 
-      <div className="event-list">
-        {events.length === 0 && (
-          <div className="empty">No events for this node yet.</div>
-        )}
+        <div className="modal-body">
+          <div className="log-table-wrap">
+            <table className="log-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Level</th>
+                  <th>Event</th>
+                  <th>Summary</th>
+                </tr>
+              </thead>
+              <tbody>
+                {events.map(({ event, index }) => {
+                  const id = eventId(event, index);
+                  const active = selectedEvent && eventId(selectedEvent.event, selectedEvent.index) === id;
 
-        {events.map(({ event, index }) => {
-          const id = eventId(event, index);
-          const open = expanded === id;
+                  return (
+                    <tr
+                      key={id}
+                      className={active ? "selected" : ""}
+                      onClick={() => setSelectedEventId(id)}
+                    >
+                      <td>{formatTime(eventTimestamp(event))}</td>
+                      <td><span className={`level level-${eventLevel(event)}`}>{eventLevel(event)}</span></td>
+                      <td>{eventTitle(event)}</td>
+                      <td>{eventSummary(event)}</td>
+                    </tr>
+                  );
+                })}
 
-          return (
-            <article className="event" key={id}>
-              <button
-                className="event-summary"
-                onClick={() => setExpanded(open ? null : id)}
-              >
-                <span className={`kind ${kindClass(event.kind)}`}>{event.kind}</span>
-                <span className="label">{eventLabel(event)}</span>
-                <time>{eventTimestamp(event)}</time>
-              </button>
+                {events.length === 0 && (
+                  <tr>
+                    <td colSpan="4" className="empty-cell">No events for this node yet.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
 
-              {open && (
-                <pre>{JSON.stringify(event, null, 2)}</pre>
-              )}
-            </article>
-          );
-        })}
-      </div>
-    </aside>
+          <aside className="event-detail">
+            <h3>Event details</h3>
+            {selectedEvent ? (
+              <pre>{JSON.stringify(selectedEvent.event, null, 2)}</pre>
+            ) : (
+              <div className="empty-detail">Select a log line.</div>
+            )}
+          </aside>
+        </div>
+      </section>
+    </div>
   );
 }
 
-function kindClass(kind) {
-  return kind.replace(/[^a-z0-9]/gi, "-").toLowerCase();
+function formatTime(value) {
+  return new Date(value).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
 }
