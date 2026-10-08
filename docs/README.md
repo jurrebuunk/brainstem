@@ -28,6 +28,7 @@ Built-in plugin pages:
 - [Log Decisions destination](plugins/log-decisions.md)
 - [Matrix destination](matrix-destination.md)
 - [HTTP JSON destination](plugins/http-json.md)
+- [OpenCode Runner destination](plugins/opencode-runner.md)
 
 ## Maintainer docs
 

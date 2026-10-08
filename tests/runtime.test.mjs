@@ -12,6 +12,7 @@ import { BrainstemRuntime } from "../src/runtime/runtime.mjs";
 import httpHealthPlugin from "../plugins/http-health/index.mjs";
 import githubPlugin from "../plugins/github-issues/index.mjs";
 import httpJsonPlugin from "../plugins/http-json/index.mjs";
+import opencodeRunnerPlugin from "../plugins/opencode-runner/index.mjs";
 import matrixPlugin from "../plugins/matrix/index.mjs";
 import { resetNotificationState } from "../plugins/matrix/notify.mjs";
 import { evaluateCertificate } from "../plugins/tls-certificate/check.mjs";
@@ -616,6 +617,69 @@ test("http json destination posts output envelope", async () => {
   assert.equal(body.payload.input.id, "api-health");
 });
 
+test("opencode runner destination runs until completion and logs events", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "brainstem-opencode-runner-"));
+  const fakePath = join(dir, "fake-opencode.mjs");
+  const logs = [];
+
+  await writeFile(
+    fakePath,
+    `
+console.log(JSON.stringify({ type: "session", sessionID: "test-session" }));
+console.log(JSON.stringify({ type: "message", role: "assistant", text: "done" }));
+`
+  );
+
+  await opencodeRunnerPlugin.destinations.default.handle(
+    {
+      config: {
+        executable: process.execPath,
+        baseArgs: [fakePath],
+        systemPrompt: "Use the test instructions.",
+        timeoutMs: 5_000
+      },
+      signal: new AbortController().signal,
+      logger: captureLogger(logs)
+    },
+    {
+      decision: {
+        version: "1",
+        kind: "decision",
+        payload: {
+          observation_id: "github:repo:issue:1",
+          decision: "queue",
+          route: "coding"
+        }
+      },
+      observation: {
+        version: "1",
+        kind: "observation",
+        payload: {
+          id: "github:repo:issue:1",
+          source: {
+            type: "github",
+            name: "repo"
+          },
+          type: "issue",
+          state: "open",
+          title: "Fix bug",
+          message: "Something is broken"
+        }
+      }
+    }
+  );
+
+  assert.ok(
+    logs.some(log => log.message === "opencode runner started")
+  );
+  assert.ok(
+    logs.some(log => log.message === "opencode event")
+  );
+  assert.ok(
+    logs.some(log => log.message === "opencode runner completed")
+  );
+});
+
 test("matrix destination sends room messages", async () => {
   resetNotificationState();
 
@@ -1185,6 +1249,23 @@ function githubIssue({
     user: {
       login: "alice"
     }
+  };
+}
+
+function captureLogger(logs) {
+  const push = level => (message, fields) => {
+    logs.push({
+      level,
+      message,
+      fields
+    });
+  };
+
+  return {
+    debug: push("debug"),
+    info: push("info"),
+    warn: push("warn"),
+    error: push("error")
   };
 }
 

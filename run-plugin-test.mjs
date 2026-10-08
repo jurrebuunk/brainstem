@@ -12,7 +12,8 @@ const inputPlugins = [
 const destinationPlugins = [
   "./plugins/log-decisions/index.mjs",
   "./plugins/matrix/index.mjs",
-  "./plugins/http-json/index.mjs"
+  "./plugins/http-json/index.mjs",
+  "./plugins/opencode-runner/index.mjs"
 ];
 
 for (const specifier of inputPlugins) {
