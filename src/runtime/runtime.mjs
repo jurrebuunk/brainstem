@@ -464,6 +464,48 @@ export class BrainstemRuntime {
     };
   }
 
+  #scopedPluginLogger(scope) {
+    const log = (level, message, fields) => {
+      const normalizedFields = telemetryValue(fields ?? {});
+
+      this.logger[level]?.(
+        message,
+        {
+          ...scope,
+          ...(
+            normalizedFields &&
+            typeof normalizedFields === "object" &&
+            !Array.isArray(normalizedFields)
+              ? normalizedFields
+              : { value: normalizedFields }
+          )
+        }
+      );
+
+      this.#emitTelemetry("brainstem.plugin.log", {
+        level,
+        message: String(message),
+        ...scope,
+        fields: normalizedFields
+      });
+    };
+
+    return {
+      debug(message, fields) {
+        log("debug", message, fields);
+      },
+      info(message, fields) {
+        log("info", message, fields);
+      },
+      warn(message, fields) {
+        log("warn", message, fields);
+      },
+      error(message, fields) {
+        log("error", message, fields);
+      }
+    };
+  }
+
   #emitTelemetry(kind, payload = {}) {
     this.telemetry?.send({
       version: "1",
@@ -610,7 +652,12 @@ export class BrainstemRuntime {
       createInputContext({
         config: entry.config ?? {},
         signal,
-        logger: this.logger,
+        logger: this.#scopedPluginLogger({
+          scope: "input",
+          id: checkpointKey,
+          plugin: plugin.name,
+          input: inputName
+        }),
         checkpoint: checkpoint.api
       });
 
@@ -818,7 +865,11 @@ export class BrainstemRuntime {
           createDestinationContext({
             config: destinationEntry.entry.config ?? {},
             signal: event.signal,
-            logger: this.logger
+            logger: this.#scopedPluginLogger({
+              scope: "destination",
+              plugin: destinationEntry.plugin.name,
+              destination: destinationEntry.destinationName
+            })
           });
 
         const destinationInfo = {
@@ -1074,6 +1125,33 @@ function storeInfo(store) {
     type: store.constructor?.name ?? "unknown",
     path: store.path ?? null
   };
+}
+
+function telemetryValue(value) {
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      code: value.code,
+      status: value.status,
+      stack: value.stack
+    };
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(telemetryValue);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        telemetryValue(item)
+      ])
+    );
+  }
+
+  return value;
 }
 
 function createTelemetrySink(config) {

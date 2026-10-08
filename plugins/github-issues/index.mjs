@@ -31,6 +31,7 @@ export default defineInputPlugin({
           );
 
         const observations = [];
+        let emitted = 0;
 
         for (const issue of issues) {
           if (issue.pull_request) {
@@ -56,9 +57,20 @@ export default defineInputPlugin({
             });
 
           if (result.emit) {
+            emitted += 1;
             yield observation;
           }
         }
+
+        ctx.logger?.debug?.(
+          "github issues poll result",
+          {
+            repo: config.repo,
+            fetched: issues.length,
+            observations: observations.length,
+            emitted
+          }
+        );
 
         ctx.checkpoint?.defer(
           nextIssueCheckpoint({

@@ -27,6 +27,9 @@ export function eventSummary(event) {
   if (event.kind === "brainstem.snapshot") {
     return `${p.inputs?.length ?? 0} inputs, ${p.destinations?.length ?? 0} destinations`;
   }
+  if (event.kind === "brainstem.plugin.log") {
+    return `${p.scope}:${p.plugin}${p.id ? `/${p.id}` : ""} ${p.message}`;
+  }
   if (event.kind === "brainstem.input.poll.started") return `${p.id} poll started`;
   if (event.kind === "brainstem.input.poll.completed") return `${p.id} completed (${p.observations ?? 0} observations)`;
   if (event.kind === "brainstem.input.observation") return `${p.observation?.payload?.id ?? p.id} emitted by ${p.id}`;
@@ -39,6 +42,7 @@ export function eventSummary(event) {
 export function eventLevel(event) {
   if (event.kind === "brainstem.log") return event.payload.level ?? "info";
   if (event.kind === "brainstem.output") return "output";
+  if (event.kind === "brainstem.plugin.log") return event.payload.level ?? "info";
   if (event.kind.includes("failed")) return "error";
   return "event";
 }
@@ -58,6 +62,11 @@ export function eventNodeIds(event) {
     ids.push(`input:${p.input.id ?? p.input.plugin}`);
     ids.push("core");
     ids.push(`destination:${p.destination.plugin}:${p.destination.name}`);
+  }
+
+  if (event.kind === "brainstem.plugin.log") {
+    if (p.scope === "input" && p.id) ids.push(`input:${p.id}`);
+    if (p.scope === "destination") ids.push(`destination:${p.plugin}:${p.destination}`);
   }
 
   if (
@@ -196,6 +205,15 @@ function collectTopology(event, inputs, destinations) {
   if (event.kind === "brainstem.core.decision" && p.inputId) {
     inputs.set(p.inputId, { id: p.inputId, plugin: p.inputPlugin, input: p.inputName });
   }
+  if (event.kind === "brainstem.plugin.log") {
+    if (p.scope === "input" && p.id) {
+      inputs.set(p.id, { id: p.id, plugin: p.plugin, input: p.input });
+    }
+    if (p.scope === "destination") {
+      const id = `${p.plugin}:${p.destination}`;
+      destinations.set(id, { id, plugin: p.plugin, destination: p.destination });
+    }
+  }
   if (event.kind.startsWith("brainstem.destination.")) {
     const id = `${p.plugin}:${p.destination}`;
     destinations.set(id, { id, plugin: p.plugin, destination: p.destination });
@@ -266,6 +284,7 @@ function touch(stats, nodeId, event, timestamp) {
   if (event.kind === "brainstem.input.observation") current.outputs += 1;
   if (event.kind === "brainstem.core.decision") current.decisions += 1;
   if (event.kind === "brainstem.output") current.outputs += 1;
+  if (event.kind === "brainstem.plugin.log" && event.payload.level === "error") current.errors += 1;
   if (event.kind.includes("failed")) current.errors += 1;
   current.lastAt = timestamp;
   stats.set(nodeId, current);

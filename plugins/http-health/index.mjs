@@ -40,6 +40,18 @@ export default defineInputPlugin({
           state.checks[check.id] =
             threshold.next;
 
+          ctx.logger?.debug?.(
+            "http health check result",
+            {
+              id: check.id,
+              name: check.name,
+              healthy: result.healthy,
+              status: result.status,
+              emitted: threshold.emit,
+              stateChanged: threshold.stateChanged
+            }
+          );
+
           if (threshold.emit) {
             yield toObservation(
               ctx,

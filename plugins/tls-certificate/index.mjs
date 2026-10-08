@@ -44,6 +44,17 @@ export default defineInputPlugin({
           state.targets[target.id] =
             emission.next;
 
+          ctx.logger?.debug?.(
+            "tls certificate check result",
+            {
+              id: target.id,
+              name: target.name,
+              state: result.state,
+              daysRemaining: result.daysRemaining,
+              emitted: emission.emit
+            }
+          );
+
           if (emission.emit) {
             yield toObservation(
               ctx,
