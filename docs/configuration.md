@@ -120,6 +120,11 @@ runtime: {
     factor: 2
   },
 
+  destinations: {
+    // default false: output failures do not block input checkpoints
+    blockInputOnFailure: false
+  },
+
   laya: {
     cacheDir: "data/laya-cache"
     // or modelDir: "data/laya-model"
@@ -135,6 +140,8 @@ runtime: {
 Use `pretty` for local/Docker Compose logs and `json` when shipping logs to a collector.
 
 `runtime.startupRetry` controls retries while starting the core. This is useful because the first startup may download the Laya model bundle and can fail on temporary network/DNS timeouts.
+
+`runtime.destinations.blockInputOnFailure` defaults to `false`, so destination outages do not cause inputs to reprocess the same source items. Set it to `true` only if you want destination failure to prevent input checkpoint commits.
 
 `runtime.laya` is passed to `Laya.load()`. Useful options:
 

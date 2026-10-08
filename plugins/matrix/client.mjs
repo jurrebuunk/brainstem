@@ -19,6 +19,8 @@ export async function sendRoomMessage({
   );
 }
 
+const MAX_ERROR_BODY_LENGTH = 500;
+
 async function sendOnce({
   homeserver,
   roomId,
@@ -124,7 +126,7 @@ function matrixError(response, body) {
   catch {}
 
   const message =
-    parsed?.error ?? body;
+    parsed?.error ?? summarizeBody(body);
 
   const error = new Error(
     `Matrix send failed: ${response.status} ${response.statusText}${message ? ` - ${message}` : ""}`
@@ -139,6 +141,23 @@ function matrixError(response, body) {
   }
 
   return error;
+}
+
+function summarizeBody(body) {
+  if (!body) {
+    return "";
+  }
+
+  const text = body
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (text.length <= MAX_ERROR_BODY_LENGTH) {
+    return text;
+  }
+
+  return `${text.slice(0, MAX_ERROR_BODY_LENGTH)}…`;
 }
 
 function isRetryable(error) {

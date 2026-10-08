@@ -83,6 +83,22 @@ event.destination  // destination metadata
 
 Destination adapters should not change Brainstem decisions. They should only react to them.
 
+## Failure handling
+
+Destination failures are isolated from input checkpoints by default. If a destination fails, the runtime logs the error and continues; the input checkpoint may still advance. This keeps output outages, such as Matrix being down, from causing inputs to reprocess the same source item repeatedly.
+
+Destination plugins that need guaranteed delivery should persist their own work before returning, for example by writing to a queue or job table and processing it asynchronously.
+
+If you deliberately want destination failure to block input checkpoint commits, enable:
+
+```js
+runtime: {
+  destinations: {
+    blockInputOnFailure: true
+  }
+}
+```
+
 ## Multiple routed destinations
 
 The same destination adapter can be configured multiple times:

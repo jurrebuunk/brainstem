@@ -145,8 +145,8 @@ test("sqlite core records are reused after restart", async () => {
   assert.equal(secondCounter.count, 0);
 });
 
-test("destination failures fail the poll and do not commit checkpoint", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "brainstem-destination-failure-"));
+test("destination failures do not block input checkpoints by default", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "brainstem-destination-nonblocking-"));
   const pluginPath = join(dir, "checkpoint-plugin.mjs");
   const destinationPath = join(dir, "failing-destination.mjs");
   const checkpointPath = join(dir, "checkpoints.json");
@@ -160,6 +160,61 @@ test("destination failures fail the poll and do not commit checkpoint", async ()
       route: "coding"
     }),
     config: checkpointConfig(checkpointPath),
+    logger: silentLogger,
+    plugins: [
+      {
+        id: "checkpoint-test-input",
+        module: pluginPath,
+        retry: {
+          attempts: 1
+        }
+      }
+    ],
+    destinations: [
+      {
+        module: destinationPath,
+        decisions: ["queue"]
+      }
+    ]
+  });
+
+  await runtime.runOnce();
+
+  const saved = JSON.parse(
+    await readFile(checkpointPath, "utf8")
+  );
+
+  assert.deepEqual(saved, {
+    "checkpoint-test-input": {
+      count: 1
+    }
+  });
+});
+
+test("destination failures can block checkpoint commits when configured", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "brainstem-destination-blocking-"));
+  const pluginPath = join(dir, "checkpoint-plugin.mjs");
+  const destinationPath = join(dir, "failing-destination.mjs");
+  const checkpointPath = join(dir, "checkpoints.json");
+  const baseConfig = checkpointConfig(checkpointPath);
+
+  await writeFile(pluginPath, checkpointPluginSource());
+  await writeFile(destinationPath, failingDestinationPluginSource());
+
+  const runtime = new BrainstemRuntime({
+    brainstem: fakeBrainstem({
+      decision: "queue",
+      route: "coding"
+    }),
+    config: {
+      ...baseConfig,
+      runtime: {
+        ...baseConfig.runtime,
+        destinations: {
+          blockInputOnFailure: true
+        }
+      }
+    },
     logger: silentLogger,
     plugins: [
       {

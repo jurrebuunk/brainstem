@@ -417,6 +417,12 @@ export class BrainstemRuntime {
     };
   }
 
+  #destinationFailuresBlockInput() {
+    return this.config.runtime
+      ?.destinations
+      ?.blockInputOnFailure === true;
+  }
+
   #startupRetryConfig() {
     return normalizeRetry({
       ...DEFAULT_RETRY,
@@ -714,7 +720,10 @@ export class BrainstemRuntime {
       }
     }
 
-    if (failures.length > 0) {
+    if (
+      failures.length > 0 &&
+      this.#destinationFailuresBlockInput()
+    ) {
       throw new AggregateError(
         failures,
         `One or more destinations failed for observation '${observationPayload.id}'`
