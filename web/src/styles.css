@@ -278,26 +278,44 @@ button { cursor: pointer; }
 }
 
 .node-input .react-flow__handle.node-handle {
-  background: #38bdf8 !important;
-  color: #38bdf8;
+  background: #1e3a8a !important;
+  color: #1e3a8a;
 }
 
-.node-core .react-flow__handle.node-handle.react-flow__handle-left {
-  background: #60a5fa !important;
-  color: #60a5fa;
+.node-input.is-active .react-flow__handle.node-handle {
+  background: #0284c7 !important;
+  color: #0284c7;
 }
 
-.node-core .react-flow__handle.node-handle.react-flow__handle-right {
-  background: #34d399 !important;
-  color: #34d399;
+.node-core .react-flow__handle.node-handle {
+  background: #4c1d95 !important;
+  color: #4c1d95;
+}
+
+.node-core.is-active .react-flow__handle.node-handle {
+  background: #a855f7 !important;
+  color: #a855f7;
 }
 
 .node-destination .react-flow__handle.node-handle {
-  background: #6ee7b7 !important;
-  color: #6ee7b7;
+  background: #064e3b !important;
+  color: #064e3b;
 }
 
-.stacked-handle { transform: translateY(-50%); }
+.node-destination.is-active .react-flow__handle.node-handle {
+  background: #10b981 !important;
+  color: #10b981;
+}
+
+.node-core .react-flow__handle-left.stacked-handle {
+  left: 0 !important;
+  transform: translate(-55%, -50%);
+}
+
+.node-core .react-flow__handle-right.stacked-handle {
+  right: 0 !important;
+  transform: translate(55%, -50%);
+}
 
 .react-flow__edge-path { transition: stroke 180ms ease, stroke-width 180ms ease; }
 .react-flow__edge.edge-active .react-flow__edge-path { stroke-dasharray: 8 6; }
