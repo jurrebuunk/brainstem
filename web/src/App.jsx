@@ -1,4 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { EditorState } from "@codemirror/state";
+import { javascript } from "@codemirror/lang-javascript";
+import { oneDark } from "@codemirror/theme-one-dark";
+import { basicSetup, EditorView } from "codemirror";
 import {
   Background,
   BaseEdge,
@@ -435,7 +439,7 @@ function ConfigPage() {
 
   return (
     <div className="panel-page config-page">
-      <PageHeader title="Configuration" subtitle={config.path || "brainstem.config.mjs"} />
+      <PageHeader title="Configuration" subtitle={`${config.path || "brainstem.config.mjs"} · save writes the real file; restart Brainstem to reload it`} />
       <div className="config-toolbar">
         <span className={draft === config.content ? "clean" : "dirty"}>
           {draft === config.content ? "No changes" : "Unsaved changes"}
@@ -449,16 +453,59 @@ function ConfigPage() {
 }
 
 function CodeEditor({ value, onChange }) {
-  return (
-    <div className="code-editor">
-      <pre aria-hidden="true" dangerouslySetInnerHTML={{ __html: highlightJs(value) || " " }} />
-      <textarea
-        spellCheck="false"
-        value={value}
-        onChange={event => onChange(event.target.value)}
-      />
-    </div>
-  );
+  const containerRef = useRef(null);
+  const viewRef = useRef(null);
+  const onChangeRef = useRef(onChange);
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  useEffect(() => {
+    if (!containerRef.current || viewRef.current) return;
+
+    const state = EditorState.create({
+      doc: value,
+      extensions: [
+        basicSetup,
+        javascript({ jsx: true }),
+        oneDark,
+        EditorView.lineWrapping,
+        EditorView.updateListener.of(update => {
+          if (!update.docChanged) return;
+          onChangeRef.current(update.state.doc.toString());
+        })
+      ]
+    });
+
+    viewRef.current = new EditorView({
+      state,
+      parent: containerRef.current
+    });
+
+    return () => {
+      viewRef.current?.destroy();
+      viewRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+
+    const current = view.state.doc.toString();
+    if (current === value) return;
+
+    view.dispatch({
+      changes: {
+        from: 0,
+        to: current.length,
+        insert: value
+      }
+    });
+  }, [value]);
+
+  return <div className="code-editor" ref={containerRef} />;
 }
 
 function PageHeader({ title, subtitle }) {
@@ -544,21 +591,6 @@ function NodeModal({ node, events, onClose }) {
       </section>
     </div>
   );
-}
-
-function highlightJs(value) {
-  return escapeHtml(value)
-    .replace(/(\/\/.*)$/gm, "<span class=\"tok-comment\">$1</span>")
-    .replace(/(\b(?:export|default|const|let|var|return|true|false|null|async|await|import|from)\b)/g, "<span class=\"tok-keyword\">$1</span>")
-    .replace(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, "<span class=\"tok-string\">$1</span>")
-    .replace(/(\b\d+(?:\.\d+)?\b)/g, "<span class=\"tok-number\">$1</span>");
-}
-
-function escapeHtml(value) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
 }
 
 function pageFromPath(pathname) {
