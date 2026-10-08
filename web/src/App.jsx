@@ -128,7 +128,7 @@ function BrainstemNode({ data }) {
 
       <div className="node-header">
         <span>{data.nodeType}</span>
-        <span>{data.active ? "live" : "idle"}</span>
+        <span>{data.status}</span>
       </div>
 
       <div className="node-title">{data.label}</div>
