@@ -322,16 +322,17 @@ function graphEdge({ id, source, sourceHandle, target, targetHandle, active, col
 
 function coreHeightForHandles(count) {
   const minHeight = 130;
-  const reserved = 88;
-  const minGap = 12;
+  const reserved = 76;
+  const minGap = 18;
   return Math.max(minHeight, reserved + Math.max(0, count - 1) * minGap);
 }
 
 function handleTop(index, count, height) {
   if (count <= 1) return 50;
 
-  const minGap = 12;
-  const maxSpread = Math.max(0, height - 88);
+  const reserved = 76;
+  const minGap = 18;
+  const maxSpread = Math.max(0, height - reserved);
   const spread = Math.min(maxSpread, (count - 1) * minGap);
   const topPx = height / 2 - spread / 2 + (index * spread) / (count - 1);
   return (topPx / height) * 100;

@@ -271,10 +271,10 @@ button { cursor: pointer; }
 }
 
 .react-flow__handle.node-handle {
-  width: 16px !important;
-  height: 16px !important;
+  width: 12px !important;
+  height: 12px !important;
   border: 0 !important;
-  border-radius: 5px !important;
+  border-radius: 4px !important;
 }
 
 .node-input .react-flow__handle.node-handle {
