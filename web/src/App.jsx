@@ -285,7 +285,7 @@ function BrainstemNode({ data }) {
         />
       ))}
       {isDestination && (
-        <Handle id="in" type="target" position={Position.Left} className={`node-handle${data.handleActive ? " is-handle-active" : ""}`} />
+        <Handle id="in" type="target" position={Position.Left} className={`node-handle${data.handleActive || data.active ? " is-handle-active" : ""}`} />
       )}
 
       <div className="node-header">
@@ -306,7 +306,7 @@ function BrainstemNode({ data }) {
       </div>
 
       {isInput && (
-        <Handle id="out" type="source" position={Position.Right} className={`node-handle${data.handleActive ? " is-handle-active" : ""}`} />
+        <Handle id="out" type="source" position={Position.Right} className={`node-handle${data.handleActive || data.active ? " is-handle-active" : ""}`} />
       )}
     </div>
   );
