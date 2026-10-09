@@ -112,16 +112,17 @@ export function buildGraph(events, now = Date.now()) {
 
   for (const event of events) {
     const timestamp = eventTimestamp(event);
+    const activityAt = activityTimestamp(event);
     const nodeIds = eventNodeIds(event);
 
     for (const id of nodeIds) {
       touch(stats, id, event, timestamp);
-      nodeActivity.set(id, timestamp);
+      nodeActivity.set(id, activityAt);
     }
 
     try {
       collectTopology(event, inputs, destinations);
-      collectActivity(event, timestamp, edgeActivity, nodeStatus);
+      collectActivity(event, activityAt, edgeActivity, nodeStatus);
     }
     catch {
       // Ignore malformed telemetry instead of letting one bad event blank the flow view.
@@ -386,6 +387,12 @@ function latestSnapshot(events) {
   return events.findLast?.(event => event.kind === "brainstem.snapshot") ?? [...events].reverse().find(event => event.kind === "brainstem.snapshot");
 }
 
+function activityTimestamp(event) {
+  // Use Web UI receive time for live highlights. Source payload timestamps can
+  // describe the observed object and may be minutes/hours old by ingestion time.
+  return event.receivedAt ?? event.payload?.timestamp ?? new Date().toISOString();
+}
+
 function activeStatus(id, fallback, nodeStatus, nodeActivity, now) {
   return isActive(nodeActivity.get(id), now) ? nodeStatus.get(id) ?? fallback : fallback;
 }
@@ -412,5 +419,5 @@ function relativeTime(timestamp) {
 }
 
 function isActive(timestamp, now) {
-  return timestamp ? now - Date.parse(timestamp) < 15_000 : false;
+  return timestamp ? now - Date.parse(timestamp) < 30_000 : false;
 }

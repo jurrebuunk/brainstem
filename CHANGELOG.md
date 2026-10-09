@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0-alpha.2
+
+Docker and documentation production-template release.
+
+Includes:
+
+- Docker image now contains the production Web UI server and built static assets.
+- Docker Compose template now runs separate runtime and Web UI containers.
+- Docker docs updated with Compose service DNS, Web UI environment variables, image verification, and config-editor safety notes.
+- README updated for current release and production-oriented deployment.
+
 ## 0.1.0-alpha.1
 
 Release hardening for headless agent routing and the Web UI.

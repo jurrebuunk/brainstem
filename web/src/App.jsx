@@ -42,6 +42,7 @@ export default function App() {
     const stored = Number(localStorage.getItem("brainstem-sidebar-width"));
     return Number.isFinite(stored) && stored >= 160 ? stored : 220;
   });
+  const [flowInstance, setFlowInstance] = useState(null);
   const graph = useMemo(() => {
     try {
       return buildGraph(events, clock);
@@ -57,7 +58,13 @@ export default function App() {
   useEffect(() => {
     setNodes(graph.nodes);
     setEdges(graph.edges);
-  }, [graph, setEdges, setNodes]);
+
+    if (flowInstance && page === "flow") {
+      requestAnimationFrame(() => {
+        flowInstance.fitView({ padding: 0.2, duration: 180 });
+      });
+    }
+  }, [flowInstance, graph, page, setEdges, setNodes]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -145,6 +152,7 @@ export default function App() {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onNodeClick={onNodeClick}
+            onInit={setFlowInstance}
           />
         )}
         {page === "stats" && <StatsPage events={events} />}
@@ -218,7 +226,7 @@ function Sidebar({ page, setPage, collapsed, setCollapsed, width, setWidth }) {
   );
 }
 
-function FlowPage({ nodes, edges, onNodesChange, onEdgesChange, onNodeClick }) {
+function FlowPage({ nodes, edges, onNodesChange, onEdgesChange, onNodeClick, onInit }) {
   return (
     <div className="flow-page">
       <ReactFlow
@@ -228,12 +236,14 @@ function FlowPage({ nodes, edges, onNodesChange, onEdgesChange, onNodeClick }) {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
+        onInit={onInit}
         nodesDraggable={false}
         nodesConnectable={false}
         edgesFocusable={false}
         nodesFocusable={false}
         deleteKeyCode={null}
         fitView
+        fitViewOptions={{ padding: 0.2 }}
         minZoom={0.25}
         maxZoom={1.4}
       >

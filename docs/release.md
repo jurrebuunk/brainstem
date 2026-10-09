@@ -29,12 +29,12 @@ Before publishing an alpha release:
 5. Create a git tag:
 
    ```sh
-   git tag v0.1.0-alpha.0
+   git tag v0.1.0-alpha.2
    ```
 
 6. Push commit and tag:
 
    ```sh
    git push
-   git push origin v0.1.0-alpha.0
+   git push origin v0.1.0-alpha.2
    ```

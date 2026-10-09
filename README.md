@@ -1,12 +1,12 @@
 # Brainstem
 
-[![Release](https://img.shields.io/github/v/release/jurrebuunk/brainstem?include_prereleases&label=release)](https://github.com/jurrebuunk/brainstem/releases/tag/v0.1.0-alpha.0)
+[![Release](https://img.shields.io/github/v/release/jurrebuunk/brainstem?include_prereleases&label=release)](https://github.com/jurrebuunk/brainstem/releases/tag/v0.1.0-alpha.2)
 [![License: ISC](https://img.shields.io/badge/license-ISC-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D24-339933?logo=node.js&logoColor=white)](package.json)
 [![Status](https://img.shields.io/badge/status-alpha-orange.svg)](CHANGELOG.md)
 [![Plugin API](https://img.shields.io/badge/plugin%20API-inputs%20%7C%20destinations-purple.svg)](docs/input-plugins.md)
 
-> Alpha: `0.1.0-alpha.0`. Brainstem is ready for local experimentation. APIs and plugin contracts may still change.
+> Alpha: `0.1.0-alpha.2`. Brainstem is ready for local experimentation. APIs and plugin contracts may still change.
 
 Brainstem is a lightweight decision and orchestration layer for autonomous AI agents.
 
@@ -24,6 +24,8 @@ The goal is simple:
 
 > Keep expensive agents asleep until something actually needs attention.
 
+![Brainstem Web UI flow view](docs/assets/web-ui-flow.png)
+
 ## What Brainstem does
 
 - Polls configured input plugins.
@@ -34,7 +36,7 @@ The goal is simple:
 - Produces decision envelopes: `ignore`, `queue`, `dispatch`, or `escalate`.
 - Routes decisions by decision level, route, source, and type.
 - Sends matching decisions to destination plugins.
-- Emits structured runtime telemetry for the read-only Web UI.
+- Emits structured runtime telemetry for the Web UI.
 
 ## Current plugins
 
@@ -104,6 +106,10 @@ Brainstem can run from source, from npm, or with Docker.
 
 ### Docker
 
+The published image contains both the headless runtime and the production Web UI server.
+
+Run once:
+
 ```sh
 cp brainstem.config.example.mjs brainstem.config.mjs
 cp .env.example .env
@@ -111,15 +117,24 @@ docker run --rm \
   --env-file .env \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.0 \
+  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.2 \
   node brainstem.mjs --once
 ```
 
-With Docker Compose:
+Production-style Compose with separate runtime and Web UI containers:
 
 ```sh
+cp brainstem.config.example.mjs brainstem.config.mjs
+cp .env.example .env
 cp docker-compose.example.yml docker-compose.yml
+# In brainstem.config.mjs, use http://brainstem-web:5173/api/events for telemetry inside Compose.
 docker compose up -d
+```
+
+Verify the image exists:
+
+```sh
+docker manifest inspect ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.2
 ```
 
 See [`docs/docker.md`](docs/docker.md).
@@ -158,7 +173,7 @@ npm --prefix web install
 npm start              # run continuously
 npm run start:once     # poll each input once and exit
 npm run start:once:all # poll once and also print ignored decisions through log destinations
-npm run web            # start the read-only Web UI on http://127.0.0.1:5173
+npm run web            # start the Web UI on http://127.0.0.1:5173
 ```
 
 Direct CLI usage:
@@ -231,7 +246,7 @@ See [`brainstem.config.example.mjs`](brainstem.config.example.mjs) for a fuller 
 
 ## Web UI
 
-Brainstem ships a minimal read-only Web UI built with React Flow. It is separate from the headless runtime and receives events over HTTP.
+Brainstem ships a minimal Web UI built with React Flow. It is separate from the headless runtime and receives events over HTTP. It also includes persisted stats and a CodeMirror config editor; expose it only on localhost or behind authentication/TLS.
 
 Run it with:
 
@@ -268,7 +283,7 @@ destinations: [
 ]
 ```
 
-The UI shows inputs, the core, destinations, live poll/decision/destination activity, plugin logs, and raw JSON envelopes. See [`docs/web-ui.md`](docs/web-ui.md).
+The UI shows inputs, the core, destinations, live poll/decision/destination activity, plugin logs, raw JSON envelopes, persistent stats, and config editing. See [`docs/web-ui.md`](docs/web-ui.md).
 
 ## Matrix notifications
 
@@ -418,7 +433,7 @@ src/runtime/              plugin loading, routing, checkpoints, telemetry
 src/sdk/                  adapter author helpers
 plugins/<name>/index.mjs  plugin entrypoints
 plugins/<name>/*.mjs      plugin implementation modules
-web/                      separate read-only React Flow Web UI
+web/                      separate React Flow Web UI
 docs/                     user and plugin documentation
 ```
 

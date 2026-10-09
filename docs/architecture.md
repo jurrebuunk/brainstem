@@ -1,6 +1,6 @@
 # Architecture
 
-Brainstem is split into a headless runtime plus optional read-only presentation layers:
+Brainstem is split into a headless runtime plus optional presentation/operations layers:
 
 ```text
 Input plugins → Runtime → Core → Destination plugins
@@ -31,7 +31,7 @@ The runtime owns operational behavior around the core:
 - validating observations
 - calling the core
 - routing decisions to destinations
-- structured telemetry for live read-only views
+- structured telemetry for live views, stats, and operational dashboards
 
 ## Core
 

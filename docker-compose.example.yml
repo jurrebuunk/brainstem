@@ -1,6 +1,6 @@
 services:
   brainstem:
-    image: ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.0
+    image: ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.1
     restart: unless-stopped
     env_file:
       - .env
@@ -8,6 +8,26 @@ services:
       - ./brainstem.config.mjs:/app/brainstem.config.mjs:ro
       - brainstem-data:/app/data
     command: ["node", "brainstem.mjs"]
+    depends_on:
+      - brainstem-web
+
+  brainstem-web:
+    image: ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.1
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 5173
+      BRAINSTEM_CONFIG: /app/brainstem.config.mjs
+      WEB_STATS_DB: /app/data/web-stats.sqlite
+      STATS_PRUNE_AFTER_DAYS: 14
+    volumes:
+      # Writable so the /config page can save. Put this behind localhost or auth.
+      - ./brainstem.config.mjs:/app/brainstem.config.mjs
+      - brainstem-data:/app/data
+    ports:
+      - "127.0.0.1:5173:5173"
+    command: ["node", "web/server.mjs"]
 
 volumes:
   brainstem-data:
