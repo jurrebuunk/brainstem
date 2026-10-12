@@ -9,7 +9,7 @@ ghcr.io/jurrebuunk/brainstem
 Current prerelease image:
 
 ```text
-ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.3
+ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4
 ```
 
 The image contains both:
@@ -78,7 +78,7 @@ docker run --rm \
   --env-file .env \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.3 \
+  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4 \
   node brainstem.mjs --once
 ```
 
@@ -91,7 +91,7 @@ docker run -d \
   --env-file .env \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.3
+  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4
 ```
 
 Run the Web UI container:
@@ -110,7 +110,7 @@ docker run -d \
   -p 127.0.0.1:5173:5173 \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.3 \
+  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4 \
   node web/server.mjs
 ```
 
@@ -189,13 +189,13 @@ Config saves are syntax-checked with `node --check`, written atomically, and bac
 ## Verify published image
 
 ```sh
-docker manifest inspect ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.3
+docker manifest inspect ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4
 ```
 
 Pull explicitly:
 
 ```sh
-docker pull ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.3
+docker pull ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4
 ```
 
 ## Build locally
@@ -222,7 +222,7 @@ The GitHub Actions workflow publishes:
 
 - `latest` from `main`
 - branch tags such as `main`
-- git tags such as `v0.1.0-alpha.3`
+- git tags such as `v0.1.0-alpha.4`
 - SHA tags such as `sha-...`
 
 If the package is not visible in the GitHub UI immediately, verify with `docker manifest inspect`; GHCR package pages can lag behind successful pushes.

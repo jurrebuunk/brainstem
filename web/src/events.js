@@ -1,3 +1,9 @@
+const FLOW_COLUMN_GAP = 420;
+const FLOW_ROW_GAP = 205;
+const FLOW_INPUT_X = 0;
+const FLOW_CORE_X = FLOW_INPUT_X + FLOW_COLUMN_GAP;
+const FLOW_DESTINATION_X = FLOW_CORE_X + FLOW_COLUMN_GAP;
+
 export function eventId(event, index) {
   return `${event.receivedAt ?? event.payload?.timestamp ?? "event"}-${index}`;
 }
@@ -132,7 +138,7 @@ export function buildGraph(events, now = Date.now()) {
   const inputItems = Array.from(inputs.values());
   const destinationItems = Array.from(destinations.values());
   const rows = Math.max(inputItems.length, destinationItems.length, 1);
-  const rowGap = 155;
+  const rowGap = FLOW_ROW_GAP;
   const handleCount = Math.max(inputItems.length, destinationItems.length);
   const coreHeight = coreHeightForHandles(handleCount);
   const coreY = ((rows - 1) * rowGap) / 2 - coreHeight / 2 + 65;
@@ -176,7 +182,7 @@ export function buildGraph(events, now = Date.now()) {
           outputs: stats.get("core")?.outputs ?? 0,
           last: relativeTime(stats.get("core")?.lastAt)
         }),
-        x: 455,
+        x: FLOW_CORE_X,
         y: coreY,
         active: isActive(nodeActivity.get("core"), now),
         height: coreHeight,
@@ -194,7 +200,7 @@ export function buildGraph(events, now = Date.now()) {
           errors: stats.get(`destination:${destination.id}`)?.errors ?? 0,
           last: relativeTime(stats.get(`destination:${destination.id}`)?.lastAt)
         }),
-        x: 910,
+        x: FLOW_DESTINATION_X,
         y: index * rowGap,
         active: isActive(nodeActivity.get(`destination:${destination.id}`), now),
         handleActive: isActive(edgeActivity.get(`edge-destination-${destination.id}`), now)

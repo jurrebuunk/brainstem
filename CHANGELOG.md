@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.0-alpha.4
+
+Web UI node inspector and flow readability release.
+
+Includes:
+
+- Replaced the node click log table with a larger operational node inspector.
+- Input nodes now group activity by poll with poll logs and emitted observation envelopes.
+- Core nodes now show observation input envelopes alongside decision output envelopes.
+- Destination nodes now show received decision/observation envelopes with destination-scoped logs and output envelopes.
+- Tightened the inspector into a compact table-like layout with less duplicated metadata.
+- Standardized application font-size and line-height CSS tokens for more readable UI sizing.
+- Increased flow graph row spacing so stacked nodes no longer overlap.
+
 ## 0.1.0-alpha.3
 
 Production-ready Web UI observability persistence.

@@ -1,12 +1,12 @@
 # Brainstem
 
-[![Release](https://img.shields.io/github/v/release/jurrebuunk/brainstem?include_prereleases&label=release)](https://github.com/jurrebuunk/brainstem/releases/tag/v0.1.0-alpha.3)
+[![Release](https://img.shields.io/github/v/release/jurrebuunk/brainstem?include_prereleases&label=release)](https://github.com/jurrebuunk/brainstem/releases/tag/v0.1.0-alpha.4)
 [![License: ISC](https://img.shields.io/badge/license-ISC-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D24-339933?logo=node.js&logoColor=white)](package.json)
 [![Status](https://img.shields.io/badge/status-alpha-orange.svg)](CHANGELOG.md)
 [![Plugin API](https://img.shields.io/badge/plugin%20API-inputs%20%7C%20destinations-purple.svg)](docs/input-plugins.md)
 
-> Alpha: `0.1.0-alpha.3`. Brainstem is ready for local experimentation. APIs and plugin contracts may still change.
+> Alpha: `0.1.0-alpha.4`. Brainstem is ready for local experimentation. APIs and plugin contracts may still change.
 
 Brainstem is a lightweight decision and orchestration layer for autonomous AI agents.
 
@@ -117,7 +117,7 @@ docker run --rm \
   --env-file .env \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.3 \
+  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4 \
   node brainstem.mjs --once
 ```
 
@@ -134,7 +134,7 @@ docker compose up -d
 Verify the image exists:
 
 ```sh
-docker manifest inspect ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.3
+docker manifest inspect ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4
 ```
 
 See [`docs/docker.md`](docs/docker.md).

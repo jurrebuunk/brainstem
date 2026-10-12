@@ -54,7 +54,7 @@ docker run --rm \
   -e WEB_EVENTS_MAX_ROWS=50000 \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.3 \
+  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4 \
   node web/server.mjs
 ```
 

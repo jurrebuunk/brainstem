@@ -50,7 +50,7 @@ It shows:
 - output envelopes
 - plugin logs emitted through `ctx.logger`
 
-Click a node to open a modal with recent events for that node. Select a row in the event table to inspect the full JSON event/envelope.
+Click a node to open the node inspector. It groups activity by the operational unit that matters for that node: input nodes show polls with poll logs and emitted observation envelopes, the core shows observation-in/decision-out pairs, and destination nodes show received decision envelopes with destination-scoped logs and output envelopes.
 
 The sidebar has three pages:
 
