@@ -1,8 +1,8 @@
 # Web UI
 
-Brainstem includes a minimal Web UI under `web/`.
+Brainstem includes a minimal operations Web UI under `web/`.
 
-The Web UI is intentionally separate from the headless runtime. It does not run the core or own plugin state. It receives runtime telemetry and output envelopes over HTTP, renders a live React Flow graph, stores simple stats in a local SQLite database, and includes a small config editor for `brainstem.config.mjs`.
+The Web UI is intentionally separate from the headless runtime. It does not run the core or own plugin state. It receives runtime telemetry and output envelopes over HTTP, renders a live React Flow graph, persists the telemetry/event log and derived stats in a local SQLite database, and includes Settings tabs for appearance and `brainstem.config.mjs` editing.
 
 ## Run
 
@@ -55,8 +55,10 @@ Click a node to open a modal with recent events for that node. Select a row in t
 The sidebar has three pages:
 
 - **Flow** — live inputs → core → destinations graph. Core edge handles are stacked vertically to avoid line congestion.
-- **Stats** — persisted counters and small six-hour charts for polls, decisions, outputs, and errors.
-- **Config** — a syntax-highlighted editor for `brainstem.config.mjs`; saves are checked with `node --check` before writing.
+- **Stats** — persisted counters, KPI cards, filterable metric tables, and interactive uPlot time-series charts with range controls, live pause, hover values, and drag-to-zoom.
+- **Settings** — subtabs for:
+  - **Appearance** — choose dark, light, or system theme.
+  - **Config** — a syntax-highlighted editor for `brainstem.config.mjs`; saves are checked with `node --check` before writing.
 
 ## Connection model
 
@@ -75,17 +77,17 @@ The Web UI exposes:
 
 ```text
 POST /api/events   ingest telemetry and output events
-GET  /api/events   current in-memory event buffer
-GET  /api/stream   Server-Sent Events stream for browsers
-GET  /api/stats    persistent stats counters and time series
+GET  /api/events   persisted recent event log, newest-limited and returned oldest-first
+GET  /api/stream   live Server-Sent Events stream for browsers
+GET  /api/stats    persistent derived stats counters and time series
 GET  /api/config   read brainstem.config.mjs
 PUT  /api/config   syntax-check and write brainstem.config.mjs
 GET  /api/health   health check
 ```
 
-The Web UI stores events in memory only. Restarting the Web UI clears its current event buffer, but Brainstem emits periodic `brainstem.snapshot` events so the graph can repopulate while the runtime is running.
+The Web UI persists raw telemetry/output events and derived stats in SQLite at `data/web-stats.sqlite` by default. Override with `WEB_STATS_DB=/path/to/web-stats.sqlite`. On restart, the Flow page reloads recent events from SQLite and continues with live updates from `/api/stream`.
 
-Stats are persisted in SQLite at `data/web-stats.sqlite` by default. Override with `WEB_STATS_DB=/path/to/web-stats.sqlite`. Old time-series rows are pruned after 14 days by default; override with `STATS_PRUNE_AFTER_DAYS`.
+Event log retention is controlled by `WEB_EVENTS_PRUNE_AFTER_DAYS` and `WEB_EVENTS_MAX_ROWS` (defaults: 14 days and 50,000 rows). Set either to `0` to disable that pruning mode. Old time-series rows are pruned after 14 days by default; override with `STATS_PRUNE_AFTER_DAYS` or set it to `0` to disable time-series pruning.
 
 The config editor writes atomically after `node --check` validation and creates a timestamped `.bak` file next to the config before replacement. Override the editable config path with `BRAINSTEM_CONFIG=/path/to/brainstem.config.mjs`. Request bodies are capped at 1 MiB by default; override with `MAX_BODY_BYTES`.
 

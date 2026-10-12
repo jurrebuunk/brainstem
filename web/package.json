@@ -17,6 +17,7 @@
     "codemirror": "^6.0.2",
     "react": "latest",
     "react-dom": "latest",
+    "uplot": "^1.6.32",
     "vite": "latest"
   }
 }

@@ -13,9 +13,14 @@ const port = Number(process.env.PORT ?? 5173);
 const root = new URL(".", import.meta.url).pathname;
 const repoRoot = resolve(root, "..");
 const isProduction = process.env.NODE_ENV === "production";
-const maxEvents = Number(process.env.MAX_EVENTS ?? 2000);
-const maxBodyBytes = Number(process.env.MAX_BODY_BYTES ?? 1024 * 1024);
-const statsPruneAfterDays = Number(process.env.STATS_PRUNE_AFTER_DAYS ?? 14);
+const maxEvents = positiveInteger(process.env.MAX_EVENTS, 2000);
+const maxBodyBytes = positiveInteger(process.env.MAX_BODY_BYTES, 1024 * 1024);
+const statsPruneAfterDays = finiteNumber(process.env.STATS_PRUNE_AFTER_DAYS, 14);
+const eventLogPruneAfterDays = finiteNumber(
+  process.env.WEB_EVENTS_PRUNE_AFTER_DAYS ?? process.env.STATS_PRUNE_AFTER_DAYS,
+  14
+);
+const eventLogMaxRows = nonNegativeInteger(process.env.WEB_EVENTS_MAX_ROWS, 50_000);
 const configPath = resolve(repoRoot, process.env.BRAINSTEM_CONFIG ?? "brainstem.config.mjs");
 const statsDbPath = resolve(repoRoot, process.env.WEB_STATS_DB ?? "data/web-stats.sqlite");
 
@@ -61,7 +66,14 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (url.pathname === "/api/events" && request.method === "GET") {
-      sendJson(response, events);
+      sendJson(response, getEvents({
+        limit: clampLimit(url.searchParams.get("limit"), maxEvents),
+        before: url.searchParams.get("before"),
+        after: url.searchParams.get("after"),
+        kind: url.searchParams.get("kind"),
+        level: url.searchParams.get("level"),
+        source: url.searchParams.get("source")
+      }));
       return;
     }
 
@@ -90,6 +102,7 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, {
         ok: true,
         events: events.length,
+        persistedEvents: eventCount(),
         statsDb: statsDbPath
       });
       return;
@@ -135,10 +148,10 @@ function addEvent(event) {
   events.push(event);
 
   try {
-    recordStatsEvent(event);
+    persistTelemetryEvent(event);
   }
   catch (error) {
-    console.error("failed to record web stats", error);
+    console.error("failed to persist web telemetry", error);
   }
 
   while (events.length > maxEvents) {
@@ -160,8 +173,8 @@ function normalizeIncomingEvent(value) {
     typeof value.kind === "string"
   ) {
     return {
-      receivedAt,
-      ...value
+      ...value,
+      receivedAt
     };
   }
 
@@ -199,6 +212,21 @@ function initStatsDb(db) {
   db.exec(`
     pragma journal_mode = wal;
     pragma busy_timeout = 5000;
+    pragma foreign_keys = on;
+
+    create table if not exists web_events (
+      id integer primary key autoincrement,
+      received_at text not null,
+      kind text not null,
+      level text,
+      source text,
+      event_json text not null
+    );
+
+    create index if not exists idx_web_events_received_at on web_events (received_at);
+    create index if not exists idx_web_events_kind on web_events (kind);
+    create index if not exists idx_web_events_level on web_events (level);
+    create index if not exists idx_web_events_source on web_events (source);
 
     create table if not exists stat_counters (
       key text primary key,
@@ -212,6 +240,37 @@ function initStatsDb(db) {
       primary key (bucket, metric)
     );
   `);
+}
+
+function persistTelemetryEvent(event) {
+  statsDb.exec("begin immediate");
+  try {
+    insertEvent(event);
+    recordStatsEvent(event);
+    pruneOldEvents(event.receivedAt ?? event.payload?.timestamp ?? new Date().toISOString());
+    statsDb.exec("commit");
+  }
+  catch (error) {
+    statsDb.exec("rollback");
+    throw error;
+  }
+}
+
+function insertEvent(event) {
+  const payload = event.payload ?? {};
+  const level = eventLevelForStorage(event);
+  const source = eventSourceForStorage(event);
+
+  statsDb.prepare(`
+    insert into web_events (received_at, kind, level, source, event_json)
+    values (?, ?, ?, ?, ?)
+  `).run(
+    event.receivedAt ?? payload.timestamp ?? new Date().toISOString(),
+    String(event.kind ?? "external.json"),
+    level,
+    source,
+    JSON.stringify(event)
+  );
 }
 
 function recordStatsEvent(event) {
@@ -230,19 +289,12 @@ function recordStatsEvent(event) {
     on conflict(bucket, metric) do update set value = value + excluded.value
   `);
 
-  statsDb.exec("begin");
-  try {
-    for (const metric of metrics) {
-      counter.run(metric, 1);
-      series.run(bucket, metric, 1);
-    }
-    pruneOldStats(bucket);
-    statsDb.exec("commit");
+  for (const metric of metrics) {
+    counter.run(metric, 1);
+    series.run(bucket, metric, 1);
   }
-  catch (error) {
-    statsDb.exec("rollback");
-    throw error;
-  }
+
+  pruneOldStats(bucket);
 }
 
 function pruneOldStats(currentBucket) {
@@ -253,6 +305,27 @@ function pruneOldStats(currentBucket) {
   ).toISOString();
 
   statsDb.prepare("delete from stat_timeseries where bucket < ?").run(cutoff);
+}
+
+function pruneOldEvents(currentTimestamp) {
+  if (Number.isFinite(eventLogPruneAfterDays) && eventLogPruneAfterDays > 0) {
+    const cutoff = new Date(
+      Date.parse(currentTimestamp) - eventLogPruneAfterDays * 24 * 60 * 60 * 1000
+    ).toISOString();
+
+    statsDb.prepare("delete from web_events where received_at < ?").run(cutoff);
+  }
+
+  if (Number.isFinite(eventLogMaxRows) && eventLogMaxRows > 0) {
+    statsDb.prepare(`
+      delete from web_events
+      where id in (
+        select id from web_events
+        order by id desc
+        limit -1 offset ?
+      )
+    `).run(eventLogMaxRows);
+  }
 }
 
 function metricsForEvent(event) {
@@ -276,6 +349,91 @@ function metricsForEvent(event) {
   if (String(kind ?? "").includes("failed") || metrics.has("plugin.errors") || metrics.has("runtime.errors")) metrics.add("errors.total");
 
   return [...metrics];
+}
+
+function getEvents({ limit = maxEvents, before, after, kind, level, source } = {}) {
+  const clauses = [];
+  const params = [];
+
+  const beforeIso = optionalIsoDate(before);
+  const afterIso = optionalIsoDate(after);
+
+  if (beforeIso) {
+    clauses.push("received_at < ?");
+    params.push(beforeIso);
+  }
+
+  if (afterIso) {
+    clauses.push("received_at > ?");
+    params.push(afterIso);
+  }
+
+  if (kind) {
+    clauses.push("kind = ?");
+    params.push(kind);
+  }
+
+  if (level) {
+    clauses.push("level = ?");
+    params.push(level);
+  }
+
+  if (source) {
+    clauses.push("source = ?");
+    params.push(source);
+  }
+
+  const where = clauses.length ? `where ${clauses.join(" and ")}` : "";
+  const rows = statsDb.prepare(`
+    select id, event_json
+    from web_events
+    ${where}
+    order by received_at desc, id desc
+    limit ?
+  `).all(...params, limit);
+
+  return rows
+    .reverse()
+    .map(row => parseStoredEvent(row.event_json, row.id))
+    .filter(Boolean);
+}
+
+function eventCount() {
+  return statsDb.prepare("select count(*) as count from web_events").get().count;
+}
+
+function parseStoredEvent(value, id) {
+  try {
+    const event = JSON.parse(value);
+    if (event && typeof event === "object") {
+      return { ...event, persistedId: id };
+    }
+  }
+  catch {
+    return null;
+  }
+
+  return null;
+}
+
+function eventLevelForStorage(event) {
+  const payload = event.payload ?? {};
+  if (event.kind === "brainstem.plugin.log" || event.kind === "brainstem.log") {
+    return payload.level ? String(payload.level) : "info";
+  }
+  if (String(event.kind ?? "").includes("failed")) return "error";
+  if (event.kind === "brainstem.output") return "output";
+  return null;
+}
+
+function eventSourceForStorage(event) {
+  const payload = event.payload ?? {};
+  if (payload.scope === "input" && payload.id) return `input:${payload.id}`;
+  if (payload.inputId) return `input:${payload.inputId}`;
+  if (payload.id && String(event.kind ?? "").startsWith("brainstem.input.")) return `input:${payload.id}`;
+  if (payload.plugin && payload.destination) return `destination:${payload.plugin}:${payload.destination}`;
+  if (event.kind === "brainstem.core.decision") return "core";
+  return null;
 }
 
 function getStats() {
@@ -360,6 +518,35 @@ function minuteBucket(value) {
   const date = new Date(value);
   date.setSeconds(0, 0);
   return date.toISOString();
+}
+
+function optionalIsoDate(value) {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return null;
+  return new Date(timestamp).toISOString();
+}
+
+function finiteNumber(value, fallback) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function positiveInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : fallback;
+}
+
+function nonNegativeInteger(value, fallback) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 ? number : fallback;
+}
+
+function clampLimit(value, fallback) {
+  const limit = positiveInteger(value, fallback);
+  return Math.min(Math.max(limit, 1), 10_000);
 }
 
 async function readJsonBody(request, fallback) {

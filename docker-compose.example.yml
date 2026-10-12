@@ -1,6 +1,6 @@
 services:
   brainstem:
-    image: ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.1
+    image: ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.3
     restart: unless-stopped
     env_file:
       - .env
@@ -12,7 +12,7 @@ services:
       - brainstem-web
 
   brainstem-web:
-    image: ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.1
+    image: ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.3
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -21,6 +21,8 @@ services:
       BRAINSTEM_CONFIG: /app/brainstem.config.mjs
       WEB_STATS_DB: /app/data/web-stats.sqlite
       STATS_PRUNE_AFTER_DAYS: 14
+      WEB_EVENTS_PRUNE_AFTER_DAYS: 14
+      WEB_EVENTS_MAX_ROWS: 50000
     volumes:
       # Writable so the /config page can save. Put this behind localhost or auth.
       - ./brainstem.config.mjs:/app/brainstem.config.mjs

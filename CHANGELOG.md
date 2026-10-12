@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.0-alpha.3
+
+Production-ready Web UI observability persistence.
+
+Includes:
+
+- Web UI now persists raw telemetry/output events in SQLite, so Flow/node logs survive Web UI restarts.
+- `/api/events` now reads from the persisted event log and supports `limit`, `before`, `after`, `kind`, `level`, and `source` filters.
+- Stats and event-log writes are committed together, keeping derived metrics aligned with stored telemetry.
+- Event log retention is configurable with `WEB_EVENTS_PRUNE_AFTER_DAYS` and `WEB_EVENTS_MAX_ROWS`; either pruning mode can be disabled with `0`.
+- Docker/Compose examples updated for the new release tag and event-log retention settings.
+
 ## 0.1.0-alpha.2
 
 Docker and documentation production-template release.

@@ -1,12 +1,12 @@
 # Brainstem
 
-[![Release](https://img.shields.io/github/v/release/jurrebuunk/brainstem?include_prereleases&label=release)](https://github.com/jurrebuunk/brainstem/releases/tag/v0.1.0-alpha.2)
+[![Release](https://img.shields.io/github/v/release/jurrebuunk/brainstem?include_prereleases&label=release)](https://github.com/jurrebuunk/brainstem/releases/tag/v0.1.0-alpha.3)
 [![License: ISC](https://img.shields.io/badge/license-ISC-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D24-339933?logo=node.js&logoColor=white)](package.json)
 [![Status](https://img.shields.io/badge/status-alpha-orange.svg)](CHANGELOG.md)
 [![Plugin API](https://img.shields.io/badge/plugin%20API-inputs%20%7C%20destinations-purple.svg)](docs/input-plugins.md)
 
-> Alpha: `0.1.0-alpha.2`. Brainstem is ready for local experimentation. APIs and plugin contracts may still change.
+> Alpha: `0.1.0-alpha.3`. Brainstem is ready for local experimentation. APIs and plugin contracts may still change.
 
 Brainstem is a lightweight decision and orchestration layer for autonomous AI agents.
 
@@ -117,7 +117,7 @@ docker run --rm \
   --env-file .env \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.2 \
+  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.3 \
   node brainstem.mjs --once
 ```
 
@@ -134,7 +134,7 @@ docker compose up -d
 Verify the image exists:
 
 ```sh
-docker manifest inspect ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.2
+docker manifest inspect ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.3
 ```
 
 See [`docs/docker.md`](docs/docker.md).
@@ -246,7 +246,7 @@ See [`brainstem.config.example.mjs`](brainstem.config.example.mjs) for a fuller 
 
 ## Web UI
 
-Brainstem ships a minimal Web UI built with React Flow. It is separate from the headless runtime and receives events over HTTP. It also includes persisted stats and a CodeMirror config editor; expose it only on localhost or behind authentication/TLS.
+Brainstem ships a separate Web UI built with React Flow and uPlot. It receives runtime events over HTTP, persists the telemetry/event log and derived stats in SQLite, provides interactive/filterable metrics, and includes Settings tabs for Appearance and CodeMirror config editing; expose it only on localhost or behind authentication/TLS.
 
 Run it with:
 
@@ -283,7 +283,7 @@ destinations: [
 ]
 ```
 
-The UI shows inputs, the core, destinations, live poll/decision/destination activity, plugin logs, raw JSON envelopes, persistent stats, and config editing. See [`docs/web-ui.md`](docs/web-ui.md).
+The UI shows inputs, the core, destinations, live poll/decision/destination activity, plugin logs, raw JSON envelopes, interactive persistent stats, and config editing. See [`docs/web-ui.md`](docs/web-ui.md).
 
 ## Matrix notifications
 
@@ -370,7 +370,7 @@ Brainstem keeps two kinds of durable runtime state:
 
 Input plugins are expected to use checkpoints for source-side deduplication. For example, the GitHub plugin only emits new or changed issues, HTTP health emits state changes by default, and TLS emits certificate/status changes by default.
 
-The Web UI stores its received telemetry in memory only; it is a live readout, not durable history.
+The Web UI persists received telemetry/output events and derived metrics in SQLite by default, so Flow/node logs and Stats survive Web UI restarts. Configure retention with `WEB_EVENTS_PRUNE_AFTER_DAYS`, `WEB_EVENTS_MAX_ROWS`, and `STATS_PRUNE_AFTER_DAYS`.
 
 See [`docs/state.md`](docs/state.md).
 
