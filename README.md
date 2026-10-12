@@ -1,12 +1,12 @@
 # Brainstem
 
-[![Release](https://img.shields.io/github/v/release/jurrebuunk/brainstem?include_prereleases&label=release)](https://github.com/jurrebuunk/brainstem/releases/tag/v0.1.0-alpha.4)
+[![Release](https://img.shields.io/github/v/release/jurrebuunk/brainstem?include_prereleases&label=release)](https://github.com/jurrebuunk/brainstem/releases/tag/v0.1.0-alpha.5)
 [![License: ISC](https://img.shields.io/badge/license-ISC-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D24-339933?logo=node.js&logoColor=white)](package.json)
 [![Status](https://img.shields.io/badge/status-alpha-orange.svg)](CHANGELOG.md)
 [![Plugin API](https://img.shields.io/badge/plugin%20API-inputs%20%7C%20destinations-purple.svg)](docs/input-plugins.md)
 
-> Alpha: `0.1.0-alpha.4`. Brainstem is ready for local experimentation. APIs and plugin contracts may still change.
+> Alpha: `0.1.0-alpha.5`. Brainstem is ready for local experimentation. APIs and plugin contracts may still change.
 
 Brainstem is a lightweight decision and orchestration layer for autonomous AI agents.
 
@@ -61,7 +61,7 @@ See the [plugin catalog](docs/plugins.md) for all built-in plugins and configura
 
 Brainstem has built-in runtime logs for startup, plugin polling, retries, decisions, destination delivery, and shutdown. These logs are independent from the optional `log-decisions` destination, which is intended for full decision/audit dumps.
 
-Brainstem also supports structured runtime telemetry for machine consumers such as the Web UI. Telemetry includes runtime snapshots, input polls, emitted observations, core decisions, destination runs, output envelopes, and plugin logs.
+Brainstem also supports structured runtime telemetry for machine consumers such as the backend API and optional Web UI. Telemetry includes runtime snapshots, input polls, emitted observations, core decisions, destination runs, output envelopes, and plugin logs.
 
 Configure runtime logs with:
 
@@ -80,16 +80,19 @@ CLI overrides:
 node brainstem.mjs --log-level debug --log-format json
 ```
 
-Telemetry example:
+Backend API telemetry example:
 
 ```js
 runtime: {
-  telemetry: {
-    url: "http://127.0.0.1:5173/api/events",
-    snapshotIntervalMs: 5000
+  api: {
+    enabled: true,
+    host: "127.0.0.1",
+    port: 5174
   }
 }
 ```
+
+When `runtime.api.enabled` is true and `runtime.telemetry.url` is not set, Brainstem sends telemetry to its own backend API automatically.
 
 See [`docs/telemetry.md`](docs/telemetry.md).
 
@@ -117,7 +120,7 @@ docker run --rm \
   --env-file .env \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4 \
+  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5 \
   node brainstem.mjs --once
 ```
 
@@ -127,14 +130,14 @@ Production-style Compose with separate runtime and Web UI containers:
 cp brainstem.config.example.mjs brainstem.config.mjs
 cp .env.example .env
 cp docker-compose.example.yml docker-compose.yml
-# In brainstem.config.mjs, use http://brainstem-web:5173/api/events for telemetry inside Compose.
+# The runtime container owns the backend API; the Web UI proxies to it.
 docker compose up -d
 ```
 
 Verify the image exists:
 
 ```sh
-docker manifest inspect ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4
+docker manifest inspect ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5
 ```
 
 See [`docs/docker.md`](docs/docker.md).
@@ -173,6 +176,7 @@ npm --prefix web install
 npm start              # run continuously
 npm run start:once     # poll each input once and exit
 npm run start:once:all # poll once and also print ignored decisions through log destinations
+npm run api            # start the backend API on http://127.0.0.1:5174
 npm run web            # start the Web UI on http://127.0.0.1:5173
 ```
 
@@ -246,7 +250,7 @@ See [`brainstem.config.example.mjs`](brainstem.config.example.mjs) for a fuller 
 
 ## Web UI
 
-Brainstem ships a separate Web UI built with React Flow and uPlot. It receives runtime events over HTTP, persists the telemetry/event log and derived stats in SQLite, provides interactive/filterable metrics, and includes Settings tabs for Appearance and CodeMirror config editing; expose it only on localhost or behind authentication/TLS.
+Brainstem ships a separate Web UI built with React Flow and uPlot. It is presentation-only: it calls the backend API for event history, SSE, stats, and config management. The backend owns telemetry persistence in SQLite; expose the API/Web UI only on localhost or behind authentication/TLS.
 
 Run it with:
 
@@ -261,26 +265,20 @@ Open:
 http://127.0.0.1:5173
 ```
 
-Configure Brainstem to send telemetry and output envelopes:
+Configure and start the backend API, then point the Web UI at it:
 
 ```js
 runtime: {
-  telemetry: {
-    url: "http://127.0.0.1:5173/api/events",
-    snapshotIntervalMs: 5000
+  api: {
+    enabled: true,
+    host: "127.0.0.1",
+    port: 5174
   }
-},
+}
+```
 
-destinations: [
-  {
-    module: "./plugins/http-json/index.mjs",
-    destination: "default",
-    decisions: "all",
-    config: {
-      url: "http://127.0.0.1:5173/api/events"
-    }
-  }
-]
+```sh
+WEB_BACKEND_URL=http://127.0.0.1:5174 npm run web
 ```
 
 The UI shows inputs, the core, destinations, live poll/decision/destination activity, plugin logs, raw JSON envelopes, interactive persistent stats, and config editing. See [`docs/web-ui.md`](docs/web-ui.md).
@@ -370,7 +368,7 @@ Brainstem keeps two kinds of durable runtime state:
 
 Input plugins are expected to use checkpoints for source-side deduplication. For example, the GitHub plugin only emits new or changed issues, HTTP health emits state changes by default, and TLS emits certificate/status changes by default.
 
-The Web UI persists received telemetry/output events and derived metrics in SQLite by default, so Flow/node logs and Stats survive Web UI restarts. Configure retention with `WEB_EVENTS_PRUNE_AFTER_DAYS`, `WEB_EVENTS_MAX_ROWS`, and `STATS_PRUNE_AFTER_DAYS`.
+The backend API persists received telemetry/output events and derived metrics in SQLite by default, so Flow/node logs and Stats survive Web UI restarts. Configure retention with `WEB_EVENTS_PRUNE_AFTER_DAYS`, `WEB_EVENTS_MAX_ROWS`, and `STATS_PRUNE_AFTER_DAYS`.
 
 See [`docs/state.md`](docs/state.md).
 
@@ -430,6 +428,8 @@ Docs:
 ```text
 src/core/                 decision engine and record stores
 src/runtime/              plugin loading, routing, checkpoints, telemetry
+src/backend/              backend HTTP API, telemetry store, stats, SSE, config management
+src/telemetry/            shared telemetry selectors and metric derivation
 src/sdk/                  adapter author helpers
 plugins/<name>/index.mjs  plugin entrypoints
 plugins/<name>/*.mjs      plugin implementation modules

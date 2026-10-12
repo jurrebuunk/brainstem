@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.0-alpha.5
+
+Backend/Web UI decoupling and modularization release.
+
+Includes:
+
+- Backend API now owns telemetry ingestion, event history, stats, retention, SSE, and config management.
+- Web UI is presentation-only and proxies `/api/*` to the backend via `WEB_BACKEND_URL`.
+- Added standalone `brainstem-api.mjs` and `brainstem-api` binary.
+- Runtime can start the backend API with `runtime.api.enabled` and automatically send telemetry to it.
+- Added optional backend bearer-token auth via `BRAINSTEM_API_TOKEN` / `WEB_BACKEND_TOKEN`.
+- Refactored shared telemetry selectors and metric derivation into `src/telemetry`.
+- Further modularized runtime internals, Web server modules, node inspector code, and the opencode runner plugin.
+- Fixed node inspector crashes for core and destination nodes.
+
 ## 0.1.0-alpha.4
 
 Web UI node inspector and flow readability release.

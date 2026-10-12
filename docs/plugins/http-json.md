@@ -10,7 +10,7 @@ Sends each matching Brainstem output event as JSON to an HTTP endpoint.
 
 ## Example
 
-Send envelopes to the Web UI:
+Send envelopes to the backend API telemetry history:
 
 ```js
 destinations: [
@@ -22,7 +22,7 @@ destinations: [
     sources: "all",
     types: "all",
     config: {
-      url: "http://127.0.0.1:5173/api/events"
+      url: "http://127.0.0.1:5174/api/events"
     }
   }
 ]

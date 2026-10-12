@@ -1,3 +1,11 @@
+import {
+  eventDestinationKey,
+  eventInputId,
+  eventLevel,
+  eventTimestamp
+} from "../../src/telemetry/events.mjs";
+export { eventLevel, eventTimestamp } from "../../src/telemetry/events.mjs";
+
 const FLOW_COLUMN_GAP = 420;
 const FLOW_ROW_GAP = 205;
 const FLOW_INPUT_X = 0;
@@ -6,10 +14,6 @@ const FLOW_DESTINATION_X = FLOW_CORE_X + FLOW_COLUMN_GAP;
 
 export function eventId(event, index) {
   return `${event.receivedAt ?? event.payload?.timestamp ?? "event"}-${index}`;
-}
-
-export function eventTimestamp(event) {
-  return event.payload?.timestamp ?? event.receivedAt ?? new Date().toISOString();
 }
 
 export function eventTitle(event) {
@@ -45,14 +49,6 @@ export function eventSummary(event) {
   return event.kind;
 }
 
-export function eventLevel(event) {
-  if (event.kind === "brainstem.log") return event.payload.level ?? "info";
-  if (event.kind === "brainstem.output") return "output";
-  if (event.kind === "brainstem.plugin.log") return event.payload.level ?? "info";
-  if (event.kind.includes("failed")) return "error";
-  return "event";
-}
-
 export function eventNodeIds(event) {
   const p = event.payload ?? {};
   const ids = [];
@@ -65,12 +61,11 @@ export function eventNodeIds(event) {
   }
 
   if (event.kind === "brainstem.output") {
-    const inputId = p.input?.id ?? p.input?.plugin;
-    const destinationPlugin = p.destination?.plugin;
-    const destinationName = p.destination?.name;
+    const inputId = eventInputId(event);
+    const destinationKey = eventDestinationKey(event);
     if (inputId) ids.push(`input:${inputId}`);
     ids.push("core");
-    if (destinationPlugin && destinationName) ids.push(`destination:${destinationPlugin}:${destinationName}`);
+    if (destinationKey) ids.push(`destination:${destinationKey}`);
   }
 
   if (event.kind === "brainstem.plugin.log") {

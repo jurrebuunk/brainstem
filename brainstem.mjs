@@ -3,6 +3,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import {
+  createBackendApiServer,
+  normalizeBackendApiConfig
+} from "./src/backend/api-server.mjs";
 import { createRuntimeLogger } from "./src/runtime/logger.mjs";
 import { BrainstemRuntime } from "./src/runtime/runtime.mjs";
 
@@ -24,6 +28,31 @@ if (args.has("--help") || args.has("-h")) {
 
 const config =
   await loadConfig(configPath);
+
+const apiConfig = normalizeBackendApiConfig(
+  config.runtime?.api ?? {},
+  { repoRoot: process.cwd() }
+);
+let backendApi = null;
+
+if (apiConfig.enabled) {
+  backendApi = createBackendApiServer(apiConfig);
+  await backendApi.listen();
+
+  if (!config.runtime) config.runtime = {};
+  const telemetry = config.runtime.telemetry;
+  const telemetryConfigured = typeof telemetry === "string"
+    ? telemetry.length > 0
+    : Boolean(telemetry?.url);
+
+  if (!telemetryConfigured) {
+    config.runtime.telemetry = {
+      ...(telemetry && typeof telemetry === "object" ? telemetry : {}),
+      url: backendApi.telemetryUrl,
+      ...(apiConfig.token ? { headers: { authorization: `Bearer ${apiConfig.token}` } } : {})
+    };
+  }
+}
 
 const inputs =
   config.inputs ?? [];
@@ -55,6 +84,7 @@ if (inputs.length === 0) {
     "no input plugins configured"
   );
 
+  await backendApi?.close();
   process.exitCode = 1;
 }
 else {
@@ -131,6 +161,7 @@ else {
   }
   finally {
     await runtime.close();
+    await backendApi?.close();
   }
 }
 

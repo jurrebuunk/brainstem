@@ -2,7 +2,7 @@
 
 Brainstem includes a minimal operations Web UI under `web/`.
 
-The Web UI is intentionally separate from the headless runtime. It does not run the core or own plugin state. It receives runtime telemetry and output envelopes over HTTP, renders a live React Flow graph, persists the telemetry/event log and derived stats in a local SQLite database, and includes Settings tabs for appearance and `brainstem.config.mjs` editing.
+The Web UI is intentionally separate from the headless runtime and backend API. It does not run the core, own plugin state, or access persistence directly. It calls backend API endpoints for event history, live SSE, stats, and config management, then renders the operational interface.
 
 ## Run
 
@@ -12,10 +12,11 @@ Install web dependencies once:
 npm --prefix web install
 ```
 
-Start the Web UI:
+Start the backend API, then the Web UI:
 
 ```sh
-npm run web
+npm run api
+WEB_BACKEND_URL=http://127.0.0.1:5174 npm run web
 ```
 
 Open:
@@ -24,11 +25,7 @@ Open:
 http://127.0.0.1:5173
 ```
 
-Then start Brainstem in another terminal:
-
-```sh
-npm start
-```
+For a single runtime process that owns telemetry automatically, set `runtime.api.enabled: true` in `brainstem.config.mjs` and run `npm start`.
 
 ## What it shows
 
@@ -62,18 +59,22 @@ The sidebar has three pages:
 
 ## Connection model
 
-Brainstem sends structured telemetry to the Web UI:
+The backend API owns telemetry ingestion, persistence, statistics, SSE, and config management. The Web UI proxies `/api/*` to `WEB_BACKEND_URL` and is otherwise static presentation.
+
+Backend API config:
 
 ```js
 runtime: {
-  telemetry: {
-    url: "http://127.0.0.1:5173/api/events",
-    snapshotIntervalMs: 5000
+  api: {
+    enabled: true,
+    host: "127.0.0.1",
+    port: 5174,
+    telemetryDbPath: "data/web-stats.sqlite"
   }
 }
 ```
 
-The Web UI exposes:
+The backend API exposes:
 
 ```text
 POST /api/events   ingest telemetry and output events
@@ -85,15 +86,15 @@ PUT  /api/config   syntax-check and write brainstem.config.mjs
 GET  /api/health   health check
 ```
 
-The Web UI persists raw telemetry/output events and derived stats in SQLite at `data/web-stats.sqlite` by default. Override with `WEB_STATS_DB=/path/to/web-stats.sqlite`. On restart, the Flow page reloads recent events from SQLite and continues with live updates from `/api/stream`.
+The backend persists raw telemetry/output events and derived stats in SQLite at `data/web-stats.sqlite` by default. Override with `BRAINSTEM_API_DB=/path/to/web-stats.sqlite` or `runtime.api.telemetryDbPath`. On Web UI restart, the Flow page reloads recent events from the backend and continues with live updates from `/api/stream`.
 
 Event log retention is controlled by `WEB_EVENTS_PRUNE_AFTER_DAYS` and `WEB_EVENTS_MAX_ROWS` (defaults: 14 days and 50,000 rows). Set either to `0` to disable that pruning mode. Old time-series rows are pruned after 14 days by default; override with `STATS_PRUNE_AFTER_DAYS` or set it to `0` to disable time-series pruning.
 
-The config editor writes atomically after `node --check` validation and creates a timestamped `.bak` file next to the config before replacement. Override the editable config path with `BRAINSTEM_CONFIG=/path/to/brainstem.config.mjs`. Request bodies are capped at 1 MiB by default; override with `MAX_BODY_BYTES`.
+The backend config API writes atomically after `node --check` validation and creates a timestamped `.bak` file next to the config before replacement. Override the editable config path with `BRAINSTEM_CONFIG=/path/to/brainstem.config.mjs`. Request bodies are capped at 1 MiB by default; override with `MAX_BODY_BYTES`. Set `BRAINSTEM_API_TOKEN` and `WEB_BACKEND_TOKEN` when exposing the API beyond localhost.
 
 ## HTTP JSON output
 
-To show destination output envelopes in the Web UI, configure the HTTP JSON destination:
+To emit destination output envelopes into the backend telemetry history, configure the HTTP JSON destination:
 
 ```js
 destinations: [
@@ -105,7 +106,7 @@ destinations: [
     sources: "all",
     types: "all",
     config: {
-      url: "http://127.0.0.1:5173/api/events"
+      url: "http://127.0.0.1:5174/api/events"
     }
   }
 ]

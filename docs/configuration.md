@@ -125,9 +125,17 @@ runtime: {
     blockInputOnFailure: false
   },
 
+  api: {
+    // optional: backend-owned telemetry history, stats, SSE, and config API
+    enabled: true,
+    host: "127.0.0.1",
+    port: 5174,
+    telemetryDbPath: "data/web-stats.sqlite"
+  },
+
   telemetry: {
-    // optional: send structured runtime events to the Web UI or another receiver
-    url: "http://127.0.0.1:5173/api/events",
+    // optional: send structured runtime events to a custom receiver.
+    // When api.enabled is true and telemetry.url is omitted, Brainstem sends to its own backend API.
     snapshotIntervalMs: 5000
   },
 

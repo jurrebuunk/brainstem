@@ -1,12 +1,13 @@
 {
   "name": "@jurrebuunk/brainstem",
-  "version": "0.1.0-alpha.4",
+  "version": "0.1.0-alpha.5",
   "description": "A lightweight decision and orchestration layer for autonomous AI agents.",
   "main": "src/core/brainstem.mjs",
   "exports": {
     ".": "./src/core/brainstem.mjs",
     "./runtime": "./src/runtime/runtime.mjs",
     "./sdk": "./src/sdk/index.mjs",
+    "./telemetry": "./src/telemetry/events.mjs",
     "./record-stores": "./src/core/record-stores.mjs",
     "./checkpoints": "./src/runtime/checkpoints.mjs"
   },
@@ -14,6 +15,7 @@
     "start": "node brainstem.mjs",
     "start:once": "node brainstem.mjs --once",
     "start:once:all": "node brainstem.mjs --once --all",
+    "api": "node brainstem-api.mjs",
     "http-log-server": "node http-log-server.mjs",
     "web": "npm --prefix web run dev",
     "web:build": "npm --prefix web run build",
@@ -39,7 +41,8 @@
     "mailparser": "^3.9.28"
   },
   "bin": {
-    "brainstem": "brainstem.mjs"
+    "brainstem": "brainstem.mjs",
+    "brainstem-api": "brainstem-api.mjs"
   },
   "engines": {
     "node": ">=24.0.0"
@@ -54,6 +57,7 @@
   "homepage": "https://github.com/jurrebuunk/brainstem#readme",
   "files": [
     "brainstem.mjs",
+    "brainstem-api.mjs",
     "http-log-server.mjs",
     "run-plugin-test.mjs",
     "flake.nix",

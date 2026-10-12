@@ -1,33 +1,38 @@
-import { isAbsolute, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-
-import {
-  createDeferredCheckpoint,
-  JsonFileCheckpointStore,
-  MemoryCheckpointStore
-} from "./checkpoints.mjs";
+import { createDeferredCheckpoint } from "./checkpoints.mjs";
+import { eventMatchesDestination } from "./destinations.mjs";
 import { createRuntimeLogger } from "./logger.mjs";
-import { Brainstem } from "../core/brainstem.mjs";
 import {
-  MemoryRecordStore,
-  SqliteRecordStore
-} from "../core/record-stores.mjs";
+  loadDestinationPlugin,
+  loadInputPlugin
+} from "./plugin-loader.mjs";
+import {
+  checkpointKeyForEntry,
+  toAsyncIterable
+} from "./polling.mjs";
+import {
+  DEFAULT_RETRY,
+  normalizeRetry,
+  sleep
+} from "./retry.mjs";
+import {
+  createCheckpointStore,
+  createRecordStore,
+  storeInfo
+} from "./stores.mjs";
+import {
+  createTelemetrySink,
+  telemetryEvent,
+  telemetryValue
+} from "./telemetry.mjs";
+import { Brainstem } from "../core/brainstem.mjs";
+export { loadDestinationPlugin, loadInputPlugin } from "./plugin-loader.mjs";
 import {
   assertObservation,
   createDestinationContext,
-  createInputContext,
-  validateDestinationPlugin,
-  validateInputPlugin
+  createInputContext
 } from "../sdk/index.mjs";
 
 const DEFAULT_INTERVAL_MS = 60_000;
-
-const DEFAULT_RETRY = {
-  attempts: 3,
-  minDelayMs: 1_000,
-  maxDelayMs: 30_000,
-  factor: 2
-};
 
 export class BrainstemRuntime {
   constructor({
@@ -507,14 +512,7 @@ export class BrainstemRuntime {
   }
 
   #emitTelemetry(kind, payload = {}) {
-    this.telemetry?.send({
-      version: "1",
-      kind,
-      payload: {
-        timestamp: new Date().toISOString(),
-        ...payload
-      }
-    });
+    this.telemetry?.send(telemetryEvent(kind, payload));
   }
 
   #emitSnapshot() {
@@ -956,58 +954,6 @@ export class BrainstemRuntime {
   }
 }
 
-export async function loadInputPlugin(
-  specifier,
-  { baseDir = process.cwd() } = {}
-) {
-  const url =
-    resolveLocalModuleUrl(
-      specifier,
-      baseDir
-    );
-
-  const module =
-    await import(url);
-
-  const plugin =
-    module.default;
-
-  validateInputPlugin(
-    plugin
-  );
-
-  return {
-    plugin,
-    url
-  };
-}
-
-export async function loadDestinationPlugin(
-  specifier,
-  { baseDir = process.cwd() } = {}
-) {
-  const url =
-    resolveLocalModuleUrl(
-      specifier,
-      baseDir
-    );
-
-  const module =
-    await import(url);
-
-  const plugin =
-    module.default;
-
-  validateDestinationPlugin(
-    plugin
-  );
-
-  return {
-    plugin,
-    url
-  };
-}
-
 export async function runBrainstemRuntime(options) {
   const runtime =
     new BrainstemRuntime(options);
@@ -1029,318 +975,6 @@ export async function runBrainstemRuntime(options) {
   finally {
     await runtime.close();
   }
-}
-
-function resolveLocalModuleUrl(specifier, baseDir) {
-  if (typeof specifier !== "string") {
-    throw new TypeError(
-      "Plugin module specifier must be a string"
-    );
-  }
-
-  if (specifier.startsWith("file:")) {
-    return specifier;
-  }
-
-  if (
-    !specifier.startsWith(".") &&
-    !specifier.startsWith("/")
-  ) {
-    throw new Error(
-      "Phase 1 only supports local file input plugins. Use './plugin.mjs' or an absolute path."
-    );
-  }
-
-  const filePath = isAbsolute(specifier)
-    ? specifier
-    : resolve(baseDir, specifier);
-
-  return pathToFileURL(
-    filePath
-  ).href;
-}
-
-async function* toAsyncIterable(value) {
-  const resolved =
-    await value;
-
-  if (!resolved) {
-    return;
-  }
-
-  if (
-    typeof resolved[Symbol.asyncIterator] ===
-    "function"
-  ) {
-    yield* resolved;
-    return;
-  }
-
-  if (
-    typeof resolved[Symbol.iterator] ===
-    "function"
-  ) {
-    for (const item of resolved) {
-      yield item;
-    }
-
-    return;
-  }
-
-  throw new TypeError(
-    "poll(ctx) must return an iterable, async iterable, or array of observations"
-  );
-}
-
-function normalizeRetry(retry) {
-  retry.attempts = Math.max(
-    1,
-    Number(retry.attempts ?? 1)
-  );
-
-  retry.minDelayMs = Math.max(
-    0,
-    Number(retry.minDelayMs ?? 0)
-  );
-
-  retry.maxDelayMs = Math.max(
-    retry.minDelayMs,
-    Number(retry.maxDelayMs ?? retry.minDelayMs)
-  );
-
-  retry.factor = Math.max(
-    1,
-    Number(retry.factor ?? 1)
-  );
-
-  return retry;
-}
-
-function storeInfo(store) {
-  if (!store) {
-    return null;
-  }
-
-  return {
-    type: store.constructor?.name ?? "unknown",
-    path: store.path ?? null
-  };
-}
-
-function telemetryValue(value) {
-  if (value instanceof Error) {
-    return {
-      name: value.name,
-      message: value.message,
-      code: value.code,
-      status: value.status,
-      stack: value.stack
-    };
-  }
-
-  if (Array.isArray(value)) {
-    return value.map(telemetryValue);
-  }
-
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        key,
-        telemetryValue(item)
-      ])
-    );
-  }
-
-  return value;
-}
-
-function createTelemetrySink(config) {
-  if (!config) {
-    return null;
-  }
-
-  const url = typeof config === "string"
-    ? config
-    : config.url;
-
-  if (!url) {
-    return null;
-  }
-
-  const headers = typeof config === "object"
-    ? config.headers ?? {}
-    : {};
-
-  return {
-    send(event) {
-      fetch(url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...headers
-        },
-        body: JSON.stringify(event)
-      }).catch(() => {});
-    }
-  };
-}
-
-function createRecordStore(config, baseDir) {
-  const records =
-    config.runtime?.records;
-
-  if (!records || records === false) {
-    return new MemoryRecordStore();
-  }
-
-  const type =
-    records.type ?? "memory";
-
-  if (type === "memory") {
-    return new MemoryRecordStore();
-  }
-
-  if (type === "sqlite") {
-    return new SqliteRecordStore({
-      path: resolve(
-        baseDir,
-        records.path ?? "data/brainstem.sqlite"
-      ),
-      pruneAfterDays:
-        records.pruneAfterDays ?? null
-    });
-  }
-
-  throw new Error(
-    `Unsupported record store type '${type}'`
-  );
-}
-
-function createCheckpointStore(config, baseDir) {
-  const checkpoints =
-    config.runtime?.checkpoints;
-
-  if (checkpoints === false) {
-    return new MemoryCheckpointStore();
-  }
-
-  const type =
-    checkpoints?.type ?? "json";
-
-  if (type === "memory") {
-    return new MemoryCheckpointStore();
-  }
-
-  if (type === "json") {
-    const path =
-      checkpoints?.path ??
-      "data/checkpoints.json";
-
-    return new JsonFileCheckpointStore(
-      resolve(baseDir, path)
-    );
-  }
-
-  throw new Error(
-    `Unsupported checkpoint store type '${type}'`
-  );
-}
-
-function checkpointKeyForEntry(
-  entry,
-  plugin,
-  inputName,
-  index
-) {
-  return (
-    entry.id ??
-    `${plugin.name}.${inputName}.${index}`
-  );
-}
-
-function sleep(ms, signal) {
-  if (signal.aborted) {
-    return Promise.resolve();
-  }
-
-  return new Promise(resolve => {
-    const timeout =
-      setTimeout(resolve, ms);
-
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timeout);
-        resolve();
-      },
-      { once: true }
-    );
-  });
-}
-
-function eventMatchesDestination(event, entry) {
-  return (
-    decisionLevelMatches(event.decision, entry) &&
-    routeMatches(event.decision, entry) &&
-    sourceMatches(event.observation, entry) &&
-    typeMatches(event.observation, entry)
-  );
-}
-
-function decisionLevelMatches(decision, entry) {
-  const allowed =
-    entry.decisions ?? [
-      "queue",
-      "dispatch",
-      "escalate"
-    ];
-
-  if (allowed === "all") {
-    return true;
-  }
-
-  return allowed.includes(
-    decision.payload.decision
-  );
-}
-
-function routeMatches(decision, entry) {
-  const allowed =
-    entry.routes;
-
-  if (!allowed || allowed === "all") {
-    return true;
-  }
-
-  return allowed.includes(
-    decision.payload.route
-  );
-}
-
-function sourceMatches(observation, entry) {
-  const allowed =
-    entry.sources;
-
-  if (!allowed || allowed === "all") {
-    return true;
-  }
-
-  return allowed.includes(
-    observation.payload.source.type
-  );
-}
-
-function typeMatches(observation, entry) {
-  const allowed =
-    entry.types;
-
-  if (!allowed || allowed === "all") {
-    return true;
-  }
-
-  return allowed.includes(
-    observation.payload.type
-  );
 }
 
 function defaultOnDecision() {}

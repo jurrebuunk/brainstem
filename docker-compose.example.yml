@@ -1,35 +1,32 @@
 services:
   brainstem:
-    image: ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4
+    image: ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      BRAINSTEM_API: "1"
+      BRAINSTEM_API_HOST: 0.0.0.0
+      BRAINSTEM_API_PORT: 5174
     volumes:
-      - ./brainstem.config.mjs:/app/brainstem.config.mjs:ro
+      # Writable so backend-owned /api/config can save. Keep Web/API behind localhost or auth.
+      - ./brainstem.config.mjs:/app/brainstem.config.mjs
       - brainstem-data:/app/data
     command: ["node", "brainstem.mjs"]
-    depends_on:
-      - brainstem-web
 
   brainstem-web:
-    image: ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4
+    image: ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5
     restart: unless-stopped
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 5173
-      BRAINSTEM_CONFIG: /app/brainstem.config.mjs
-      WEB_STATS_DB: /app/data/web-stats.sqlite
-      STATS_PRUNE_AFTER_DAYS: 14
-      WEB_EVENTS_PRUNE_AFTER_DAYS: 14
-      WEB_EVENTS_MAX_ROWS: 50000
-    volumes:
-      # Writable so the /config page can save. Put this behind localhost or auth.
-      - ./brainstem.config.mjs:/app/brainstem.config.mjs
-      - brainstem-data:/app/data
+      WEB_BACKEND_URL: http://brainstem:5174
     ports:
       - "127.0.0.1:5173:5173"
     command: ["node", "web/server.mjs"]
+    depends_on:
+      - brainstem
 
 volumes:
   brainstem-data:

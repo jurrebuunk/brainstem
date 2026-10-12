@@ -8,6 +8,7 @@ RUN npm ci --omit=dev
 COPY web/package.json web/package-lock.json ./web/
 RUN npm --prefix web ci
 
+COPY src ./src
 COPY web ./web
 RUN npm --prefix web run build
 
@@ -21,7 +22,7 @@ ENV NODE_ENV=production \
 
 COPY --from=build /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
-COPY brainstem.mjs brainstem.config.example.mjs .env.example README.md LICENSE CHANGELOG.md ./
+COPY brainstem.mjs brainstem-api.mjs brainstem.config.example.mjs .env.example README.md LICENSE CHANGELOG.md ./
 COPY src ./src
 COPY plugins ./plugins
 COPY docs ./docs
@@ -30,7 +31,7 @@ COPY --from=build /app/web/dist ./web/dist
 
 RUN mkdir -p /app/data \
   && chown -R node:node /app \
-  && chmod +x /app/brainstem.mjs
+  && chmod +x /app/brainstem.mjs /app/brainstem-api.mjs
 
 USER node
 

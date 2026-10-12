@@ -9,7 +9,7 @@ ghcr.io/jurrebuunk/brainstem
 Current prerelease image:
 
 ```text
-ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4
+ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5
 ```
 
 The image contains both:
@@ -29,24 +29,7 @@ cp .env.example .env
 cp docker-compose.example.yml docker-compose.yml
 ```
 
-For Compose, configure telemetry URLs inside `brainstem.config.mjs` to use the service name, not localhost:
-
-```js
-runtime: {
-  telemetry: {
-    url: "http://brainstem-web:5173/api/events",
-    snapshotIntervalMs: 5000
-  }
-}
-```
-
-If using the HTTP JSON destination for Web UI output envelopes, use:
-
-```js
-config: {
-  url: "http://brainstem-web:5173/api/events"
-}
-```
+The example Compose file starts the runtime with the backend API enabled. The Web UI is presentation-only and proxies `/api/*` to `http://brainstem:5174`.
 
 Start:
 
@@ -78,23 +61,26 @@ docker run --rm \
   --env-file .env \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4 \
+  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5 \
   node brainstem.mjs --once
 ```
 
-Run continuously:
+Run continuously with the backend API enabled:
 
 ```sh
 docker run -d \
   --name brainstem \
   --restart unless-stopped \
   --env-file .env \
-  -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
+  -e BRAINSTEM_API=1 \
+  -e BRAINSTEM_API_HOST=0.0.0.0 \
+  -e BRAINSTEM_API_PORT=5174 \
+  -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4
+  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5
 ```
 
-Run the Web UI container:
+Run the Web UI container separately:
 
 ```sh
 docker run -d \
@@ -103,14 +89,9 @@ docker run -d \
   -e NODE_ENV=production \
   -e HOST=0.0.0.0 \
   -e PORT=5173 \
-  -e BRAINSTEM_CONFIG=/app/brainstem.config.mjs \
-  -e WEB_STATS_DB=/app/data/web-stats.sqlite \
-  -e WEB_EVENTS_PRUNE_AFTER_DAYS=14 \
-  -e WEB_EVENTS_MAX_ROWS=50000 \
+  -e WEB_BACKEND_URL=http://brainstem:5174 \
   -p 127.0.0.1:5173:5173 \
-  -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs" \
-  -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4 \
+  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5 \
   node web/server.mjs
 ```
 
@@ -125,8 +106,8 @@ docker logs -f brainstem-web
 
 The included `docker-compose.example.yml` defines:
 
-- `brainstem` — headless runtime, config mounted read-only
-- `brainstem-web` — Web UI/stats/config editor, config mounted writable
+- `brainstem` — headless runtime plus backend API, owns telemetry/history/stats/config management
+- `brainstem-web` — presentation-only Web UI, proxies API calls to `brainstem`
 - `brainstem-data` — shared persistent data volume
 
 Commands:
@@ -168,15 +149,17 @@ brainstem-data volume    runtime state
 
 Do not bake secrets into the image. Use `.env`, environment variables, or your orchestrator's secret store.
 
-## Web UI runtime environment
+## Backend API and Web UI runtime environment
 
-The Web UI server supports:
+Backend API variables:
 
 ```text
-HOST                       default 127.0.0.1 locally, 0.0.0.0 in Dockerfile
-PORT                       default 5173
-BRAINSTEM_CONFIG           editable config path; default /app/brainstem.config.mjs in Docker
-WEB_STATS_DB               Web telemetry/stats SQLite path; default data/web-stats.sqlite
+BRAINSTEM_API              set 1/true to start the backend API with the runtime
+BRAINSTEM_API_HOST         default 127.0.0.1
+BRAINSTEM_API_PORT         default 5174
+BRAINSTEM_API_DB           telemetry/stats SQLite path; default data/web-stats.sqlite
+BRAINSTEM_API_TOKEN        optional bearer token for API routes except /api/health
+BRAINSTEM_CONFIG           editable config path; default brainstem.config.mjs
 MAX_EVENTS                 live in-memory SSE safety buffer; default 2000
 MAX_BODY_BYTES             request body cap; default 1048576
 STATS_PRUNE_AFTER_DAYS     stats time-series retention; default 14; set 0 to disable
@@ -184,18 +167,27 @@ WEB_EVENTS_PRUNE_AFTER_DAYS event-log retention; default 14; set 0 to disable ti
 WEB_EVENTS_MAX_ROWS        event-log row cap; default 50000; set 0 to disable row pruning
 ```
 
-Config saves are syntax-checked with `node --check`, written atomically, and backed up as timestamped `.bak` files next to the config.
+Web UI variables:
+
+```text
+HOST                       default 127.0.0.1 locally, 0.0.0.0 in Dockerfile
+PORT                       default 5173
+WEB_BACKEND_URL            backend API base URL; default http://127.0.0.1:5174
+WEB_BACKEND_TOKEN          optional bearer token forwarded to backend API
+```
+
+Config saves are owned by the backend API, syntax-checked with `node --check`, written atomically, and backed up as timestamped `.bak` files next to the config.
 
 ## Verify published image
 
 ```sh
-docker manifest inspect ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4
+docker manifest inspect ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5
 ```
 
 Pull explicitly:
 
 ```sh
-docker pull ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.4
+docker pull ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5
 ```
 
 ## Build locally
@@ -210,10 +202,11 @@ Run the runtime:
 docker run --rm brainstem:local node brainstem.mjs --help
 ```
 
-Run the Web UI from the local image:
+Run the backend API and Web UI from the local image:
 
 ```sh
-docker run --rm -p 127.0.0.1:5173:5173 brainstem:local node web/server.mjs
+docker run --rm -p 127.0.0.1:5174:5174 -e BRAINSTEM_API_HOST=0.0.0.0 brainstem:local node brainstem-api.mjs
+docker run --rm -p 127.0.0.1:5173:5173 -e WEB_BACKEND_URL=http://host.docker.internal:5174 brainstem:local node web/server.mjs
 ```
 
 ## Published tags
@@ -222,7 +215,7 @@ The GitHub Actions workflow publishes:
 
 - `latest` from `main`
 - branch tags such as `main`
-- git tags such as `v0.1.0-alpha.4`
+- git tags such as `v0.1.0-alpha.5`
 - SHA tags such as `sha-...`
 
 If the package is not visible in the GitHub UI immediately, verify with `docker manifest inspect`; GHCR package pages can lag behind successful pushes.

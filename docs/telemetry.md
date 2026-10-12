@@ -1,13 +1,25 @@
 # Runtime Telemetry
 
-Telemetry is structured machine-readable runtime activity for the Web UI and future monitoring tools. It is separate from human console logs and from destination plugins.
+Telemetry is structured machine-readable runtime activity for the backend API, optional Web UI, and future monitoring tools. It is separate from human console logs and from destination plugins.
 
-Configure it with:
+Preferred local configuration uses the backend API owned by the runtime:
+
+```js
+runtime: {
+  api: {
+    enabled: true,
+    host: "127.0.0.1",
+    port: 5174
+  }
+}
+```
+
+When `runtime.api.enabled` is true and `runtime.telemetry.url` is not set, Brainstem sends telemetry to its own backend API automatically. You can still configure an explicit telemetry URL for custom collectors:
 
 ```js
 runtime: {
   telemetry: {
-    url: "http://127.0.0.1:5173/api/events",
+    url: "http://127.0.0.1:5174/api/events",
     snapshotIntervalMs: 5000
   }
 }
