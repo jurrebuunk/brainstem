@@ -25,14 +25,16 @@ const nodeTypes = {
 };
 
 const pages = [
-  { id: "flow", label: "Flow", icon: "schema" },
-  { id: "stats", label: "Stats", icon: "query_stats" },
+  { id: "flow", label: "Flow", icon: "schema", permission: "dashboard:read" },
+  { id: "stats", label: "Stats", icon: "query_stats", permission: "stats:read" },
   { id: "settings", label: "Settings", icon: "settings" }
 ];
 
 const settingsTabs = [
   { id: "appearance", label: "Appearance", icon: "palette" },
-  { id: "config", label: "Config", icon: "code" }
+  { id: "config", label: "Config", icon: "code", permission: "config:read" },
+  { id: "users", label: "Users", icon: "group", permission: "users:read" },
+  { id: "roles", label: "Roles", icon: "admin_panel_settings", permission: "roles:read" }
 ];
 
 const defaultMetrics = [
@@ -100,6 +102,7 @@ export default function App() {
     const stored = Number(localStorage.getItem("brainstem-sidebar-width"));
     return Number.isFinite(stored) && stored >= 160 ? stored : 220;
   });
+  const auth = useAuth();
   const [flowInstance, setFlowInstance] = useState(null);
   const autoFitDoneRef = useRef(false);
   const graph = useMemo(() => {
@@ -182,28 +185,29 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    fetch("/api/events")
+    if (!auth.user || !hasPermission(auth.user, "events:read")) return undefined;
+
+    auth.apiFetch("/api/events")
       .then(response => response.json())
       .then(setEvents)
-      .catch(() => {});
+      .catch(error => {
+        if (error.status === 401) auth.refresh();
+      });
 
-    const source = new EventSource("/api/stream");
+    const source = new EventSource("/api/stream", { withCredentials: true });
 
     source.onmessage = message => {
       const event = JSON.parse(message.data);
+      if (event.kind === "web.connected") return;
+      setEvents(current => [...current.slice(-1999), event]);
+    };
 
-      if (event.kind === "web.connected") {
-        return;
-      }
-
-      setEvents(current => [
-        ...current.slice(-1999),
-        event
-      ]);
+    source.onerror = () => {
+      // Let the browser retry; auth refresh happens through normal API calls.
     };
 
     return () => source.close();
-  }, []);
+  }, [auth.user?.id]);
 
   const onNodeClick = useCallback((_event, node) => {
     setSelectedNode(node);
@@ -220,6 +224,22 @@ export default function App() {
       .reverse();
   }, [events, selectedNode]);
 
+  if (auth.loading) {
+    return <AuthShell title="Loading Brainstem…" />;
+  }
+
+  if (auth.setupRequired) {
+    return <FirstRunOnboarding auth={auth} />;
+  }
+
+  if (!auth.user && auth.error) {
+    return <BackendUnavailable auth={auth} />;
+  }
+
+  if (!auth.user) {
+    return <LoginPage auth={auth} />;
+  }
+
   return (
     <main
       className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
@@ -232,6 +252,8 @@ export default function App() {
         setCollapsed={setSidebarCollapsed}
         width={sidebarWidth}
         setWidth={setSidebarWidth}
+        user={auth.user}
+        onLogout={auth.logout}
       />
 
       <section className="page">
@@ -246,7 +268,7 @@ export default function App() {
             onInit={setFlowInstance}
           />
         )}
-        {page === "stats" && <StatsPage events={events} actualTheme={actualTheme} />}
+        {page === "stats" && <StatsPage events={events} actualTheme={actualTheme} auth={auth} />}
         {page === "settings" && (
           <SettingsPage
             activeTab={settingsTab}
@@ -254,6 +276,7 @@ export default function App() {
             themePreference={themePreference}
             actualTheme={actualTheme}
             setThemePreference={setThemePreference}
+            auth={auth}
           />
         )}
       </section>
@@ -270,7 +293,260 @@ export default function App() {
   );
 }
 
-function Sidebar({ page, setPage, collapsed, setCollapsed, width, setWidth }) {
+function useAuth() {
+  const [user, setUser] = useState(null);
+  const [csrfToken, setCsrfToken] = useState(null);
+  const [setupRequired, setSetupRequired] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const apiFetch = useCallback(async (url, options = {}) => {
+    const method = options.method ?? "GET";
+    const headers = {
+      ...(options.body ? { "content-type": "application/json" } : {}),
+      ...(csrfToken && !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase()) ? { "x-csrf-token": csrfToken } : {}),
+      ...(options.headers ?? {})
+    };
+    const response = await fetch(url, {
+      credentials: "include",
+      ...options,
+      method,
+      headers
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      const err = new Error(body.error ?? `Request failed (${response.status})`);
+      err.status = response.status;
+      throw err;
+    }
+    return response;
+  }, [csrfToken]);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const status = await fetch("/api/auth/status", { credentials: "include" }).then(response => response.json());
+      setSetupRequired(status.setupRequired === true);
+      if (!status.setupRequired) {
+        const me = await fetch("/api/auth/me", { credentials: "include" });
+        if (me.ok) {
+          const body = await me.json();
+          setUser(body.user);
+          setCsrfToken(body.csrfToken);
+        }
+        else {
+          setUser(null);
+          setCsrfToken(null);
+        }
+      }
+      else {
+        setUser(null);
+        setCsrfToken(null);
+      }
+    }
+    catch (refreshError) {
+      setError(refreshError.message);
+      setUser(null);
+    }
+    finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const login = useCallback(async (payload, setup = false) => {
+    setError(null);
+    const response = await fetch(setup ? "/api/auth/setup" : "/api/auth/login", {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error ?? "Authentication failed");
+    setUser(body.user);
+    setCsrfToken(body.csrfToken);
+    setSetupRequired(false);
+  }, []);
+
+  const logout = useCallback(async () => {
+    try {
+      await apiFetch("/api/auth/logout", { method: "POST" });
+    }
+    catch {}
+    setUser(null);
+    setCsrfToken(null);
+  }, [apiFetch]);
+
+  return { user, csrfToken, setupRequired, loading, error, apiFetch, login, logout, refresh };
+}
+
+function hasPermission(user, permission) {
+  return Boolean(user?.permissions?.includes(permission));
+}
+
+function AuthShell({ title, children }) {
+  return (
+    <main className="auth-shell">
+      <section className="auth-card">
+        <div className="auth-brand"><span className="brand-mark">B</span><strong>Brainstem</strong></div>
+        <h1>{title}</h1>
+        {children}
+      </section>
+    </main>
+  );
+}
+
+function BackendUnavailable({ auth }) {
+  return (
+    <AuthShell title="Backend unavailable">
+      <p>Brainstem Web is running, but it cannot reach the backend API. Start the backend API or enable runtime.api in the Brainstem config, then retry.</p>
+      <pre className="auth-command">npm run api{"\n"}WEB_BACKEND_URL=http://127.0.0.1:5174 npm run web</pre>
+      <div className="notice notice-error">{auth.error}</div>
+      <button className="auth-primary-button" onClick={auth.refresh}>Retry connection</button>
+    </AuthShell>
+  );
+}
+
+function LoginPage({ auth }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [notice, setNotice] = useState(auth.error ?? "");
+
+  const submit = async event => {
+    event.preventDefault();
+    setNotice("");
+    try {
+      await auth.login({ username, password }, false);
+    }
+    catch (error) {
+      setNotice(error.message);
+    }
+  };
+
+  return (
+    <AuthShell title="Sign in">
+      <p>Sign in to manage Brainstem.</p>
+      {notice && <div className="notice notice-error">{notice}</div>}
+      <form className="auth-form" onSubmit={submit}>
+        <label>Username<input value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" required /></label>
+        <label>Password<input value={password} onChange={event => setPassword(event.target.value)} type="password" autoComplete="current-password" required /></label>
+        <button type="submit">Login</button>
+      </form>
+    </AuthShell>
+  );
+}
+
+function FirstRunOnboarding({ auth }) {
+  const [step, setStep] = useState(0);
+  const [username, setUsername] = useState("");
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [notice, setNotice] = useState(auth.error ?? "");
+  const passwordChecks = useMemo(() => evaluatePassword(password, username), [password, username]);
+  const secureContext = typeof window === "undefined" || window.location.protocol === "https:" || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+  const usernameOk = /^[a-zA-Z0-9_.@-]{3,80}$/.test(username);
+  const canSubmit = usernameOk && passwordChecks.ok && password === confirmPassword && acknowledged && !submitting;
+
+  const submit = async event => {
+    event.preventDefault();
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setNotice("");
+    try {
+      await auth.login({ username, name, password }, true);
+    }
+    catch (error) {
+      setNotice(error.message);
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <AuthShell title="Set up Brainstem">
+      <div className="onboarding-progress" aria-label="Setup progress">
+        {["Secure", "Admin", "Finish"].map((label, index) => (
+          <button key={label} className={step === index ? "active" : index < step ? "complete" : ""} onClick={() => setStep(index)} type="button">
+            <span>{index + 1}</span>{label}
+          </button>
+        ))}
+      </div>
+      {notice && <div className="notice notice-error">{notice}</div>}
+      {step === 0 && (
+        <div className="onboarding-panel">
+          <p className="onboarding-lede">No administrator exists yet. Create the first local administrator before Brainstem exposes telemetry, config, or user management.</p>
+          <ul className="security-list">
+            <li><span className="material-symbols-outlined" aria-hidden="true">lock</span>No default credentials are created.</li>
+            <li><span className="material-symbols-outlined" aria-hidden="true">key</span>Passwords are hashed with Argon2id.</li>
+            <li><span className="material-symbols-outlined" aria-hidden="true">verified_user</span>Admin sessions use HttpOnly cookies, SameSite, and CSRF protection.</li>
+            <li className={secureContext ? "ok" : "warn"}><span className="material-symbols-outlined" aria-hidden="true">{secureContext ? "shield" : "warning"}</span>{secureContext ? "This setup page is running in a secure local/HTTPS context." : "Use HTTPS or localhost before entering credentials."}</li>
+          </ul>
+          <button type="button" onClick={() => setStep(1)}>Continue</button>
+        </div>
+      )}
+      {step === 1 && (
+        <form className="auth-form onboarding-form" onSubmit={event => { event.preventDefault(); setStep(2); }}>
+          <label>Admin username<input value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" required pattern="[a-zA-Z0-9_.@-]{3,80}" /></label>
+          {!usernameOk && username && <small className="field-hint error">Use 3-80 letters, numbers, dot, underscore, @, or dash.</small>}
+          <label>Display name<input value={name} onChange={event => setName(event.target.value)} autoComplete="name" /></label>
+          <label>Password<input value={password} onChange={event => setPassword(event.target.value)} type="password" autoComplete="new-password" required minLength="12" /></label>
+          <PasswordChecklist checks={passwordChecks.checks} />
+          <label>Confirm password<input value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} type="password" autoComplete="new-password" required /></label>
+          {confirmPassword && password !== confirmPassword && <small className="field-hint error">Passwords do not match.</small>}
+          <button type="submit" disabled={!usernameOk || !passwordChecks.ok || password !== confirmPassword}>Review setup</button>
+        </form>
+      )}
+      {step === 2 && (
+        <form className="auth-form onboarding-form" onSubmit={submit}>
+          <div className="setup-summary">
+            <strong>Initial administrator</strong>
+            <span>{username}</span>
+            <small>This account receives the Administrator role. You can create lower-privilege users after setup.</small>
+          </div>
+          <label className="check-label">
+            <input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} />
+            I saved this password in a password manager. Brainstem cannot recover it.
+          </label>
+          <button type="submit" disabled={!canSubmit}>{submitting ? "Creating administrator…" : "Create administrator"}</button>
+          <button type="button" className="secondary-button" onClick={() => setStep(1)}>Back</button>
+        </form>
+      )}
+    </AuthShell>
+  );
+}
+
+function PasswordChecklist({ checks }) {
+  return (
+    <ul className="password-checklist">
+      {checks.map(check => (
+        <li key={check.label} className={check.ok ? "ok" : ""}>
+          <span className="material-symbols-outlined" aria-hidden="true">{check.ok ? "check_circle" : "radio_button_unchecked"}</span>
+          {check.label}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function evaluatePassword(password, username) {
+  const lower = password.toLowerCase();
+  const checks = [
+    { label: "At least 12 characters", ok: password.length >= 12 },
+    { label: "Not a common or repeated password", ok: !new Set(["password1234", "password12345", "password123456", "adminadminadmin", "brainstembrainstem"]).has(lower) && !/^(.)\1{11,}$/.test(password) },
+    { label: "Different from the username", ok: !username || !lower.includes(username.toLowerCase()) },
+    { label: "Use a mix of words, numbers, or symbols", ok: [/[a-z]/, /[A-Z]/, /[0-9]/, /[^a-zA-Z0-9]/].filter(pattern => pattern.test(password)).length >= 3 }
+  ];
+  return { checks, ok: checks.every(check => check.ok) };
+}
+
+function Sidebar({ page, setPage, collapsed, setCollapsed, width, setWidth, user, onLogout }) {
   const startResize = useCallback(event => {
     event.preventDefault();
     const startX = event.clientX;
@@ -313,7 +589,7 @@ function Sidebar({ page, setPage, collapsed, setCollapsed, width, setWidth }) {
         {!collapsed && <span>Brainstem</span>}
       </div>
       <nav className="sidebar-nav">
-        {pages.map(item => (
+        {pages.filter(item => !item.permission || hasPermission(user, item.permission)).map(item => (
           <button
             key={item.id}
             className={page === item.id ? "active" : ""}
@@ -325,6 +601,20 @@ function Sidebar({ page, setPage, collapsed, setCollapsed, width, setWidth }) {
           </button>
         ))}
       </nav>
+      {user && (
+        <div className="sidebar-user">
+          {!collapsed && (
+            <div className="sidebar-user-meta">
+              <strong>{user.name || user.username}</strong>
+              <span>{user.roles?.map(role => role.name).join(", ")}</span>
+            </div>
+          )}
+          <button onClick={onLogout} title="Logout" aria-label="Logout">
+            <span className="material-symbols-outlined" aria-hidden="true">logout</span>
+            {!collapsed && "Logout"}
+          </button>
+        </div>
+      )}
       {!collapsed && <div className="sidebar-resizer" onPointerDown={startResize} title="Resize sidebar" />}
     </aside>
   );
@@ -441,7 +731,7 @@ function BrainstemNode({ data }) {
   );
 }
 
-function StatsPage({ events, actualTheme }) {
+function StatsPage({ events, actualTheme, auth }) {
   const [stats, setStats] = useState(null);
   const [live, setLive] = useState(true);
   const [rangeMs, setRangeMs] = useState(6 * 60 * 60 * 1000);
@@ -450,11 +740,11 @@ function StatsPage({ events, actualTheme }) {
   const [selectedMetrics, setSelectedMetrics] = useState(defaultMetrics);
 
   const loadStats = useCallback(() => {
-    fetch("/api/stats")
+    auth.apiFetch("/api/stats")
       .then(response => response.json())
       .then(setStats)
       .catch(() => {});
-  }, []);
+  }, [auth.apiFetch]);
 
   useEffect(() => {
     loadStats();
@@ -811,16 +1101,19 @@ function parseColor(value) {
   return null;
 }
 
-function SettingsPage({ activeTab, setActiveTab, themePreference, actualTheme, setThemePreference }) {
+function SettingsPage({ activeTab, setActiveTab, themePreference, actualTheme, setThemePreference, auth }) {
+  const visibleTabs = settingsTabs.filter(tab => !tab.permission || hasPermission(auth.user, tab.permission));
+  const effectiveTab = visibleTabs.some(tab => tab.id === activeTab) ? activeTab : "appearance";
+
   return (
     <div className="panel-page settings-page">
       <PageHeader title="Settings" subtitle="Appearance and runtime configuration for this Brainstem Web UI." />
       <div className="settings-layout">
         <nav className="settings-tabs" aria-label="Settings sections">
-          {settingsTabs.map(tab => (
+          {visibleTabs.map(tab => (
             <button
               key={tab.id}
-              className={activeTab === tab.id ? "active" : ""}
+              className={effectiveTab === tab.id ? "active" : ""}
               onClick={() => setActiveTab(tab.id)}
             >
               <span className="material-symbols-outlined" aria-hidden="true">{tab.icon}</span>
@@ -829,13 +1122,15 @@ function SettingsPage({ activeTab, setActiveTab, themePreference, actualTheme, s
           ))}
         </nav>
         <section className="settings-panel">
-          {activeTab === "appearance" && (
+          {effectiveTab === "appearance" && (
             <AppearanceSettings
               themePreference={themePreference}
               setThemePreference={setThemePreference}
             />
           )}
-          {activeTab === "config" && <ConfigSettings actualTheme={actualTheme} />}
+          {effectiveTab === "config" && <ConfigSettings actualTheme={actualTheme} auth={auth} />}
+          {effectiveTab === "users" && <UsersSettings auth={auth} />}
+          {effectiveTab === "roles" && <RolesSettings auth={auth} />}
         </section>
       </div>
     </div>
@@ -869,14 +1164,14 @@ function AppearanceSettings({ themePreference, setThemePreference }) {
   );
 }
 
-function ConfigSettings({ actualTheme }) {
+function ConfigSettings({ actualTheme, auth }) {
   const [config, setConfig] = useState({ path: "", content: "" });
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState({ type: "info", text: "Loading config…" });
 
   useEffect(() => {
-    fetch("/api/config")
+    auth.apiFetch("/api/config")
       .then(response => response.json().then(body => ({ response, body })))
       .then(({ response, body }) => {
         if (!response.ok) throw new Error(body.error ?? "Failed to load config");
@@ -885,15 +1180,14 @@ function ConfigSettings({ actualTheme }) {
         setNotice({ type: "info", text: `Loaded ${body.path}` });
       })
       .catch(error => setNotice({ type: "error", text: error.message }));
-  }, []);
+  }, [auth.apiFetch]);
 
   const save = async () => {
     setSaving(true);
     setNotice({ type: "info", text: "Checking and saving config…" });
     try {
-      const response = await fetch("/api/config", {
+      const response = await auth.apiFetch("/api/config", {
         method: "PUT",
-        headers: { "content-type": "application/json" },
         body: JSON.stringify({ content: draft })
       });
       const body = await response.json();
@@ -924,10 +1218,242 @@ function ConfigSettings({ actualTheme }) {
           {saving ? "Saving…" : "Save config"}
         </button>
       </div>
-      {notice.text && <div className={`notice notice-${notice.type}`}>{notice.text}</div>}
+      {notice.text && notice.type !== "info" && <div className={`notice notice-${notice.type}`}>{notice.text}</div>}
       <CodeEditor key={actualTheme} value={draft} onChange={setDraft} theme={actualTheme} />
     </div>
   );
+}
+
+function UsersSettings({ auth }) {
+  const [users, setUsers] = useState([]);
+  const [roles, setRoles] = useState([]);
+  const [notice, setNotice] = useState({ type: "info", text: "Loading users…" });
+  const [draft, setDraft] = useState({ username: "", name: "", password: "", roleIds: [] });
+
+  const load = useCallback(async () => {
+    try {
+      const [usersBody, rolesBody] = await Promise.all([
+        auth.apiFetch("/api/users").then(response => response.json()),
+        auth.apiFetch("/api/roles").then(response => response.json())
+      ]);
+      setUsers(usersBody);
+      setRoles(rolesBody.roles ?? []);
+      setDraft(current => ({ ...current, roleIds: current.roleIds.length ? current.roleIds : rolesBody.roles?.filter(role => role.name === "Viewer").map(role => role.id) ?? [] }));
+      setNotice({ type: "info", text: `${usersBody.length} users` });
+    }
+    catch (error) {
+      setNotice({ type: "error", text: error.message });
+    }
+  }, [auth.apiFetch]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const create = async event => {
+    event.preventDefault();
+    try {
+      await auth.apiFetch("/api/users", { method: "POST", body: JSON.stringify(draft) });
+      setDraft({ username: "", name: "", password: "", roleIds: draft.roleIds });
+      await load();
+    }
+    catch (error) {
+      setNotice({ type: "error", text: error.message });
+    }
+  };
+
+  const setUserActive = async (user, active) => {
+    try {
+      await auth.apiFetch(`/api/users/${user.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          username: user.username,
+          name: user.name,
+          active,
+          roleIds: user.roles.map(role => role.id)
+        })
+      });
+      await load();
+    }
+    catch (error) {
+      setNotice({ type: "error", text: error.message });
+    }
+  };
+
+  const deleteUser = async user => {
+    if (!window.confirm(`Delete user ${user.username}? This cannot be undone.`)) return;
+    try {
+      await auth.apiFetch(`/api/users/${user.id}`, { method: "DELETE" });
+      await load();
+    }
+    catch (error) {
+      setNotice({ type: "error", text: error.message });
+    }
+  };
+
+  const activeUsers = users.filter(user => user.active).length;
+
+  return (
+    <div className="settings-section admin-section">
+      <div className="admin-header">
+        <div>
+          <h2>Users</h2>
+          <p>Create local accounts and assign roles. Authorization is enforced by the backend.</p>
+        </div>
+        <div className="admin-summary" aria-label="User summary">
+          <span><strong>{users.length}</strong> total</span>
+          <span><strong>{activeUsers}</strong> active</span>
+        </div>
+      </div>
+      {notice.text && notice.type !== "info" && <div className={`notice notice-${notice.type}`}>{notice.text}</div>}
+      <div className="admin-layout">
+        {hasPermission(auth.user, "users:create") && (
+          <form className="admin-form admin-create-card" onSubmit={create}>
+            <header>
+              <div>
+                <h3>New user</h3>
+                <p>Use a temporary strong password and share it out-of-band.</p>
+              </div>
+            </header>
+            <label>Username<input placeholder="jane.ops" value={draft.username} onChange={event => setDraft({ ...draft, username: event.target.value })} required /></label>
+            <label>Name<input placeholder="Jane Ops" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
+            <label>Password<input placeholder="At least 12 characters" type="password" value={draft.password} onChange={event => setDraft({ ...draft, password: event.target.value })} minLength="12" required /></label>
+            <label>Roles<select multiple value={draft.roleIds} onChange={event => setDraft({ ...draft, roleIds: [...event.target.selectedOptions].map(option => option.value) })}>
+              {roles.map(role => <option key={role.id} value={role.id}>{role.name}</option>)}
+            </select></label>
+            <button type="submit"><span className="material-symbols-outlined" aria-hidden="true">add</span>Create user</button>
+          </form>
+        )}
+        <section className="admin-list-card">
+          <header>
+            <div>
+              <h3>Accounts</h3>
+              <p>{users.length === 0 ? "No users yet." : "Current user directory."}</p>
+            </div>
+          </header>
+          <div className="admin-table-wrap">
+            <table className="admin-table">
+              <thead><tr><th>User</th><th>Roles</th><th>Status</th><th>Actions</th></tr></thead>
+              <tbody>{users.map(user => (
+                <tr key={user.id}>
+                  <td><strong>{user.username}</strong><span>{user.name || "No display name"}</span></td>
+                  <td><div className="badge-row">{user.roles.map(role => <span className="role-badge" key={role.id}>{role.name}</span>)}</div></td>
+                  <td><span className={user.active ? "status-pill active" : "status-pill"}>{user.active ? "Active" : "Disabled"}</span></td>
+                  <td>
+                    <div className="row-actions">
+                      {hasPermission(auth.user, "users:update") && <button onClick={() => setUserActive(user, !user.active)}>{user.active ? "Disable" : "Enable"}</button>}
+                      {hasPermission(auth.user, "users:delete") && <button className="danger" onClick={() => deleteUser(user)}>Delete</button>}
+                    </div>
+                  </td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function RolesSettings({ auth }) {
+  const [roles, setRoles] = useState([]);
+  const [permissions, setPermissions] = useState([]);
+  const [notice, setNotice] = useState({ type: "info", text: "Loading roles…" });
+  const [draft, setDraft] = useState({ name: "", description: "", permissions: [] });
+
+  const load = useCallback(async () => {
+    try {
+      const body = await auth.apiFetch("/api/roles").then(response => response.json());
+      setRoles(body.roles ?? []);
+      setPermissions(body.permissions ?? []);
+      setNotice({ type: "info", text: `${body.roles?.length ?? 0} roles` });
+    }
+    catch (error) {
+      setNotice({ type: "error", text: error.message });
+    }
+  }, [auth.apiFetch]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const create = async event => {
+    event.preventDefault();
+    try {
+      await auth.apiFetch("/api/roles", { method: "POST", body: JSON.stringify(draft) });
+      setDraft({ name: "", description: "", permissions: [] });
+      await load();
+    }
+    catch (error) {
+      setNotice({ type: "error", text: error.message });
+    }
+  };
+
+  const deleteRole = async role => {
+    if (!window.confirm(`Delete role ${role.name}? Users with only this role will lose those permissions.`)) return;
+    try {
+      await auth.apiFetch(`/api/roles/${role.id}`, { method: "DELETE" });
+      await load();
+    }
+    catch (error) {
+      setNotice({ type: "error", text: error.message });
+    }
+  };
+
+  return (
+    <div className="settings-section admin-section">
+      <div className="admin-header">
+        <div>
+          <h2>Roles</h2>
+          <p>Compose permissions into reusable access levels for operators and viewers.</p>
+        </div>
+        <div className="admin-summary" aria-label="Role summary">
+          <span><strong>{roles.length}</strong> roles</span>
+          <span><strong>{permissions.length}</strong> permissions</span>
+        </div>
+      </div>
+      {notice.text && notice.type !== "info" && <div className={`notice notice-${notice.type}`}>{notice.text}</div>}
+      <div className="admin-layout">
+        {hasPermission(auth.user, "roles:manage") && (
+          <form className="admin-form admin-create-card" onSubmit={create}>
+            <header>
+              <div>
+                <h3>New role</h3>
+                <p>Grant the smallest permission set that still lets people do their work.</p>
+              </div>
+            </header>
+            <label>Role name<input placeholder="Incident responder" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} required /></label>
+            <label>Description<input placeholder="Can inspect telemetry and update config" value={draft.description} onChange={event => setDraft({ ...draft, description: event.target.value })} /></label>
+            <fieldset className="permission-grid">
+              <legend>Permissions</legend>
+              {permissions.map(permission => (
+                <label key={permission}>
+                  <input type="checkbox" checked={draft.permissions.includes(permission)} onChange={event => setDraft({ ...draft, permissions: event.target.checked ? [...draft.permissions, permission] : draft.permissions.filter(value => value !== permission) })} />
+                  <span>{formatPermission(permission)}</span>
+                  <small>{permission}</small>
+                </label>
+              ))}
+            </fieldset>
+            <button type="submit"><span className="material-symbols-outlined" aria-hidden="true">add</span>Create role</button>
+          </form>
+        )}
+        <section className="admin-list-card">
+          <header>
+            <div>
+              <h3>Role library</h3>
+              <p>System roles are protected; custom roles can be changed later.</p>
+            </div>
+          </header>
+          <div className="admin-table-wrap">
+            <table className="admin-table roles-table">
+              <thead><tr><th>Role</th><th>Permissions</th><th>Type</th><th>Actions</th></tr></thead>
+              <tbody>{roles.map(role => <tr key={role.id}><td><strong>{role.name}</strong><span>{role.description || "No description"}</span></td><td><div className="permission-chips">{role.permissions.map(permission => <span key={permission}>{permission}</span>)}</div></td><td><span className={role.system ? "status-pill" : "status-pill active"}>{role.system ? "System" : "Custom"}</span></td><td><div className="row-actions">{hasPermission(auth.user, "roles:manage") && (role.system ? <button disabled title="Built-in roles are protected">Locked</button> : <button className="danger" onClick={() => deleteRole(role)}>Delete</button>)}</div></td></tr>)}</tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function formatPermission(permission) {
+  return permission.split(":").map(part => part.replace(/-/g, " ")).map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(" · ");
 }
 
 function CodeEditor({ value, onChange, theme }) {

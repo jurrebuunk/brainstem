@@ -76,10 +76,16 @@ async function proxyBackend(request, response) {
     duplex: "half"
   });
 
-  response.writeHead(
-    backendResponse.status,
-    Object.fromEntries(backendResponse.headers.entries())
+  const responseHeaders = Object.fromEntries(
+    [...backendResponse.headers.entries()].filter(([name]) => name.toLowerCase() !== "set-cookie")
   );
+  const setCookies = typeof backendResponse.headers.getSetCookie === "function"
+    ? backendResponse.headers.getSetCookie()
+    : [];
+  if (setCookies.length > 0) {
+    responseHeaders["set-cookie"] = setCookies;
+  }
+  response.writeHead(backendResponse.status, responseHeaders);
 
   if (!backendResponse.body) {
     response.end();

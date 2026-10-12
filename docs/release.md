@@ -1,6 +1,6 @@
 # Release Checklist
 
-Before publishing an alpha release:
+Before publishing a release:
 
 1. Ensure local files are not staged:
 
@@ -29,12 +29,12 @@ Before publishing an alpha release:
 5. Create a git tag:
 
    ```sh
-   git tag v0.1.0-alpha.5
+   git tag v0.1.0
    ```
 
 6. Push commit and tag:
 
    ```sh
    git push
-   git push origin v0.1.0-alpha.5
+   git push origin v0.1.0
    ```

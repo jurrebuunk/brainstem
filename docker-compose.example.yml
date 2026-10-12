@@ -1,6 +1,6 @@
 services:
   brainstem:
-    image: ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5
+    image: ghcr.io/jurrebuunk/brainstem:v0.1.0
     restart: unless-stopped
     env_file:
       - .env
@@ -15,7 +15,7 @@ services:
     command: ["node", "brainstem.mjs"]
 
   brainstem-web:
-    image: ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5
+    image: ghcr.io/jurrebuunk/brainstem:v0.1.0
     restart: unless-stopped
     environment:
       NODE_ENV: production

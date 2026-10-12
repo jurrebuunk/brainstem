@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.0
+
+First stable release of Brainstem as a local-first headless decision runtime with a protected operations UI.
+
+Includes:
+
+- Persistent authentication with first-run administrator onboarding and no default credentials.
+- Argon2id password hashing via the standard `argon2` npm package.
+- SQLite-backed users, roles, sessions, CSRF tokens, telemetry, event history, and stats.
+- Backend-enforced RBAC for events, SSE, stats, config, users, and roles.
+- Built-in Administrator, Operator, and Viewer roles, plus custom role creation/deletion.
+- User creation, disabling/enabling, deletion, and last-active-admin protections.
+- Protected backend APIs and SSE with browser sessions; machine telemetry ingestion can still use `BRAINSTEM_API_TOKEN`.
+- React first-run onboarding, login, settings, users, and roles UI.
+- Web UI proxy fixes for multiple `Set-Cookie` headers.
+- Updated Docker, README, docs, and screenshots for the non-alpha release.
+
 ## 0.1.0-alpha.5
 
 Backend/Web UI decoupling and modularization release.

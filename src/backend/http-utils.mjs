@@ -61,12 +61,7 @@ export function sendNoContent(response, status = 204) {
 }
 
 export function responseHeaders(headers = {}) {
-  return {
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET,POST,PUT,OPTIONS",
-    "access-control-allow-headers": "content-type,authorization",
-    ...headers
-  };
+  return { ...headers };
 }
 
 export function positiveInteger(value, fallback) {

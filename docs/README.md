@@ -9,7 +9,7 @@ Documentation is kept in the repository so it is versioned with the code.
 - [Configuration](configuration.md) — full config file structure and common examples.
 - [Architecture](architecture.md) — how inputs, core, runtime, state, and destinations fit together.
 - [State](state.md) — SQLite records and input checkpoints.
-- [Web UI](web-ui.md) — React Flow live view, persisted stats, and config editor.
+- [Web UI](web-ui.md) — React Flow live view, persisted stats, first-run auth, RBAC, users, roles, and config editor.
 - [Runtime telemetry](telemetry.md) — structured events emitted by the runtime.
 
 ## Plugin docs

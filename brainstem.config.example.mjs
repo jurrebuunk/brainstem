@@ -120,14 +120,15 @@ export default {
       format: "pretty"
     },
 
-    // Optional backend API for telemetry history, stats, SSE, and config management.
+    // Optional backend API for telemetry history, stats, SSE, config, auth, users, and roles.
     // The Web UI connects to this API instead of owning persistence itself.
     api: {
       enabled: false,
       host: "127.0.0.1",
       port: 5174,
       telemetryDbPath: "data/web-stats.sqlite"
-      // For non-local deployments, set tokenEnv and configure the Web UI with WEB_BACKEND_TOKEN.
+      // For non-local deployments, serve over TLS and set BRAINSTEM_COOKIE_SECURE=true.
+      // For machine telemetry/proxy auth, set tokenEnv and configure WEB_BACKEND_TOKEN.
       // tokenEnv: "BRAINSTEM_API_TOKEN"
     },
 

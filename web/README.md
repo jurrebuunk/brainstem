@@ -1,18 +1,23 @@
 # Brainstem Web
 
-Minimal Brainstem live view and operations panel.
+Brainstem Web is the optional operations UI for the local-first Brainstem runtime.
 
-It runs separately from the Brainstem runtime and backend API. It is presentation-only and proxies `/api/*` to `WEB_BACKEND_URL`.
-
-- runtime telemetry such as `brainstem.input.poll.started`, `brainstem.core.decision`, and destination lifecycle events
-- destination envelopes: `brainstem.output`
-- scoped plugin logs: `brainstem.plugin.log`
+It runs separately from the headless runtime and backend API. It is presentation-only and proxies `/api/*` to `WEB_BACKEND_URL`; the backend owns event history, stats, SSE, config, users, roles, sessions, and authorization.
 
 Pages:
 
-- **Flow** — React Flow graph of inputs → core → destinations, backed by the backend's persisted SQLite event log, with node logs and JSON detail modal.
+- **Flow** — React Flow graph of inputs → core → destinations, backed by the backend's persisted SQLite event log, with node logs and raw JSON envelopes.
 - **Stats** — persisted counters plus interactive uPlot charts with metric filtering, range controls, live pause, hover values, and drag-to-zoom.
-- **Settings** — Appearance theme choices and a Config editor for `brainstem.config.mjs`; saves are syntax-checked, backed up, and written atomically.
+- **Settings** — Appearance, Config editor, Users, and Roles.
+
+Auth and admin:
+
+- First visit creates the initial administrator.
+- Passwords are Argon2id hashes stored in SQLite.
+- Browser sessions use HttpOnly cookies and CSRF tokens.
+- Backend RBAC protects events, SSE, stats, config, users, and roles.
+- Users can be created, enabled/disabled, and deleted.
+- Custom roles can be created/deleted; built-in roles are locked.
 
 ## Run from source
 
@@ -40,7 +45,7 @@ docker run --rm \
   -e BRAINSTEM_API_HOST=0.0.0.0 \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5 \
+  ghcr.io/jurrebuunk/brainstem:v0.1.0 \
   node brainstem-api.mjs
 
 # In another container/process:
@@ -49,10 +54,10 @@ docker run --rm \
   -e NODE_ENV=production \
   -e HOST=0.0.0.0 \
   -e WEB_BACKEND_URL=http://host.docker.internal:5174 \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5 \
+  ghcr.io/jurrebuunk/brainstem:v0.1.0 \
   node web/server.mjs
 ```
 
 ## Safety note
 
-The Settings → Config page calls the backend config API. Keep the API/Web UI bound to localhost or set `BRAINSTEM_API_TOKEN` plus `WEB_BACKEND_TOKEN` before exposing it on a network.
+Keep the API/Web UI bound to localhost for local use. If exposing remotely, serve over TLS, set `BRAINSTEM_COOKIE_SECURE=true`, and consider `BRAINSTEM_API_TOKEN` for machine telemetry ingestion.

@@ -6,10 +6,10 @@ Brainstem publishes Docker images to GitHub Container Registry:
 ghcr.io/jurrebuunk/brainstem
 ```
 
-Current prerelease image:
+Current stable image:
 
 ```text
-ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5
+ghcr.io/jurrebuunk/brainstem:v0.1.0
 ```
 
 The image contains both:
@@ -43,7 +43,7 @@ Open the Web UI locally:
 http://127.0.0.1:5173
 ```
 
-The example compose file binds the Web UI to `127.0.0.1` only. If you expose it remotely, put it behind authentication/TLS because Settings → Config can edit `brainstem.config.mjs`.
+The example compose file binds the Web UI to `127.0.0.1` only. Brainstem provides first-run admin setup, session auth, CSRF, and RBAC; if you expose it remotely, serve it over TLS and set `BRAINSTEM_COOKIE_SECURE=true`.
 
 ## Run with Docker directly
 
@@ -61,7 +61,7 @@ docker run --rm \
   --env-file .env \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5 \
+  ghcr.io/jurrebuunk/brainstem:v0.1.0 \
   node brainstem.mjs --once
 ```
 
@@ -77,7 +77,7 @@ docker run -d \
   -e BRAINSTEM_API_PORT=5174 \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5
+  ghcr.io/jurrebuunk/brainstem:v0.1.0
 ```
 
 Run the Web UI container separately:
@@ -91,7 +91,7 @@ docker run -d \
   -e PORT=5173 \
   -e WEB_BACKEND_URL=http://brainstem:5174 \
   -p 127.0.0.1:5173:5173 \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5 \
+  ghcr.io/jurrebuunk/brainstem:v0.1.0 \
   node web/server.mjs
 ```
 
@@ -158,13 +158,14 @@ BRAINSTEM_API              set 1/true to start the backend API with the runtime
 BRAINSTEM_API_HOST         default 127.0.0.1
 BRAINSTEM_API_PORT         default 5174
 BRAINSTEM_API_DB           telemetry/stats SQLite path; default data/web-stats.sqlite
-BRAINSTEM_API_TOKEN        optional bearer token for API routes except /api/health
+BRAINSTEM_API_TOKEN        optional bearer token for machine telemetry ingestion/proxy calls
 BRAINSTEM_CONFIG           editable config path; default brainstem.config.mjs
 MAX_EVENTS                 live in-memory SSE safety buffer; default 2000
 MAX_BODY_BYTES             request body cap; default 1048576
 STATS_PRUNE_AFTER_DAYS     stats time-series retention; default 14; set 0 to disable
 WEB_EVENTS_PRUNE_AFTER_DAYS event-log retention; default 14; set 0 to disable time pruning
 WEB_EVENTS_MAX_ROWS        event-log row cap; default 50000; set 0 to disable row pruning
+BRAINSTEM_COOKIE_SECURE    set true when serving browser sessions over HTTPS
 ```
 
 Web UI variables:
@@ -176,18 +177,18 @@ WEB_BACKEND_URL            backend API base URL; default http://127.0.0.1:5174
 WEB_BACKEND_TOKEN          optional bearer token forwarded to backend API
 ```
 
-Config saves are owned by the backend API, syntax-checked with `node --check`, written atomically, and backed up as timestamped `.bak` files next to the config.
+Config saves are owned by the backend API, syntax-checked with `node --check`, written atomically, and backed up as timestamped `.bak` files next to the config. The first Web UI visit creates the initial administrator; no default credentials are shipped.
 
 ## Verify published image
 
 ```sh
-docker manifest inspect ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5
+docker manifest inspect ghcr.io/jurrebuunk/brainstem:v0.1.0
 ```
 
 Pull explicitly:
 
 ```sh
-docker pull ghcr.io/jurrebuunk/brainstem:v0.1.0-alpha.5
+docker pull ghcr.io/jurrebuunk/brainstem:v0.1.0
 ```
 
 ## Build locally
@@ -215,7 +216,7 @@ The GitHub Actions workflow publishes:
 
 - `latest` from `main`
 - branch tags such as `main`
-- git tags such as `v0.1.0-alpha.5`
+- git tags such as `v0.1.0`
 - SHA tags such as `sha-...`
 
 If the package is not visible in the GitHub UI immediately, verify with `docker manifest inspect`; GHCR package pages can lag behind successful pushes.
