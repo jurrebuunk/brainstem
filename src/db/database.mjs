@@ -39,7 +39,7 @@ export function resolveDatabaseUrl(config = {}) {
 /*
  * Open a database handle.
  *
- * Returns { db, dialect, close() } where db is a Kysely instance.
+ * Returns { db, dialect, schema, close() } where db is a Kysely instance.
  * All Brainstem stores take this handle instead of opening
  * their own connections.
  */
@@ -65,9 +65,22 @@ export async function openDatabase({ url, pool = {} } = {}) {
   const db = new Kysely({ dialect });
   let closed = false;
 
+  // Pin the schema so migrations and lookups never leak into other
+  // schemas on a shared Postgres server.
+  let schema = null;
+  if (parsed.dialect === "postgres") {
+    const result = await db.executeQuery({
+      sql: "select current_schema() as schema",
+      parameters: [],
+      query: { kind: "RawNode" }
+    });
+    schema = result.rows[0]?.schema ?? "public";
+  }
+
   return {
     db,
     dialect: parsed.dialect,
+    schema,
     url: url ?? resolveDatabaseUrl(),
     async close() {
       if (closed) return;

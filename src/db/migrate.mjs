@@ -18,6 +18,7 @@ export function createMigrator(handle) {
     db: handle.db,
     migrationTableName: "brainstem_migrations",
     migrationLockTableName: "brainstem_migrations_lock",
+    ...(handle.schema ? { migrationTableSchema: handle.schema } : {}),
     provider: {
       async getMigrations() {
         return Object.fromEntries(
