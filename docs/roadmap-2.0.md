@@ -226,24 +226,26 @@ Each phase is releasable on its own and keeps `role=all` working. Rough sizing a
 
 ## 7. Decisions
 
-All decisions are final for 2.0. Each becomes an ADR under `docs/adr/` in Phase 0.
+Recorded as Architecture Decision Records: see [docs/adr/README.md](adr/README.md).
 
-**D1 — Cluster mode uses Postgres only; no message broker.**
+All decisions are final for 2.0.
+
+**D1 — Cluster mode uses Postgres only; no message broker.** ([ADR-0001](adr/0001-postgres-only-cluster-mode.md))
 Postgres is both the system of record and the job queue (`FOR UPDATE SKIP LOCKED` + `LISTEN/NOTIFY`). Windmill and Kestra OSS prove this scales far beyond Brainstem's volume (polls and decisions, not millions of events/s). A broker would add a second stateful system to operate and back up, and would break the transactional outbox (job + result in one transaction). The `Transport` interface keeps a future NATS driver possible, but none is built for 2.0.
 
-**D2 — Inputs are scheduled by leases on input rows; there is no elected scheduler.**
+**D2 — Inputs are scheduled by leases on input rows; there is no elected scheduler.** ([ADR-0002](adr/0002-lease-based-input-scheduling.md))
 Any core claims due inputs (§4.3). This gives automatic load balancing, no leader on the hot path and no failover gap, at roughly the same code cost as a leader. Long-lived inputs (IMAP IDLE) need leases anyway. Every claim increments `lease_epoch`, and checkpoint commits are fenced on it so a stale poller cannot write. A Postgres advisory lock is used only for true singletons: pruning, retention, stats rollups.
 
-**D3 — Kysely for the DB layer, with an in-house queue.**
+**D3 — Kysely for the DB layer, with an in-house queue.** ([ADR-0003](adr/0003-kysely-and-in-house-queue.md))
 Brainstem needs identical queue semantics on SQLite (`role=all`) and Postgres (cluster). pg-boss and graphile-worker are Postgres-only, which would mean two queue implementations. Drizzle needs a schema file per dialect; Kysely has one schema and a built-in migrator. The queue is ~300 lines on Kysely and copies graphile-worker's design: `queue_key` for per-key serialization, `job_key` for dedupe, `LISTEN/NOTIFY` wakeups (EventEmitter on SQLite), and visibility timeouts with reclaim.
 
-**D4 — Plugin SDK v2 is a breaking change for destinations, with a v1 shim through 2.x.**
+**D4 — Plugin SDK v2 is a breaking change for destinations, with a v1 shim through 2.x.** ([ADR-0004](adr/0004-destination-plugin-sdk-v2.md))
 `brainstem.destination/v2`: `handle(ctx, output)` receives the serializable `brainstem.output` payload plus `ctx.idempotencyKey` instead of live plugin objects. This is required, because live objects cannot cross a queue. All built-in plugins are migrated in Phase 2. A v1 adapter keeps third-party plugins working and logs a deprecation warning. It is removed in 3.0. The input SDK stays v1; inputs gain an optional `ctx.lease` for long-lived connections.
 
-**D5 — Config is versioned, JSON-Schema-validated data in the database; `.mjs` becomes an import/export format.**
+**D5 — Config is versioned, JSON-Schema-validated data in the database; `.mjs` becomes an import/export format.** ([ADR-0005](adr/0005-config-as-versioned-data.md))
 Today's API-written executable config is a code-execution surface behind `config:write`, and a shared file cannot be propagated to N pods. Config moves to `config_versions` with `If-Match` optimistic concurrency, an audit trail, rollback and hot reload via notifications. `brainstem config import|export` keeps `brainstem.config.mjs` working: the module is evaluated locally by the operator and must export plain data. `configSource: file` (Helm) / `BRAINSTEM_CONFIG_SOURCE=file` makes the UI read-only for GitOps users. Users with JS logic in their config are covered in the 1.x → 2.0 upgrade guide.
 
-**D6 — The Laya model ships as a separate versioned `brainstem-models` OCI image.**
+**D6 — The Laya model ships as a separate versioned `brainstem-models` OCI image.** ([ADR-0006](adr/0006-model-distribution-oci-image.md))
 Downloading at startup ruins autoscaling, and ReadOnlyMany PVCs are unavailable on many clusters. An image is cached per node, pinned to a model version, and published alongside each release by the same CI pipeline. Kubernetes ≥1.31: image volume. Older clusters: an init container copies it into an `emptyDir`. `role=all` / Docker: the existing download-on-first-start cache remains the default.
 
 ## 8. Main risks

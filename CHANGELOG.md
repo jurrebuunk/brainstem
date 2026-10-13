@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+Brainstem 2.0 Phase 0 (safety net), see `docs/roadmap-2.0.md`:
+
+- CI workflow running the syntax check, unit/integration tests, and acceptance tests on every PR and push to `main`.
+- Tests for the runtime polling loop, shutdown and abort handling, poll-retry re-delivery (1.x behaviour), per-ID ordering and decision caching in the core, config saves, and the SSE stream.
+- Multi-core acceptance harness (`npm run test:acceptance`) that runs several real core processes against shared state. The 2.0 cluster guarantees are tracked as `todo` tests until Phase 3.
+- Architecture decision records for the 2.0 design in `docs/adr/`.
+
 ## 0.1.0
 
 First stable release of Brainstem as a local-first headless decision runtime with a protected operations UI.

@@ -33,3 +33,5 @@ Built-in plugin pages:
 ## Maintainer docs
 
 - [Release checklist](release.md)
+- [Brainstem 2.0 roadmap](roadmap-2.0.md) — scale-out architecture, phases, and decisions.
+- [Architecture Decision Records](adr/README.md) — recorded architectural decisions and how to add one.
