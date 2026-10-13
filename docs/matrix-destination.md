@@ -2,7 +2,7 @@
 
 The Matrix destination sends Brainstem decisions to a Matrix room using the Matrix Client-Server API.
 
-It includes notification policy, repeat suppression, recovery messages, delivery retries, optional Matrix threads, and persistent delivery state.
+It includes notification policy, repeat suppression, recovery messages, delivery retries, optional Matrix threads, and persistent delivery state stored in the Brainstem database.
 
 ## Config
 
@@ -27,8 +27,7 @@ destinations: [
 
       notify: {
         repeatAfterMs: 60 * 60 * 1000,
-        onRecovery: true,
-        statePath: "data/matrix-notifications.json"
+        onRecovery: true
       },
 
       retry: {
@@ -74,14 +73,56 @@ Configure them with:
 notify: {
   actionableDecisions: ["dispatch", "escalate"],
   repeatAfterMs: 60 * 60 * 1000,
-  onRecovery: true,
-  statePath: "data/matrix-notifications.json"
+  onRecovery: true
 }
 ```
 
 Set `repeatAfterMs: null` to disable reminders.
 
-Set `statePath: false` to use in-memory notification state. Persistent state is recommended for real monitoring so Brainstem does not resend ongoing alerts after restart.
+## Notification state
+
+Suppression, recovery and threading state lives in plugin state (`ctx.state`,
+see [Built-in Plugins](plugins.md#plugin-state-ctxstate)), which the runtime
+stores in the `plugin_state` table of the Brainstem database (SQLite by
+default, Postgres in cluster mode). Brainstem therefore does not resend ongoing
+alerts after a restart, and several Brainstem processes sharing one database
+do not send the same alert, reminder or recovery twice.
+
+Each send is claimed atomically before the message is posted: the decision and
+the claim are one read-modify-write in a database transaction. If posting
+fails, the claim is released so the next event retries. If a process dies
+between claiming and committing, other processes ignore its claim after
+`claimTimeoutMs` (default 5 minutes) and send again — a duplicate is preferred
+over a missed alert.
+
+```js
+notify: {
+  claimTimeoutMs: 5 * 60 * 1000
+}
+```
+
+State is namespaced per destination entry. Give each Matrix destination entry
+its own `id` if two entries must keep separate state:
+
+```js
+{ id: "ops-room", module: "./plugins/matrix/index.mjs", destination: "room", ... }
+```
+
+### Upgrading from the JSON state file
+
+Earlier versions kept this state in `data/matrix-notifications.json`. On the
+first notification after upgrading, the Matrix destination imports that file
+(or the file named by `notify.statePath`) into the database, only for
+notifications that have no database state yet. The file is left untouched and
+is not read again; delete it once you have confirmed the upgrade.
+
+```js
+notify: {
+  statePath: "data/matrix-notifications.json" // legacy import source (default)
+}
+```
+
+Set `statePath: false` to skip the legacy import.
 
 ## Rate limits and retries
 
@@ -202,8 +243,7 @@ destinations: [
       tokenEnv: "MATRIX_ACCESS_TOKEN",
       notify: {
         repeatAfterMs: 60 * 60 * 1000,
-        onRecovery: true,
-        statePath: "data/matrix-notifications.json"
+        onRecovery: true
       }
     }
   }
