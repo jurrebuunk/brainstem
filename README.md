@@ -230,18 +230,24 @@ docker manifest inspect ghcr.io/jurrebuunk/brainstem:v0.1.0
 
 See [`docs/docker.md`](docs/docker.md).
 
-## NPM package
+## Package binaries
 
-```sh
-npm install -g @jurrebuunk/brainstem
-brainstem --help
-brainstem-api --help
-```
-
-Package binaries:
+The package exposes two binaries when installed from npm or directly from the repository:
 
 - `brainstem` — headless runtime.
 - `brainstem-api` — standalone backend API.
+
+Install from the GitHub release source or run from a cloned checkout today:
+
+```sh
+git clone https://github.com/jurrebuunk/brainstem.git
+cd brainstem
+npm install
+node brainstem.mjs --help
+node brainstem-api.mjs --help
+```
+
+The Docker image is the recommended install path for production deployments.
 
 ## Runtime commands
 
