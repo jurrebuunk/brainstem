@@ -230,6 +230,42 @@ export class DatabasePluginStateStore {
   }
 }
 
+/*
+ * Database plugin state behind a lazily opened handle.
+ *
+ * The runtime opens its database on first use; this store
+ * waits for that handle instead of requiring it up front.
+ */
+export class LazyPluginStateStore {
+  #getHandle;
+  #store = null;
+
+  constructor(getHandle) {
+    this.#getHandle = getHandle;
+  }
+
+  async #resolve() {
+    this.#store ??= new DatabasePluginStateStore(await this.#getHandle());
+    return this.#store;
+  }
+
+  async get(namespace, key) {
+    return (await this.#resolve()).get(namespace, key);
+  }
+
+  async set(namespace, key, value) {
+    return (await this.#resolve()).set(namespace, key, value);
+  }
+
+  async delete(namespace, key) {
+    return (await this.#resolve()).delete(namespace, key);
+  }
+
+  async update(namespace, key, fn) {
+    return (await this.#resolve()).update(namespace, key, fn);
+  }
+}
+
 class InsertRaceError extends Error {
   constructor() {
     super("plugin_state row was inserted concurrently");

@@ -1,5 +1,5 @@
-import { createDeferredCheckpoint } from "./checkpoints.mjs";
-import { MemoryPluginStateStore } from "./plugin-state.mjs";
+import { DatabaseCheckpointStore, createDeferredCheckpoint } from "./checkpoints.mjs";
+import { LazyPluginStateStore, MemoryPluginStateStore } from "./plugin-state.mjs";
 import { eventMatchesDestination } from "./destinations.mjs";
 import { createRuntimeLogger } from "./logger.mjs";
 import {
@@ -17,6 +17,7 @@ import {
 } from "./retry.mjs";
 import {
   createCheckpointStore,
+  createDatabaseProvider,
   createRecordStore,
   storeInfo
 } from "./stores.mjs";
@@ -46,7 +47,8 @@ export class BrainstemRuntime {
     onDecision = defaultOnDecision,
     checkpointStore,
     recordStore,
-    pluginState
+    pluginState,
+    database
   } = {}) {
     if (!brainstem && !config) {
       throw new Error(
@@ -56,6 +58,20 @@ export class BrainstemRuntime {
 
     this.config = config ?? {};
 
+    /*
+     * One database handle shared by the
+     * database-backed stores. An injected
+     * handle (`database`) is never closed by
+     * the runtime; a handle the runtime opens
+     * itself (lazily) is closed in close().
+     */
+    this.database =
+      createDatabaseProvider(
+        this.config,
+        baseDir,
+        { database }
+      );
+
     this.recordStore =
       recordStore ??
       (
@@ -63,7 +79,8 @@ export class BrainstemRuntime {
           ? null
           : createRecordStore(
               this.config,
-              baseDir
+              baseDir,
+              { provider: this.database }
             )
       );
 
@@ -88,10 +105,23 @@ export class BrainstemRuntime {
       checkpointStore ??
       createCheckpointStore(
         this.config,
-        this.baseDir
+        this.baseDir,
+        { provider: this.database }
       );
+    /*
+     * Plugin state is durable whenever
+     * checkpoints live in the database;
+     * otherwise it stays in memory.
+     */
     this.pluginState =
-      pluginState ?? new MemoryPluginStateStore();
+      pluginState ??
+      (
+        this.checkpointStore instanceof DatabaseCheckpointStore
+          ? new LazyPluginStateStore(
+              () => this.database.get()
+            )
+          : new MemoryPluginStateStore()
+      );
 
     this.abortController = null;
     this.tasks = [];
@@ -342,6 +372,7 @@ export class BrainstemRuntime {
 
     await this.brainstem.close();
     await this.checkpointStore.close?.();
+    await this.database.close();
 
     this.abortController = null;
     this.tasks = [];

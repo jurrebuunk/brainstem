@@ -209,7 +209,7 @@ test("core serializes updates for the same observation id in arrival order", asy
     [1, 2, 3, 4, 5]
   );
   assert.equal(maxActive, 1, "Laya evaluations must never overlap");
-  assert.equal(brainstem.records.get("order:test:1").revision, 5);
+  assert.equal((await brainstem.records.get("order:test:1")).revision, 5);
 
   await brainstem.close();
 });
