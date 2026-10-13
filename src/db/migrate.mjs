@@ -1,3 +1,4 @@
+import { sql } from "kysely";
 import { Migrator } from "kysely/migration";
 
 import { createMigration as m0001 } from "./migrations/0001_initial.mjs";
@@ -13,11 +14,12 @@ const MIGRATIONS = [
 
 export const LATEST_MIGRATION = MIGRATIONS.at(-1)[0];
 
-export function createMigrator(handle) {
+export function createMigrator(handle, { schema } = {}) {
   return new Migrator({
     db: handle.db,
     migrationTableName: "brainstem_migrations",
     migrationLockTableName: "brainstem_migrations_lock",
+    ...(schema ? { migrationTableSchema: schema } : {}),
     provider: {
       async getMigrations() {
         return Object.fromEntries(
@@ -28,8 +30,21 @@ export function createMigrator(handle) {
   });
 }
 
+/*
+ * On Postgres, pin the migration tables to the connection's
+ * current schema. Without this Kysely looks for them in every
+ * schema and skips creating them when another schema in the same
+ * database already has a brainstem_migrations table.
+ */
+async function migratorFor(handle) {
+  if (handle.dialect !== "postgres") return createMigrator(handle);
+
+  const { rows } = await sql`select current_schema() as schema`.execute(handle.db);
+  return createMigrator(handle, { schema: rows[0]?.schema ?? undefined });
+}
+
 export async function migrateToLatest(handle) {
-  const { error, results = [] } = await createMigrator(handle).migrateToLatest();
+  const { error, results = [] } = await (await migratorFor(handle)).migrateToLatest();
 
   if (error) {
     const failed = results.find(result => result.status === "Error");
@@ -43,7 +58,7 @@ export async function migrateToLatest(handle) {
 }
 
 export async function migrationStatus(handle) {
-  const migrations = await createMigrator(handle).getMigrations();
+  const migrations = await (await migratorFor(handle)).getMigrations();
   return migrations.map(migration => ({
     name: migration.name,
     executedAt: migration.executedAt ?? null
