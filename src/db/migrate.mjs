@@ -13,12 +13,12 @@ const MIGRATIONS = [
 
 export const LATEST_MIGRATION = MIGRATIONS.at(-1)[0];
 
-export function createMigrator(handle) {
+export function createMigrator(handle, { schema } = {}) {
   return new Migrator({
     db: handle.db,
     migrationTableName: "brainstem_migrations",
     migrationLockTableName: "brainstem_migrations_lock",
-    ...(handle.schema ? { migrationTableSchema: handle.schema } : {}),
+    ...((schema ?? handle.schema) ? { migrationTableSchema: schema ?? handle.schema } : {}),
     provider: {
       async getMigrations() {
         return Object.fromEntries(

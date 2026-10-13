@@ -8,11 +8,36 @@ services:
       BRAINSTEM_API: "1"
       BRAINSTEM_API_HOST: 0.0.0.0
       BRAINSTEM_API_PORT: 5174
+      # All state lives in one database. Default (unset): SQLite at
+      # sqlite:data/brainstem.sqlite in the brainstem-data volume.
+      # To use the optional postgres service below instead:
+      # BRAINSTEM_DATABASE_URL: postgres://brainstem:${POSTGRES_PASSWORD}@postgres:5432/brainstem
     volumes:
       # Writable so backend-owned /api/config can save. Keep Web/API behind localhost or auth.
       - ./brainstem.config.mjs:/app/brainstem.config.mjs
       - brainstem-data:/app/data
     command: ["node", "brainstem.mjs"]
+    # depends_on:
+    #   postgres:
+    #     condition: service_healthy
+
+  # Optional Postgres. Set POSTGRES_PASSWORD in .env, switch
+  # BRAINSTEM_DATABASE_URL above, and uncomment depends_on and the
+  # postgres-data volume.
+  # postgres:
+  #   image: postgres:17
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: brainstem
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  #     POSTGRES_DB: brainstem
+  #   volumes:
+  #     - postgres-data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U brainstem -d brainstem"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 10
 
   brainstem-web:
     image: ghcr.io/jurrebuunk/brainstem:v0.1.0
@@ -30,3 +55,4 @@ services:
 
 volumes:
   brainstem-data:
+  # postgres-data:
