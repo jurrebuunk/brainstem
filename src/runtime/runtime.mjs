@@ -1,4 +1,5 @@
 import { createDeferredCheckpoint } from "./checkpoints.mjs";
+import { MemoryPluginStateStore } from "./plugin-state.mjs";
 import { eventMatchesDestination } from "./destinations.mjs";
 import { createRuntimeLogger } from "./logger.mjs";
 import {
@@ -44,7 +45,8 @@ export class BrainstemRuntime {
     logger,
     onDecision = defaultOnDecision,
     checkpointStore,
-    recordStore
+    recordStore,
+    pluginState
   } = {}) {
     if (!brainstem && !config) {
       throw new Error(
@@ -88,6 +90,8 @@ export class BrainstemRuntime {
         this.config,
         this.baseDir
       );
+    this.pluginState =
+      pluginState ?? new MemoryPluginStateStore();
 
     this.abortController = null;
     this.tasks = [];
@@ -656,7 +660,11 @@ export class BrainstemRuntime {
           plugin: plugin.name,
           input: inputName
         }),
-        checkpoint: checkpoint.api
+        checkpoint: checkpoint.api,
+        stateStore: this.pluginState,
+        plugin: plugin.name,
+        input: inputName,
+        id: checkpointKey
       });
 
     const pollId = `${checkpointKey}:${Date.now()}`;
@@ -867,7 +875,11 @@ export class BrainstemRuntime {
               scope: "destination",
               plugin: destinationEntry.plugin.name,
               destination: destinationEntry.destinationName
-            })
+            }),
+            stateStore: this.pluginState,
+            plugin: destinationEntry.plugin.name,
+            destination: destinationEntry.destinationName,
+            id: destinationEntry.entry.id
           });
 
         const destinationInfo = {
