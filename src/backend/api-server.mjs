@@ -1,7 +1,9 @@
 import http from "node:http";
 import { resolve } from "node:path";
 
+import { openMigratedDatabase } from "../db/index.mjs";
 import { createAuthStore } from "./auth-store.mjs";
+import { clientIp, createTrustedProxies, DEFAULT_TRUSTED_PROXIES } from "./client-ip.mjs";
 import { createConfigStore } from "./config-store.mjs";
 import {
   clampLimit,
@@ -12,6 +14,7 @@ import {
   sendJson,
   sendNoContent
 } from "./http-utils.mjs";
+import { createMaintenanceScheduler, DEFAULT_MAINTENANCE_INTERVAL_MS } from "./maintenance.mjs";
 import { PERMISSIONS } from "./permissions.mjs";
 import { createSseHub } from "./sse.mjs";
 import { createTelemetryStore } from "./telemetry-store.mjs";
@@ -27,6 +30,10 @@ export function createBackendApiServer({
   repoRoot = process.cwd(),
   configPath = resolve(repoRoot, process.env.BRAINSTEM_CONFIG ?? "brainstem.config.mjs"),
   telemetryDbPath = resolve(repoRoot, process.env.BRAINSTEM_API_DB ?? process.env.WEB_STATS_DB ?? "data/web-stats.sqlite"),
+  // An open { db, dialect, close } handle from src/db (not closed by
+  // api.close()), or a URL the API opens, migrates and closes itself.
+  database = null,
+  databaseUrl = null,
   maxEvents = positiveInteger(process.env.MAX_EVENTS, 2000),
   maxBodyBytes = positiveInteger(process.env.MAX_BODY_BYTES, 1024 * 1024),
   statsPruneAfterDays = finiteNumber(process.env.STATS_PRUNE_AFTER_DAYS, 14),
@@ -37,19 +44,62 @@ export function createBackendApiServer({
   eventLogMaxRows = nonNegativeInteger(process.env.WEB_EVENTS_MAX_ROWS, 50_000),
   token = process.env.BRAINSTEM_API_TOKEN,
   allowConfigWrites = true,
-  cookieSecure = process.env.BRAINSTEM_COOKIE_SECURE === "true"
+  cookieSecure = process.env.BRAINSTEM_COOKIE_SECURE === "true",
+  trustedProxies = process.env.BRAINSTEM_TRUSTED_PROXIES ?? DEFAULT_TRUSTED_PROXIES,
+  maintenanceIntervalMs = nonNegativeInteger(
+    process.env.BRAINSTEM_MAINTENANCE_INTERVAL_MS,
+    DEFAULT_MAINTENANCE_INTERVAL_MS
+  )
 } = {}) {
-  const telemetryStore = createTelemetryStore({
-    path: telemetryDbPath,
-    statsPruneAfterDays,
-    eventLogPruneAfterDays,
-    eventLogMaxRows
-  });
-  const authStore = createAuthStore({ path: telemetryDbPath });
   const configStore = createConfigStore(configPath);
+  const proxies = createTrustedProxies(trustedProxies);
   const sse = createSseHub();
   const events = [];
-  const loginAttempts = new Map();
+  let handle = null;
+  let ownsHandle = false;
+  let telemetryStore = null;
+  let authStore = null;
+  let maintenance = null;
+  let started = null;
+
+  async function start() {
+    if (database) {
+      handle = database;
+    }
+    else {
+      handle = await openMigratedDatabase({ url: databaseUrl ?? `sqlite:${telemetryDbPath}` });
+      ownsHandle = true;
+    }
+
+    try {
+      telemetryStore = createTelemetryStore({
+        database: handle,
+        statsPruneAfterDays,
+        eventLogPruneAfterDays,
+        eventLogMaxRows
+      });
+      authStore = await createAuthStore({ database: handle });
+    }
+    catch (error) {
+      if (ownsHandle) await handle.close();
+      throw error;
+    }
+
+    maintenance = createMaintenanceScheduler({
+      db: handle.db,
+      intervalMs: maintenanceIntervalMs,
+      tasks: {
+        "telemetry.prune": ({ now }) => telemetryStore.prune({ now }),
+        "auth.prune": async ({ now }) => ({
+          sessions: await authStore.pruneExpiredSessions({ now }),
+          loginAttempts: await authStore.pruneLoginAttempts({ now, windowMs: LOGIN_WINDOW_MS })
+        })
+      }
+    });
+    api.telemetryStore = telemetryStore;
+    api.authStore = authStore;
+    api.database = handle;
+  }
 
   const server = http.createServer(async (request, response) => {
     try {
@@ -64,9 +114,9 @@ export function createBackendApiServer({
         sendJson(response, {
           ok: true,
           role: "brainstem-backend",
-          setupRequired: authStore.setupRequired(),
+          setupRequired: await authStore.setupRequired(),
           events: events.length,
-          persistedEvents: telemetryStore.eventCount(),
+          persistedEvents: await telemetryStore.eventCount(),
           statsDb: telemetryStore.path
         });
         return;
@@ -74,39 +124,39 @@ export function createBackendApiServer({
 
       if (url.pathname === "/api/auth/status" && request.method === "GET") {
         sendJson(response, {
-          setupRequired: authStore.setupRequired(),
-          authenticated: Boolean(currentSession(request)),
+          setupRequired: await authStore.setupRequired(),
+          authenticated: Boolean(await currentSession(request)),
           permissions: PERMISSIONS
         });
         return;
       }
 
       if (url.pathname === "/api/auth/setup" && request.method === "POST") {
-        rateLimitLogin(request, loginAttempts);
+        await rateLimitLogin(request);
         const body = await readJsonBody(request, {}, { maxBodyBytes });
         const user = await authStore.createInitialAdmin(body);
-        const session = authStore.createSession(user.id);
+        const session = await authStore.createSession(user.id);
         setSessionCookies(response, session, { secure: cookieSecure });
         sendJson(response, { user, csrfToken: session.csrfToken });
         return;
       }
 
       if (url.pathname === "/api/auth/login" && request.method === "POST") {
-        rateLimitLogin(request, loginAttempts);
+        await rateLimitLogin(request);
         const body = await readJsonBody(request, {}, { maxBodyBytes });
         const user = await authStore.verifyLogin(body);
         if (!user) {
           throw httpError(401, "Invalid username or password");
         }
-        resetLoginAttempts(request, loginAttempts);
-        const session = authStore.createSession(user.id);
+        await authStore.resetLoginAttempts(loginKey(request));
+        const session = await authStore.createSession(user.id);
         setSessionCookies(response, session, { secure: cookieSecure });
         sendJson(response, { user, csrfToken: session.csrfToken });
         return;
       }
 
       if (url.pathname === "/api/events" && request.method === "POST" && machineAuthorized(request, token)) {
-        addEvent(normalizeIncomingEvent(
+        await addEvent(normalizeIncomingEvent(
           await readJsonBody(request, null, { maxBodyBytes })
         ));
         response.writeHead(204);
@@ -114,7 +164,7 @@ export function createBackendApiServer({
         return;
       }
 
-      const session = requireAuth(request);
+      const session = await requireAuth(request);
       requireCsrf(request, session);
 
       if (url.pathname === "/api/auth/me" && request.method === "GET") {
@@ -123,7 +173,7 @@ export function createBackendApiServer({
       }
 
       if (url.pathname === "/api/auth/logout" && request.method === "POST") {
-        authStore.revokeSession(session.token);
+        await authStore.revokeSession(session.token);
         clearSessionCookies(response, { secure: cookieSecure });
         sendJson(response, { ok: true });
         return;
@@ -131,7 +181,7 @@ export function createBackendApiServer({
 
       if (url.pathname === "/api/events" && request.method === "POST") {
         requirePermission(session.user, "events:read");
-        addEvent(normalizeIncomingEvent(
+        await addEvent(normalizeIncomingEvent(
           await readJsonBody(request, null, { maxBodyBytes })
         ));
         response.writeHead(204);
@@ -141,7 +191,7 @@ export function createBackendApiServer({
 
       if (url.pathname === "/api/events" && request.method === "GET") {
         requirePermission(session.user, "events:read");
-        sendJson(response, telemetryStore.getEvents({
+        sendJson(response, await telemetryStore.getEvents({
           limit: clampLimit(url.searchParams.get("limit"), maxEvents),
           before: url.searchParams.get("before"),
           after: url.searchParams.get("after"),
@@ -160,7 +210,7 @@ export function createBackendApiServer({
 
       if (url.pathname === "/api/stats" && request.method === "GET") {
         requirePermission(session.user, "stats:read");
-        sendJson(response, telemetryStore.getStats());
+        sendJson(response, await telemetryStore.getStats());
         return;
       }
 
@@ -183,7 +233,7 @@ export function createBackendApiServer({
 
       if (url.pathname === "/api/users" && request.method === "GET") {
         requirePermission(session.user, "users:read");
-        sendJson(response, authStore.listUsers());
+        sendJson(response, await authStore.listUsers());
         return;
       }
 
@@ -203,21 +253,21 @@ export function createBackendApiServer({
       }
       if (userMatch && request.method === "DELETE") {
         requirePermission(session.user, "users:delete");
-        authStore.deleteUser(userMatch[1]);
+        await authStore.deleteUser(userMatch[1]);
         sendJson(response, { ok: true });
         return;
       }
 
       if (url.pathname === "/api/roles" && request.method === "GET") {
         requirePermission(session.user, "roles:read");
-        sendJson(response, { roles: authStore.listRoles(), permissions: authStore.permissions() });
+        sendJson(response, { roles: await authStore.listRoles(), permissions: authStore.permissions() });
         return;
       }
 
       if (url.pathname === "/api/roles" && request.method === "POST") {
         requirePermission(session.user, "roles:manage");
         const body = await readJsonBody(request, {}, { maxBodyBytes });
-        sendJson(response, authStore.createRole(body), 201);
+        sendJson(response, await authStore.createRole(body), 201);
         return;
       }
 
@@ -225,12 +275,12 @@ export function createBackendApiServer({
       if (roleMatch && request.method === "PUT") {
         requirePermission(session.user, "roles:manage");
         const body = await readJsonBody(request, {}, { maxBodyBytes });
-        sendJson(response, authStore.updateRole(roleMatch[1], body));
+        sendJson(response, await authStore.updateRole(roleMatch[1], body));
         return;
       }
       if (roleMatch && request.method === "DELETE") {
         requirePermission(session.user, "roles:manage");
-        authStore.deleteRole(roleMatch[1]);
+        await authStore.deleteRole(roleMatch[1]);
         sendJson(response, { ok: true });
         return;
       }
@@ -244,10 +294,10 @@ export function createBackendApiServer({
     }
   });
 
-  function addEvent(event) {
+  async function addEvent(event) {
     events.push(event);
     try {
-      telemetryStore.persistEvent(event);
+      await telemetryStore.persistEvent(event);
     }
     catch (error) {
       console.error("failed to persist backend telemetry", error);
@@ -256,14 +306,23 @@ export function createBackendApiServer({
     sse.broadcast(event);
   }
 
-  function currentSession(request) {
-    return authStore.getSession(parseCookies(request.headers.cookie)[SESSION_COOKIE]);
+  async function currentSession(request) {
+    return await authStore.getSession(parseCookies(request.headers.cookie)[SESSION_COOKIE]);
   }
 
-  function requireAuth(request) {
-    const session = currentSession(request);
+  async function requireAuth(request) {
+    const session = await currentSession(request);
     if (!session) throw httpError(401, "Unauthorized");
     return session;
+  }
+
+  function loginKey(request) {
+    return `ip:${clientIp(request, proxies)}`;
+  }
+
+  async function rateLimitLogin(request) {
+    const count = await authStore.registerLoginAttempt(loginKey(request), { windowMs: LOGIN_WINDOW_MS });
+    if (count > LOGIN_MAX_ATTEMPTS) throw httpError(429, "Too many login attempts");
   }
 
   const api = {
@@ -272,11 +331,15 @@ export function createBackendApiServer({
     url: `http://${host}:${port}`,
     telemetryUrl: `http://${host}:${port}/api/events`,
     server,
-    telemetryStore,
-    authStore,
+    // Available once listen() resolves.
+    telemetryStore: null,
+    authStore: null,
+    database: null,
 
-    listen() {
-      return new Promise(resolveListen => {
+    async listen() {
+      started ??= start();
+      await started;
+      await new Promise(resolveListen => {
         server.listen(port, host, () => {
           const address = server.address();
           if (address && typeof address === "object") {
@@ -284,19 +347,32 @@ export function createBackendApiServer({
             api.url = `http://${host}:${address.port}`;
             api.telemetryUrl = `${api.url}/api/events`;
           }
-          resolveListen(api);
+          resolveListen();
         });
       });
+      maintenance.start();
+      return api;
     },
 
-    close() {
-      return new Promise(resolveClose => {
-        server.close(() => {
-          telemetryStore.close();
-          authStore.close();
-          resolveClose();
-        });
-      });
+    /*
+     * Run retention pruning and session/login-attempt cleanup now.
+     * Normally driven by the maintenance timer; skips tasks another
+     * replica ran recently unless { force: true }.
+     */
+    async runMaintenance(options) {
+      if (!maintenance) throw new Error("Backend API is not started");
+      return await maintenance.run(options);
+    },
+
+    async close() {
+      if (server.listening) {
+        await new Promise(resolveClose => server.close(() => resolveClose()));
+      }
+      await started?.catch(() => {});
+      await maintenance?.stop();
+      await telemetryStore?.close();
+      await authStore?.close();
+      if (ownsHandle) await handle.close();
     }
   };
 
@@ -307,6 +383,7 @@ export function normalizeBackendApiConfig(config = {}, { repoRoot = process.cwd(
   const envEnabled = process.env.BRAINSTEM_API;
   const enabled = config.enabled ?? (envEnabled === "1" || envEnabled === "true");
   const token = config.token ?? (config.tokenEnv ? process.env[config.tokenEnv] : process.env.BRAINSTEM_API_TOKEN);
+  const telemetryDbPath = resolve(repoRoot, config.telemetryDbPath ?? config.dbPath ?? process.env.BRAINSTEM_API_DB ?? process.env.WEB_STATS_DB ?? "data/web-stats.sqlite");
 
   return {
     enabled,
@@ -314,10 +391,16 @@ export function normalizeBackendApiConfig(config = {}, { repoRoot = process.cwd(
     port: Number(config.port ?? process.env.BRAINSTEM_API_PORT ?? 5174),
     repoRoot,
     configPath: resolve(repoRoot, config.configPath ?? process.env.BRAINSTEM_CONFIG ?? "brainstem.config.mjs"),
-    telemetryDbPath: resolve(repoRoot, config.telemetryDbPath ?? config.dbPath ?? process.env.BRAINSTEM_API_DB ?? process.env.WEB_STATS_DB ?? "data/web-stats.sqlite"),
+    telemetryDbPath,
+    databaseUrl: config.databaseUrl ?? process.env.BRAINSTEM_DATABASE_URL ?? `sqlite:${telemetryDbPath}`,
     token,
     allowConfigWrites: config.allowConfigWrites ?? true,
-    cookieSecure: config.cookieSecure ?? (process.env.BRAINSTEM_COOKIE_SECURE === "true")
+    cookieSecure: config.cookieSecure ?? (process.env.BRAINSTEM_COOKIE_SECURE === "true"),
+    trustedProxies: config.trustedProxies ?? process.env.BRAINSTEM_TRUSTED_PROXIES ?? DEFAULT_TRUSTED_PROXIES,
+    maintenanceIntervalMs: nonNegativeInteger(
+      config.maintenanceIntervalMs ?? process.env.BRAINSTEM_MAINTENANCE_INTERVAL_MS,
+      DEFAULT_MAINTENANCE_INTERVAL_MS
+    )
   };
 }
 
@@ -382,23 +465,6 @@ function parseCookies(header = "") {
       return [part.slice(0, index).trim(), decodeURIComponent(part.slice(index + 1).trim())];
     }).filter(Boolean)
   );
-}
-
-function rateLimitLogin(request, attempts) {
-  const key = request.socket.remoteAddress ?? "unknown";
-  const now = Date.now();
-  const entry = attempts.get(key) ?? { count: 0, resetAt: now + LOGIN_WINDOW_MS };
-  if (entry.resetAt <= now) {
-    entry.count = 0;
-    entry.resetAt = now + LOGIN_WINDOW_MS;
-  }
-  entry.count += 1;
-  attempts.set(key, entry);
-  if (entry.count > LOGIN_MAX_ATTEMPTS) throw httpError(429, "Too many login attempts");
-}
-
-function resetLoginAttempts(request, attempts) {
-  attempts.delete(request.socket.remoteAddress ?? "unknown");
 }
 
 function httpError(statusCode, message) {
