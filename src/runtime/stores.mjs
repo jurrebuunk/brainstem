@@ -208,7 +208,7 @@ export function storeInfo(store) {
   };
 }
 
-function runtimeDatabaseUrl(options, baseDir) {
+export function runtimeDatabaseUrl(options, baseDir) {
   const url = resolveDatabaseUrl({
     url: options.url,
     path: options.path

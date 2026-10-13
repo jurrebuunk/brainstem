@@ -7,6 +7,7 @@ import {
   createBackendApiServer,
   normalizeBackendApiConfig
 } from "./src/backend/api-server.mjs";
+import { openRuntimeDatabase } from "./src/runtime/bootstrap.mjs";
 import { createRuntimeLogger } from "./src/runtime/logger.mjs";
 import { BrainstemRuntime } from "./src/runtime/runtime.mjs";
 
@@ -44,6 +45,20 @@ if (args.has("--help") || args.has("-h")) {
 const config =
   await loadConfig(configPath);
 
+const logger =
+  createRuntimeLogger({
+    ...(config.runtime?.logging ?? {}),
+    ...(logLevel ? { level: logLevel } : {}),
+    ...(logFormat ? { format: logFormat } : {})
+  });
+
+/*
+ * One database handle for the runtime and the
+ * embedded backend API.
+ */
+const database =
+  await openRuntimeDatabase(config, { logger });
+
 const apiConfig = normalizeBackendApiConfig(
   config.runtime?.api ?? {},
   { repoRoot: process.cwd() }
@@ -51,7 +66,10 @@ const apiConfig = normalizeBackendApiConfig(
 let backendApi = null;
 
 if (apiConfig.enabled) {
-  backendApi = createBackendApiServer(apiConfig);
+  backendApi = createBackendApiServer({
+    ...apiConfig,
+    database
+  });
   await backendApi.listen();
 
   if (!config.runtime) config.runtime = {};
@@ -71,13 +89,6 @@ if (apiConfig.enabled) {
 
 const inputs =
   config.inputs ?? [];
-
-const logger =
-  createRuntimeLogger({
-    ...(config.runtime?.logging ?? {}),
-    ...(logLevel ? { level: logLevel } : {}),
-    ...(logFormat ? { format: logFormat } : {})
-  });
 
 const destinations =
   (config.destinations ?? []).map(entry => {
@@ -100,6 +111,7 @@ if (inputs.length === 0) {
   );
 
   await backendApi?.close();
+  await database.close();
   process.exitCode = 1;
 }
 else {
@@ -133,7 +145,8 @@ else {
       config,
       plugins: inputs,
       destinations,
-      logger
+      logger,
+      database
     });
 
   try {
@@ -177,6 +190,7 @@ else {
   finally {
     await runtime.close();
     await backendApi?.close();
+    await database.close();
   }
 }
 

@@ -9,6 +9,18 @@ Brainstem 2.0 Phase 0 (safety net), see `docs/roadmap-2.0.md`:
 - Multi-core acceptance harness (`npm run test:acceptance`) that runs several real core processes against shared state. The 2.0 cluster guarantees are tracked as `todo` tests until Phase 3.
 - Architecture decision records for the 2.0 design in `docs/adr/`.
 
+Brainstem 2.0 Phase 1 (storage abstraction):
+
+- One database for all state, via Kysely: SQLite (default, `sqlite:data/brainstem.sqlite`) or Postgres (`BRAINSTEM_DATABASE_URL=postgres://...`). The runtime and the embedded API share one connection.
+- Records, checkpoints, telemetry, stats, and auth stores are async and database-backed. Checkpoints are read from the database on every poll, with no per-process cache.
+- New `ctx.state` plugin API for durable plugin state. The Matrix destination keeps its suppression state there, claiming a notification before sending so two processes can't both send it.
+- Record writes check the expected revision (groundwork for multi-core).
+- Safe first-admin creation under concurrent setup requests; login rate limiting stored in the database and keyed by client IP behind trusted proxies (`BRAINSTEM_TRUSTED_PROXIES`); retention pruning moved to a periodic maintenance job.
+- `brainstem migrate`, `migrate status`, `migrate import-v1`, and `migrate copy` / `sqlite-to-pg` commands.
+- 1.x state (`web-stats.sqlite`, `checkpoints.json`, `matrix-notifications.json`) is imported automatically on first start; legacy files are never modified.
+- CI runs every storage test against both SQLite and Postgres 17.
+- Behaviour change: with no `records`/`checkpoints` config, state now persists to the database (previously records were in memory and checkpoints in JSON). Explicit `memory`, `json`, and `sqlite` types still work.
+
 ## 0.1.0
 
 First stable release of Brainstem as a local-first headless decision runtime with a protected operations UI.
