@@ -22,6 +22,7 @@
     "plugin:test": "node run-plugin-test.mjs",
     "check": "node --check brainstem.mjs && find src plugins -name '*.mjs' -exec node --check {} \\;",
     "test": "node --test tests/*.test.mjs",
+    "test:acceptance": "node --test tests/acceptance/*.test.mjs",
     "pack:dry-run": "npm pack --dry-run",
     "prepack": "npm test"
   },
