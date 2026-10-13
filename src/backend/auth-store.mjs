@@ -1,77 +1,108 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import argon2 from "argon2";
+import { sql } from "kysely";
 
+import {
+  countValue,
+  isUniqueViolation,
+  lockTransaction,
+  writeTransaction
+} from "./db-utils.mjs";
 import { DEFAULT_ROLES, normalizePermissions, PERMISSIONS } from "./permissions.mjs";
 
 const SESSION_BYTES = 32;
 const CSRF_BYTES = 24;
 const DEFAULT_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 
-export function createAuthStore({ path, sessionTtlMs = DEFAULT_SESSION_TTL_MS }) {
-  mkdirSync(dirname(path), { recursive: true });
-  const db = new DatabaseSync(path);
-  initAuthDb(db);
-  ensureDefaultRoles(db);
+// Serializes every change that can add or remove an administrator,
+// across connections and replicas (Postgres advisory lock).
+const ADMIN_LOCK = "brainstem.auth.admins";
+
+/*
+ * Auth persistence on the shared database handle
+ * ({ db, dialect } from src/db). Async; the handle is owned by
+ * the caller.
+ */
+export async function createAuthStore({ database, sessionTtlMs = DEFAULT_SESSION_TTL_MS }) {
+  const { db, dialect } = database;
+  await ensureDefaultRoles(db);
+
+  function adminTransaction(fn) {
+    return writeTransaction(database, async trx => {
+      await lockTransaction(trx, dialect, ADMIN_LOCK);
+      return await fn(trx);
+    });
+  }
 
   return {
     sessionTtlMs,
 
-    close() {
-      db.close();
+    async close() {
+      // The database handle is owned by the caller.
     },
 
-    setupRequired() {
-      return adminCount(db) === 0;
+    async setupRequired() {
+      return await adminCount(db) === 0;
     },
 
     async createInitialAdmin({ username, password, name }) {
-      if (adminCount(db) > 0) {
+      if (await adminCount(db) > 0) {
         throw httpError(409, "Initial administrator already exists");
       }
 
-      const adminRole = roleByName(db, "Administrator");
-      const user = await createUser(db, {
-        username,
-        password,
-        name,
-        active: true,
-        roleIds: [adminRole.id]
+      const normalized = normalizeUserInput({ username, password, name }, { requirePassword: true });
+      const hash = await hashPassword(normalized.password);
+
+      // Check and insert in one serialized transaction so concurrent
+      // setup requests (or replicas) cannot both create an admin.
+      const id = await adminTransaction(async trx => {
+        if (await adminCount(trx) > 0) {
+          throw httpError(409, "Initial administrator already exists");
+        }
+        const adminRole = await roleByName(trx, "Administrator");
+        return await insertUser(trx, {
+          ...normalized,
+          active: true,
+          roleIds: [adminRole.id]
+        }, hash);
       });
-      return userWithPermissions(db, user.id);
+
+      return await userWithPermissions(db, id);
     },
 
     async verifyLogin({ username, password }) {
-      const user = userByUsername(db, username);
+      const user = await userByUsername(db, username);
       if (!user || !user.active) return null;
       const ok = await argon2.verify(user.password_hash, String(password ?? ""));
-      return ok ? userWithPermissions(db, user.id) : null;
+      return ok ? await userWithPermissions(db, user.id) : null;
     },
 
-    createSession(userId) {
-      pruneExpiredSessions(db);
+    async createSession(userId) {
       const token = randomToken(SESSION_BYTES);
       const csrfToken = randomToken(CSRF_BYTES);
       const expiresAt = new Date(Date.now() + sessionTtlMs).toISOString();
-      db.prepare(`
-        insert into auth_sessions (token, user_id, csrf_token, expires_at, created_at)
-        values (?, ?, ?, ?, ?)
-      `).run(token, userId, csrfToken, expiresAt, new Date().toISOString());
+      await db.insertInto("auth_sessions")
+        .values({
+          token,
+          user_id: userId,
+          csrf_token: csrfToken,
+          expires_at: expiresAt,
+          created_at: new Date().toISOString()
+        })
+        .execute();
       return { token, csrfToken, expiresAt };
     },
 
-    getSession(token) {
+    async getSession(token) {
       if (!token) return null;
-      pruneExpiredSessions(db);
-      const row = db.prepare(`
-        select token, user_id, csrf_token, expires_at
-        from auth_sessions
-        where token = ? and revoked_at is null and expires_at > ?
-      `).get(token, new Date().toISOString());
+      const row = await db.selectFrom("auth_sessions")
+        .select(["token", "user_id", "csrf_token", "expires_at"])
+        .where("token", "=", token)
+        .where("revoked_at", "is", null)
+        .where("expires_at", ">", new Date().toISOString())
+        .executeTakeFirst();
       if (!row) return null;
-      const user = userWithPermissions(db, row.user_id);
+      const user = await userWithPermissions(db, row.user_id);
       if (!user?.active) return null;
       return {
         token: row.token,
@@ -81,59 +112,150 @@ export function createAuthStore({ path, sessionTtlMs = DEFAULT_SESSION_TTL_MS })
       };
     },
 
-    revokeSession(token) {
+    async revokeSession(token) {
       if (!token) return;
-      db.prepare("update auth_sessions set revoked_at = ? where token = ?")
-        .run(new Date().toISOString(), token);
+      await db.updateTable("auth_sessions")
+        .set({ revoked_at: new Date().toISOString() })
+        .where("token", "=", token)
+        .execute();
     },
 
-    listUsers() {
-      return db.prepare("select id from auth_users order by username").all()
-        .map(row => userWithPermissions(db, row.id));
+    async pruneExpiredSessions({ now = new Date() } = {}) {
+      const deleted = await db.deleteFrom("auth_sessions")
+        .where(eb => eb.or([
+          eb("expires_at", "<=", now.toISOString()),
+          eb("revoked_at", "is not", null)
+        ]))
+        .executeTakeFirst();
+      return Number(deleted.numDeletedRows ?? 0);
     },
 
-    getUser(id) {
-      return userWithPermissions(db, id);
+    /*
+     * Count one login attempt for key inside a fixed window and
+     * return the attempt count for the current window. Stored in
+     * the database so the limit holds across API replicas.
+     */
+    async registerLoginAttempt(key, { windowMs, now = new Date() }) {
+      const nowIso = now.toISOString();
+      const cutoff = new Date(now.getTime() - windowMs).toISOString();
+      const expired = sql`auth_login_attempts.window_started_at <= ${cutoff}`;
+      const row = await db.insertInto("auth_login_attempts")
+        .values({ key, count: 1, window_started_at: nowIso })
+        .onConflict(oc => oc.column("key").doUpdateSet({
+          count: sql`case when ${expired} then 1 else auth_login_attempts.count + 1 end`,
+          window_started_at: sql`case when ${expired} then excluded.window_started_at else auth_login_attempts.window_started_at end`
+        }))
+        .returning("count")
+        .executeTakeFirstOrThrow();
+      return Number(row.count);
+    },
+
+    async resetLoginAttempts(key) {
+      await db.deleteFrom("auth_login_attempts").where("key", "=", key).execute();
+    },
+
+    async pruneLoginAttempts({ windowMs, now = new Date() }) {
+      const cutoff = new Date(now.getTime() - windowMs).toISOString();
+      const deleted = await db.deleteFrom("auth_login_attempts")
+        .where("window_started_at", "<=", cutoff)
+        .executeTakeFirst();
+      return Number(deleted.numDeletedRows ?? 0);
+    },
+
+    async listUsers() {
+      const rows = await db.selectFrom("auth_users").select("id").orderBy("username").execute();
+      return await Promise.all(rows.map(row => userWithPermissions(db, row.id)));
+    },
+
+    async getUser(id) {
+      return await userWithPermissions(db, id);
     },
 
     async createUser(input) {
-      return await createUser(db, input);
+      const normalized = normalizeUserInput(input, { requirePassword: true });
+      const hash = await hashPassword(normalized.password);
+      const id = await writeTransaction(database, trx => insertUser(trx, normalized, hash));
+      return await userWithPermissions(db, id);
     },
 
     async updateUser(id, input) {
-      return await updateUser(db, id, input);
+      const existing = await userWithPermissions(db, id);
+      if (!existing) throw httpError(404, "User not found");
+      const preview = normalizeUserInput(input, { requirePassword: false, current: existing });
+      const passwordHash = preview.password ? await hashPassword(preview.password) : null;
+
+      await adminTransaction(async trx => {
+        const current = await userWithPermissions(trx, id);
+        if (!current) throw httpError(404, "User not found");
+        const normalized = normalizeUserInput(input, { requirePassword: false, current });
+
+        if (current.permissions.includes("roles:manage") && normalized.active === false && await adminCount(trx) <= 1) {
+          throw httpError(409, "Cannot disable the last active administrator");
+        }
+
+        const roleIds = normalized.roleIds ?? current.roles.map(role => role.id);
+        const willBeAdmin = await rolesHavePermission(trx, roleIds, "roles:manage");
+        if (current.permissions.includes("roles:manage") && !willBeAdmin && await adminCount(trx) <= 1) {
+          throw httpError(409, "Cannot remove the last active administrator");
+        }
+
+        try {
+          await trx.updateTable("auth_users")
+            .set({
+              username: normalized.username,
+              name: normalized.name,
+              ...(passwordHash ? { password_hash: passwordHash } : {}),
+              active: normalized.active ? 1 : 0,
+              updated_at: new Date().toISOString()
+            })
+            .where("id", "=", id)
+            .execute();
+        }
+        catch (error) {
+          if (isUniqueViolation(error)) throw httpError(409, "Username already exists");
+          throw error;
+        }
+
+        if (normalized.roleIds) await setUserRoles(trx, id, normalized.roleIds);
+      });
+
+      return await userWithPermissions(db, id);
     },
 
-    deleteUser(id) {
-      const user = userWithPermissions(db, id);
-      if (!user) throw httpError(404, "User not found");
-      if (user.permissions.includes("roles:manage") && adminCount(db) <= 1) {
-        throw httpError(409, "Cannot remove the last active administrator");
-      }
-      db.prepare("delete from auth_users where id = ?").run(id);
+    async deleteUser(id) {
+      await adminTransaction(async trx => {
+        const user = await userWithPermissions(trx, id);
+        if (!user) throw httpError(404, "User not found");
+        if (user.permissions.includes("roles:manage") && await adminCount(trx) <= 1) {
+          throw httpError(409, "Cannot remove the last active administrator");
+        }
+        await trx.deleteFrom("auth_users").where("id", "=", id).execute();
+      });
     },
 
-    listRoles() {
-      return db.prepare("select * from auth_roles order by name").all()
-        .map(roleFromRow);
+    async listRoles() {
+      const rows = await db.selectFrom("auth_roles").selectAll().orderBy("name").execute();
+      return rows.map(roleFromRow);
     },
 
-    createRole(input) {
-      return createRole(db, input);
+    async createRole(input) {
+      return await createRole(db, input);
     },
 
-    updateRole(id, input) {
-      return updateRole(db, id, input);
+    async updateRole(id, input) {
+      return await adminTransaction(trx => updateRole(trx, id, input));
     },
 
-    deleteRole(id) {
-      const role = roleById(db, id);
-      if (!role) throw httpError(404, "Role not found");
-      if (role.system) throw httpError(409, "System roles cannot be deleted");
-      if (role.permissions.includes("roles:manage") && adminCountExcludingRole(db, id) <= 0) {
-        throw httpError(409, "Cannot remove the last active administrator");
-      }
-      db.prepare("delete from auth_roles where id = ?").run(id);
+    async deleteRole(id) {
+      await adminTransaction(async trx => {
+        const role = await roleById(trx, id);
+        if (!role) throw httpError(404, "Role not found");
+        if (role.system) throw httpError(409, "System roles cannot be deleted");
+        if (role.permissions.includes("roles:manage") && await adminCountExcludingRole(trx, id) <= 0) {
+          throw httpError(409, "Cannot remove the last active administrator");
+        }
+        await trx.deleteFrom("auth_roles").where("id", "=", id).execute();
+      });
     },
 
     permissions() {
@@ -142,182 +264,133 @@ export function createAuthStore({ path, sessionTtlMs = DEFAULT_SESSION_TTL_MS })
   };
 }
 
-function initAuthDb(db) {
-  db.exec(`
-    pragma journal_mode = wal;
-    pragma busy_timeout = 5000;
-    pragma foreign_keys = on;
-
-    create table if not exists auth_users (
-      id text primary key,
-      username text not null unique,
-      name text,
-      password_hash text not null,
-      active integer not null default 1,
-      created_at text not null,
-      updated_at text not null
-    );
-
-    create table if not exists auth_roles (
-      id text primary key,
-      name text not null unique,
-      description text,
-      permissions_json text not null,
-      system integer not null default 0,
-      created_at text not null,
-      updated_at text not null
-    );
-
-    create table if not exists auth_user_roles (
-      user_id text not null references auth_users(id) on delete cascade,
-      role_id text not null references auth_roles(id) on delete cascade,
-      primary key (user_id, role_id)
-    );
-
-    create table if not exists auth_sessions (
-      token text primary key,
-      user_id text not null references auth_users(id) on delete cascade,
-      csrf_token text not null,
-      expires_at text not null,
-      created_at text not null,
-      revoked_at text
-    );
-
-    create index if not exists auth_sessions_user_idx on auth_sessions(user_id);
-    create index if not exists auth_sessions_expires_idx on auth_sessions(expires_at);
-  `);
-}
-
-function ensureDefaultRoles(db) {
+async function ensureDefaultRoles(db) {
+  // Idempotent across replicas starting at the same time.
+  const now = new Date().toISOString();
   for (const role of DEFAULT_ROLES) {
-    const existing = roleByName(db, role.name);
-    if (existing) continue;
-    createRole(db, role);
+    const normalized = normalizeRoleInput(role);
+    await db.insertInto("auth_roles")
+      .values(roleValues(randomUUID(), normalized, now))
+      .onConflict(oc => oc.column("name").doNothing())
+      .execute();
   }
 }
 
-async function createUser(db, input) {
-  const normalized = normalizeUserInput(input, { requirePassword: true });
+async function insertUser(db, normalized, passwordHash) {
   const now = new Date().toISOString();
   const id = randomUUID();
-  const hash = await hashPassword(normalized.password);
 
-  db.exec("begin immediate");
   try {
-    db.prepare(`
-      insert into auth_users (id, username, name, password_hash, active, created_at, updated_at)
-      values (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, normalized.username, normalized.name, hash, normalized.active ? 1 : 0, now, now);
-    setUserRoles(db, id, normalized.roleIds);
-    db.exec("commit");
+    await db.insertInto("auth_users")
+      .values({
+        id,
+        username: normalized.username,
+        name: normalized.name,
+        password_hash: passwordHash,
+        active: normalized.active ? 1 : 0,
+        created_at: now,
+        updated_at: now
+      })
+      .execute();
   }
   catch (error) {
-    db.exec("rollback");
-    if (String(error.message).includes("UNIQUE")) throw httpError(409, "Username already exists");
+    if (isUniqueViolation(error)) throw httpError(409, "Username already exists");
     throw error;
   }
 
-  return userWithPermissions(db, id);
+  await setUserRoles(db, id, normalized.roleIds);
+  return id;
 }
 
-async function updateUser(db, id, input) {
-  const current = userWithPermissions(db, id);
-  if (!current) throw httpError(404, "User not found");
-  const normalized = normalizeUserInput(input, { requirePassword: false, current });
-
-  if (current.permissions.includes("roles:manage") && normalized.active === false && adminCount(db) <= 1) {
-    throw httpError(409, "Cannot disable the last active administrator");
-  }
-
-  const roleIds = normalized.roleIds ?? current.roles.map(role => role.id);
-  const willBeAdmin = rolesHavePermission(db, roleIds, "roles:manage");
-  if (current.permissions.includes("roles:manage") && !willBeAdmin && adminCount(db) <= 1) {
-    throw httpError(409, "Cannot remove the last active administrator");
-  }
-
-  const now = new Date().toISOString();
-  const passwordHash = normalized.password ? await hashPassword(normalized.password) : null;
-
-  db.exec("begin immediate");
-  try {
-    if (passwordHash) {
-      db.prepare(`
-        update auth_users set username = ?, name = ?, password_hash = ?, active = ?, updated_at = ? where id = ?
-      `).run(normalized.username, normalized.name, passwordHash, normalized.active ? 1 : 0, now, id);
-    }
-    else {
-      db.prepare(`
-        update auth_users set username = ?, name = ?, active = ?, updated_at = ? where id = ?
-      `).run(normalized.username, normalized.name, normalized.active ? 1 : 0, now, id);
-    }
-
-    if (normalized.roleIds) setUserRoles(db, id, normalized.roleIds);
-    db.exec("commit");
-  }
-  catch (error) {
-    db.exec("rollback");
-    if (String(error.message).includes("UNIQUE")) throw httpError(409, "Username already exists");
-    throw error;
-  }
-
-  return userWithPermissions(db, id);
-}
-
-function createRole(db, input) {
+async function createRole(db, input) {
   const normalized = normalizeRoleInput(input);
-  const now = new Date().toISOString();
   const id = randomUUID();
-  db.prepare(`
-    insert into auth_roles (id, name, description, permissions_json, system, created_at, updated_at)
-    values (?, ?, ?, ?, ?, ?, ?)
-  `).run(id, normalized.name, normalized.description, JSON.stringify(normalized.permissions), normalized.system ? 1 : 0, now, now);
-  return roleById(db, id);
+  try {
+    await db.insertInto("auth_roles")
+      .values(roleValues(id, normalized, new Date().toISOString()))
+      .execute();
+  }
+  catch (error) {
+    if (isUniqueViolation(error)) throw httpError(409, "Role name already exists");
+    throw error;
+  }
+  return await roleById(db, id);
 }
 
-function updateRole(db, id, input) {
-  const current = roleById(db, id);
+function roleValues(id, normalized, now) {
+  return {
+    id,
+    name: normalized.name,
+    description: normalized.description,
+    permissions_json: JSON.stringify(normalized.permissions),
+    system: normalized.system ? 1 : 0,
+    created_at: now,
+    updated_at: now
+  };
+}
+
+async function updateRole(db, id, input) {
+  const current = await roleById(db, id);
   if (!current) throw httpError(404, "Role not found");
   const normalized = normalizeRoleInput({ ...current, ...input, system: current.system });
 
   if (current.system && current.name === "Administrator" && !normalized.permissions.includes("roles:manage")) {
     throw httpError(409, "Administrator role must retain role management permission");
   }
-  if (current.permissions.includes("roles:manage") && !normalized.permissions.includes("roles:manage") && adminCountExcludingRole(db, id) <= 0) {
+  if (current.permissions.includes("roles:manage") && !normalized.permissions.includes("roles:manage") && await adminCountExcludingRole(db, id) <= 0) {
     throw httpError(409, "Cannot remove the last active administrator");
   }
 
-  db.prepare(`
-    update auth_roles set name = ?, description = ?, permissions_json = ?, updated_at = ? where id = ?
-  `).run(normalized.name, normalized.description, JSON.stringify(normalized.permissions), new Date().toISOString(), id);
-  return roleById(db, id);
+  try {
+    await db.updateTable("auth_roles")
+      .set({
+        name: normalized.name,
+        description: normalized.description,
+        permissions_json: JSON.stringify(normalized.permissions),
+        updated_at: new Date().toISOString()
+      })
+      .where("id", "=", id)
+      .execute();
+  }
+  catch (error) {
+    if (isUniqueViolation(error)) throw httpError(409, "Role name already exists");
+    throw error;
+  }
+  return await roleById(db, id);
 }
 
-function setUserRoles(db, userId, roleIds) {
+async function setUserRoles(db, userId, roleIds) {
   const validIds = [...new Set(roleIds ?? [])];
   for (const roleId of validIds) {
-    if (!roleById(db, roleId)) throw httpError(400, `Unknown role '${roleId}'`);
+    if (!await roleById(db, roleId)) throw httpError(400, `Unknown role '${roleId}'`);
   }
-  db.prepare("delete from auth_user_roles where user_id = ?").run(userId);
-  const stmt = db.prepare("insert into auth_user_roles (user_id, role_id) values (?, ?)");
-  for (const roleId of validIds) stmt.run(userId, roleId);
+  await db.deleteFrom("auth_user_roles").where("user_id", "=", userId).execute();
+  if (validIds.length === 0) return;
+  await db.insertInto("auth_user_roles")
+    .values(validIds.map(roleId => ({ user_id: userId, role_id: roleId })))
+    .execute();
 }
 
-function userWithPermissions(db, id) {
-  const row = db.prepare("select * from auth_users where id = ?").get(id);
+async function userWithPermissions(db, id) {
+  const row = await db.selectFrom("auth_users").selectAll().where("id", "=", id).executeTakeFirst();
   if (!row) return null;
-  const roles = db.prepare(`
-    select r.* from auth_roles r
-    join auth_user_roles ur on ur.role_id = r.id
-    where ur.user_id = ?
-    order by r.name
-  `).all(id).map(roleFromRow);
+  const roleRows = await db.selectFrom("auth_roles as r")
+    .innerJoin("auth_user_roles as ur", "ur.role_id", "r.id")
+    .selectAll("r")
+    .where("ur.user_id", "=", id)
+    .orderBy("r.name")
+    .execute();
+  const roles = roleRows.map(roleFromRow);
   const permissions = normalizePermissions(roles.flatMap(role => role.permissions));
   return sanitizeUser(row, roles, permissions);
 }
 
-function userByUsername(db, username) {
-  const row = db.prepare("select * from auth_users where lower(username) = lower(?)").get(String(username ?? ""));
-  return row ? { ...row, active: row.active === 1 } : null;
+async function userByUsername(db, username) {
+  const row = await db.selectFrom("auth_users")
+    .selectAll()
+    .where(eb => eb(eb.fn("lower", ["username"]), "=", String(username ?? "").toLowerCase()))
+    .executeTakeFirst();
+  return row ? { ...row, active: Number(row.active) === 1 } : null;
 }
 
 function sanitizeUser(row, roles, permissions) {
@@ -325,7 +398,7 @@ function sanitizeUser(row, roles, permissions) {
     id: row.id,
     username: row.username,
     name: row.name ?? "",
-    active: row.active === 1,
+    active: Number(row.active) === 1,
     roles,
     permissions,
     createdAt: row.created_at,
@@ -339,49 +412,42 @@ function roleFromRow(row) {
     name: row.name,
     description: row.description ?? "",
     permissions: normalizePermissions(JSON.parse(row.permissions_json)),
-    system: row.system === 1,
+    system: Number(row.system) === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
 }
 
-function roleByName(db, name) {
-  const row = db.prepare("select * from auth_roles where name = ?").get(name);
+async function roleByName(db, name) {
+  const row = await db.selectFrom("auth_roles").selectAll().where("name", "=", name).executeTakeFirst();
   return row ? roleFromRow(row) : null;
 }
 
-function roleById(db, id) {
-  const row = db.prepare("select * from auth_roles where id = ?").get(id);
+async function roleById(db, id) {
+  const row = await db.selectFrom("auth_roles").selectAll().where("id", "=", id).executeTakeFirst();
   return row ? roleFromRow(row) : null;
 }
 
-function rolesHavePermission(db, roleIds, permission) {
-  return (roleIds ?? []).some(roleId => roleById(db, roleId)?.permissions.includes(permission));
+async function rolesHavePermission(db, roleIds, permission) {
+  for (const roleId of roleIds ?? []) {
+    if ((await roleById(db, roleId))?.permissions.includes(permission)) return true;
+  }
+  return false;
 }
 
-function adminCount(db) {
-  return db.prepare(`
-    select count(distinct u.id) as count
-    from auth_users u
-    join auth_user_roles ur on ur.user_id = u.id
-    join auth_roles r on r.id = ur.role_id
-    where u.active = 1 and r.permissions_json like '%"roles:manage"%'
-  `).get().count;
+async function adminCount(db, { excludingRoleId } = {}) {
+  let query = db.selectFrom("auth_users as u")
+    .innerJoin("auth_user_roles as ur", "ur.user_id", "u.id")
+    .innerJoin("auth_roles as r", "r.id", "ur.role_id")
+    .select(sql`count(distinct u.id)`.as("count"))
+    .where("u.active", "=", 1)
+    .where("r.permissions_json", "like", "%\"roles:manage\"%");
+  if (excludingRoleId) query = query.where("r.id", "!=", excludingRoleId);
+  return countValue(await query.executeTakeFirst());
 }
 
 function adminCountExcludingRole(db, roleId) {
-  return db.prepare(`
-    select count(distinct u.id) as count
-    from auth_users u
-    join auth_user_roles ur on ur.user_id = u.id
-    join auth_roles r on r.id = ur.role_id
-    where u.active = 1 and r.id != ? and r.permissions_json like '%"roles:manage"%'
-  `).get(roleId).count;
-}
-
-function pruneExpiredSessions(db) {
-  db.prepare("delete from auth_sessions where expires_at <= ? or revoked_at is not null")
-    .run(new Date().toISOString());
+  return adminCount(db, { excludingRoleId: roleId });
 }
 
 function normalizeUserInput(input, { requirePassword, current } = {}) {

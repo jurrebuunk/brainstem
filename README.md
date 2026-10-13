@@ -311,12 +311,13 @@ See [`docs/web-ui.md`](docs/web-ui.md) and [`docs/telemetry.md`](docs/telemetry.
 
 ## Durable state
 
-Brainstem keeps durable state in local files:
+Brainstem keeps all durable state in one database: decision records, input checkpoints, plugin state (such as Matrix notifications), telemetry, stats, users, roles, and sessions.
 
-- Core decision records: `data/brainstem.sqlite`
-- Input checkpoints: `data/checkpoints.json`
-- Backend telemetry/history/stats/auth: `data/web-stats.sqlite`
-- Matrix notification state, if enabled: `data/matrix-notifications.json`
+- Default: SQLite at `data/brainstem.sqlite`, no extra services needed.
+- Cluster deployments: Postgres via `BRAINSTEM_DATABASE_URL=postgres://...` or `runtime.database.url`.
+- Upgrading from 1.x: the old `data/web-stats.sqlite`, `data/checkpoints.json`, and `data/matrix-notifications.json` are imported automatically on first start and left untouched. `brainstem migrate import-v1` does the same by hand.
+
+See [`docs/state.md`](docs/state.md) and [`docs/cli.md`](docs/cli.md).
 
 Retention controls:
 

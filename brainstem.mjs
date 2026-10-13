@@ -7,12 +7,28 @@ import {
   createBackendApiServer,
   normalizeBackendApiConfig
 } from "./src/backend/api-server.mjs";
+import { openRuntimeDatabase } from "./src/runtime/bootstrap.mjs";
 import { createRuntimeLogger } from "./src/runtime/logger.mjs";
 import { BrainstemRuntime } from "./src/runtime/runtime.mjs";
 
 loadDotEnv();
 
 const argv = process.argv.slice(2);
+
+// Subcommands (e.g. `brainstem migrate`) run instead of the runtime.
+if (/^[a-z]/.test(argv[0] ?? "")) {
+  const { isCliCommand, runCli, COMMANDS_USAGE } = await import("./src/cli/index.mjs");
+
+  if (!isCliCommand(argv)) {
+    console.error(`Unknown command: ${argv[0]}\n\n${COMMANDS_USAGE}`);
+    process.exit(2);
+  }
+
+  const code = await runCli(argv);
+  await new Promise(done => process.stdout.write("", done));
+  process.exit(code);
+}
+
 const args = new Set(argv);
 
 const once = args.has("--once");
@@ -22,12 +38,26 @@ const logLevel = valueFromArgs(argv, "--log-level");
 const logFormat = valueFromArgs(argv, "--log-format");
 
 if (args.has("--help") || args.has("-h")) {
-  console.log(`Usage: node brainstem.mjs [--config path] [--once] [--all] [--log-level level] [--log-format format]\n\nOptions:\n  --config      Config file path. Default: brainstem.config.mjs\n  --once        Poll each configured input once, then exit.\n  --all         Print ignored decisions too through log destinations.\n  --log-level   Runtime log level: debug, info, warn, error, silent.\n  --log-format  Runtime log format: pretty or json.\n\nSetup:\n  cp brainstem.config.example.mjs brainstem.config.mjs\n  cp .env.example .env\n`);
+  console.log(`Usage: node brainstem.mjs [--config path] [--once] [--all] [--log-level level] [--log-format format]\n       node brainstem.mjs <command> [options]\n\nCommands:\n  migrate       Apply database migrations; also status, import-v1, copy.\n                See: node brainstem.mjs migrate --help\n\nOptions:\n  --config      Config file path. Default: brainstem.config.mjs\n  --once        Poll each configured input once, then exit.\n  --all         Print ignored decisions too through log destinations.\n  --log-level   Runtime log level: debug, info, warn, error, silent.\n  --log-format  Runtime log format: pretty or json.\n\nSetup:\n  cp brainstem.config.example.mjs brainstem.config.mjs\n  cp .env.example .env\n`);
   process.exit(0);
 }
 
 const config =
   await loadConfig(configPath);
+
+const logger =
+  createRuntimeLogger({
+    ...(config.runtime?.logging ?? {}),
+    ...(logLevel ? { level: logLevel } : {}),
+    ...(logFormat ? { format: logFormat } : {})
+  });
+
+/*
+ * One database handle for the runtime and the
+ * embedded backend API.
+ */
+const database =
+  await openRuntimeDatabase(config, { logger });
 
 const apiConfig = normalizeBackendApiConfig(
   config.runtime?.api ?? {},
@@ -36,7 +66,10 @@ const apiConfig = normalizeBackendApiConfig(
 let backendApi = null;
 
 if (apiConfig.enabled) {
-  backendApi = createBackendApiServer(apiConfig);
+  backendApi = createBackendApiServer({
+    ...apiConfig,
+    database
+  });
   await backendApi.listen();
 
   if (!config.runtime) config.runtime = {};
@@ -56,13 +89,6 @@ if (apiConfig.enabled) {
 
 const inputs =
   config.inputs ?? [];
-
-const logger =
-  createRuntimeLogger({
-    ...(config.runtime?.logging ?? {}),
-    ...(logLevel ? { level: logLevel } : {}),
-    ...(logFormat ? { format: logFormat } : {})
-  });
 
 const destinations =
   (config.destinations ?? []).map(entry => {
@@ -85,6 +111,7 @@ if (inputs.length === 0) {
   );
 
   await backendApi?.close();
+  await database.close();
   process.exitCode = 1;
 }
 else {
@@ -118,7 +145,8 @@ else {
       config,
       plugins: inputs,
       destinations,
-      logger
+      logger,
+      database
     });
 
   try {
@@ -162,6 +190,7 @@ else {
   finally {
     await runtime.close();
     await backendApi?.close();
+    await database.close();
   }
 }
 

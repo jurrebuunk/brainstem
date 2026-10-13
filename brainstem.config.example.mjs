@@ -95,8 +95,9 @@ export default {
         notify: {
           actionableDecisions: ["queue", "dispatch", "escalate"],
           repeatAfterMs: 60 * 60 * 1000,
-          onRecovery: true,
-          statePath: "data/matrix-notifications.json"
+          onRecovery: true
+          // State lives in the database. A 1.x data/matrix-notifications.json
+          // is imported once; set statePath to import from elsewhere.
         },
         retry: {
           attempts: 3,
@@ -125,22 +126,22 @@ export default {
     api: {
       enabled: false,
       host: "127.0.0.1",
-      port: 5174,
-      telemetryDbPath: "data/web-stats.sqlite"
+      port: 5174
       // For non-local deployments, serve over TLS and set BRAINSTEM_COOKIE_SECURE=true.
       // For machine telemetry/proxy auth, set tokenEnv and configure WEB_BACKEND_TOKEN.
       // tokenEnv: "BRAINSTEM_API_TOKEN"
     },
 
-    records: {
-      type: "sqlite",
-      path: "data/brainstem.sqlite",
-      pruneAfterDays: 90
+    // One database for records, checkpoints, plugin state, telemetry, and auth.
+    // SQLite by default; use postgres://... for cluster deployments.
+    // BRAINSTEM_DATABASE_URL overrides this. 1.x state files in data/ are
+    // imported automatically on first start (see docs/state.md).
+    database: {
+      url: "sqlite:data/brainstem.sqlite"
     },
 
-    checkpoints: {
-      type: "json",
-      path: "data/checkpoints.json"
+    records: {
+      pruneAfterDays: 90
     },
 
     retry: {

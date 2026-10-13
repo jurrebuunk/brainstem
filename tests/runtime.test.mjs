@@ -15,6 +15,8 @@ import httpJsonPlugin from "../plugins/http-json/index.mjs";
 import opencodeRunnerPlugin from "../plugins/opencode-runner/index.mjs";
 import matrixPlugin from "../plugins/matrix/index.mjs";
 import { resetNotificationState } from "../plugins/matrix/notify.mjs";
+import { MemoryPluginStateStore } from "../src/runtime/plugin-state.mjs";
+import { createDestinationContext } from "../src/sdk/index.mjs";
 import { evaluateCertificate } from "../plugins/tls-certificate/check.mjs";
 import { shouldEmitCertificateObservation } from "../plugins/tls-certificate/state.mjs";
 import { fetchIssues } from "../plugins/github-issues/api.mjs";
@@ -889,11 +891,10 @@ test("matrix destination suppresses repeats and sends recovery", async () => {
   assert.match(secondBody, /Brainstem recovery/);
 });
 
-test("matrix notification state handles concurrent file commits", async () => {
+test("matrix notification state handles concurrent commits", async () => {
   resetNotificationState();
 
-  const dir = await mkdtemp(join(tmpdir(), "brainstem-matrix-state-"));
-  const statePath = join(dir, "matrix-notifications.json");
+  const store = new MemoryPluginStateStore();
   const originalFetch = globalThis.fetch;
   let count = 0;
 
@@ -909,18 +910,21 @@ test("matrix notification state handles concurrent file commits", async () => {
     }
   });
 
-  const ctx = {
+  const ctx = createDestinationContext({
     config: {
       homeserver: "https://matrix.example",
       roomId: "!room:example",
       accessToken: "secret",
       notify: {
-        statePath
+        statePath: false
       }
     },
     signal: new AbortController().signal,
-    logger: silentLogger
-  };
+    logger: silentLogger,
+    stateStore: store,
+    plugin: matrixPlugin.name,
+    destination: "room"
+  });
 
   try {
     await Promise.all([
@@ -946,11 +950,17 @@ test("matrix notification state handles concurrent file commits", async () => {
     globalThis.fetch = originalFetch;
   }
 
-  const saved = JSON.parse(
-    await readFile(statePath, "utf8")
+  const a = await ctx.state.get(
+    "notification:!room:example|http|example|health_check|http:concurrent-a"
+  );
+  const b = await ctx.state.get(
+    "notification:!room:example|http|example|health_check|http:concurrent-b"
   );
 
-  assert.equal(Object.keys(saved).length, 2);
+  assert.equal(a.status, "active");
+  assert.equal(b.status, "active");
+  assert.equal(a.pending, undefined);
+  assert.notEqual(a.eventId, b.eventId);
 });
 
 test("matrix destination retries rate limits and threads repeats", async () => {
