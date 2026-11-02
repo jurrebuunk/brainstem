@@ -75,5 +75,8 @@
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
-  ]
+  ],
+  "optionalDependencies": {
+    "@rivet-dev/agentos-core": "0.4.6"
+  }
 }

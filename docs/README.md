@@ -30,6 +30,7 @@ Built-in plugin pages:
 - [Matrix destination](matrix-destination.md)
 - [HTTP JSON destination](plugins/http-json.md)
 - [OpenCode Runner destination](plugins/opencode-runner.md)
+- [agentOS Runner destination](plugins/agentos-runner.md)
 
 ## Maintainer docs
 
