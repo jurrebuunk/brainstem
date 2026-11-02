@@ -110,6 +110,21 @@ A destination entry can override the deliver retry policy:
 
 The database transport works on SQLite and Postgres. Each claim is a single atomic statement, and on Postgres it uses `FOR UPDATE SKIP LOCKED`. Wakeups are in-process, and other processes are picked up on the next poll. The roadmap's Postgres cluster driver (Phase 3) adds `LISTEN/NOTIFY` and lease-based input scheduling. Until then, run **one** runtime per database. Running more makes each one poll every input; the acceptance tests in `tests/acceptance` track this.
 
+## Handoff: destinations emitting observations
+
+A v2 destination can hand an observation back to the core with `ctx.emit(observation)`. For example, an agent task's report can be picked up by Matrix or by a bigger agent. Emitted observations go through the normal decide stage, including the policy, `facts.minimum_decision` and the destination filters.
+
+- **Committed with the delivery.** Emitted observations are enqueued in the same transaction that marks the delivery delivered. A delivery that fails or is retried emits nothing twice.
+- **Never back to the chain.** Each emitted observation carries a lineage, the destinations it passed through. It is never delivered to a destination already in that lineage, so a destination can't trigger itself.
+- **Bounded depth.** `runtime.handoff.maxDepth` (default `2`) limits how many hops a chain can take. `ctx.emit` throws past it. `runtime.handoff.maxPerDelivery` (default `5`) limits emits per delivery.
+- Emitted observations show `input.id` as `destination:<destination id>` in the output envelope.
+
+```js
+runtime: {
+  handoff: { maxDepth: 2, maxPerDelivery: 5 }
+}
+```
+
 ## Run once
 
 `node brainstem.mjs --once` polls every input once, then runs every job that is due until none are left, including deliver jobs created by this run's decisions. Retries that are not due yet stay in the database for the next start. The command exits non-zero if any poll or job failed during the run.

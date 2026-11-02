@@ -192,7 +192,8 @@ export function createDestinationContext({
   destination,
   id,
   idempotencyKey = null,
-  attempt = 1
+  attempt = 1,
+  emit
 } = {}) {
   return {
     config,
@@ -200,6 +201,9 @@ export function createDestinationContext({
     logger,
     idempotencyKey,
     attempt,
+    // emit(observation): hand an observation back to the core
+    // (see docs/delivery-pipeline.md). Only set by the runtime.
+    ...(emit ? { emit } : {}),
     state: contextState(stateStore, {
       kind: "destination",
       plugin,

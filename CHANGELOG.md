@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Destinations can hand observations back to the core with `ctx.emit(observation)`. They are enqueued in the same transaction that marks the delivery delivered, never routed back to a destination already in their chain, and limited by `runtime.handoff.maxDepth` (default 2) and `maxPerDelivery` (default 5).
+- `agentos-runner` gains `handoff`: a successful run's report becomes an `agent_report` observation (with `facts.minimum_decision`) that Matrix or a bigger agent can pick up.
+- New `log-file` input: watches a log file and emits new matching lines (default `ERROR|FATAL|CRITICAL|PANIC`) as one bounded observation per poll, with offset checkpoints and truncation/rotation handling.
+- Fix: the agentOS prompt and docs used `observation.summary`, which doesn't exist; they now use `title`, `message` and `source.type`/`source.name`.
+
 - New `agentos-runner` destination: runs a configured task in a [Rivet agentOS](https://rivet.dev/agent-os) VM for each matching decision. One plugin serves many tasks; each destination entry has its own filters, `command` (or agent `prompt`), network allowlist, read-only mounts, env, and host-side tools. Tools are validated, limited by `maxCalls`, can be `required`, and are replayed instead of repeated when a delivery is retried. `runOnce: "revision"` skips re-emitted observations by default. See `docs/plugins/agentos-runner.md`.
 - `prompt` tasks run a host-side agent loop against any OpenAI-compatible endpoint (`model: { baseUrl, name, apiKeyEnv }`). The model gets `run_command` (inside the VM) plus the entry's tools. Every run is bounded by `limits` (turns, output tokens, commands, tool output size, prompt size, conversation size, request spacing), duplicate calls are refused, and a delivery that already talked to the model fails permanently instead of being retried (`maxAgentAttempts: 1`).
 - `@rivet-dev/agentos-core` is an optional dependency. The Docker image omits optional dependencies unless built with `--build-arg INSTALL_OPTIONAL=true`.

@@ -10,6 +10,7 @@ Brainstem ships local plugins under `plugins/`.
 | Email IMAP | `./plugins/email-imap/index.mjs` | Poll an IMAP inbox and emit new email observations. | [Email IMAP](email-imap.md) |
 | HTTP Health | `./plugins/http-health/index.mjs` | Poll HTTP endpoints and emit health state changes. | [HTTP Health](http-health.md) |
 | TLS Certificate | `./plugins/tls-certificate/index.mjs` | Check TLS certificate validity/expiry and emit certificate state changes. | [TLS Certificate](tls-certificate.md) |
+| Log File | `./plugins/log-file/index.mjs` | Watch a log file and emit new error lines as one bounded observation per poll. | [Log File](plugins/log-file.md) |
 | Static Observations | `./plugins/static-observations/index.mjs` | Emit configured observations for smoke tests. | [Static Observations](plugins/static-observations.md) |
 
 ## Destination plugins

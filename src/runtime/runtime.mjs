@@ -180,6 +180,16 @@ export class BrainstemRuntime {
         this.config.runtime?.queue
       );
 
+    /*
+     * Destinations can hand observations back to the core
+     * (ctx.emit), e.g. an agent's report for a bigger agent.
+     * Bounded so a chain of destinations can never loop.
+     */
+    this.handoffConfig = {
+      maxDepth: this.config.runtime?.handoff?.maxDepth ?? 2,
+      maxPerDelivery: this.config.runtime?.handoff?.maxPerDelivery ?? 5
+    };
+
     const checkpointsInDatabase =
       this.checkpointStore instanceof DatabaseCheckpointStore;
 
@@ -1118,7 +1128,8 @@ export class BrainstemRuntime {
       observation,
       emissionId,
       pollId = null,
-      input = {}
+      input = {},
+      lineage = null
     } = job.payload;
 
     const decision =
@@ -1186,7 +1197,10 @@ export class BrainstemRuntime {
           eventMatchesDestination(
             { decision, observation },
             item.entry
-          )
+          ) &&
+          // An emitted observation never returns to a destination
+          // already in its chain.
+          !lineage?.destinations?.includes(item.id)
         )
         .map(item => {
           const key = deliveryKey({
@@ -1240,7 +1254,8 @@ export class BrainstemRuntime {
           maxAttempts: item.retry.attempts,
           payload: {
             key,
-            destination: item.id
+            destination: item.id,
+            ...(lineage ? { lineage } : {})
           }
         })),
         { executor }
@@ -1285,7 +1300,8 @@ export class BrainstemRuntime {
   async #deliver(job, { signal, commit }) {
     const {
       key,
-      destination: destinationId
+      destination: destinationId,
+      lineage = { destinations: [], depth: 0 }
     } = job.payload;
 
     const item =
@@ -1331,6 +1347,11 @@ export class BrainstemRuntime {
       destinationInfo
     );
 
+    // Observations the destination hands back. Enqueued only
+    // when the delivery commits, so a failed or retried delivery
+    // emits nothing twice.
+    const emitted = [];
+
     const ctx =
       createDestinationContext({
         config: item.entry.config ?? {},
@@ -1345,7 +1366,22 @@ export class BrainstemRuntime {
         destination: item.destinationName,
         id: item.entry.id,
         idempotencyKey: key,
-        attempt: job.attempts
+        attempt: job.attempts,
+        emit: observation => {
+          if (lineage.depth + 1 > this.handoffConfig.maxDepth) {
+            throw new Error(
+              `ctx.emit: handoff depth ${this.handoffConfig.maxDepth} reached (runtime.handoff.maxDepth)`
+            );
+          }
+
+          if (emitted.length >= this.handoffConfig.maxPerDelivery) {
+            throw new Error(
+              `ctx.emit: at most ${this.handoffConfig.maxPerDelivery} observations per delivery (runtime.handoff.maxPerDelivery)`
+            );
+          }
+
+          emitted.push(structuredClone(assertObservation(observation)));
+        }
       });
 
     await item.destination.handle(
@@ -1355,13 +1391,50 @@ export class BrainstemRuntime {
         : structuredClone(delivery.output)
     );
 
-    await commit(executor =>
-      this.deliveries.update(
+    await commit(async executor => {
+      await this.deliveries.update(
         key,
         deliveryChanges.delivered(job.attempts),
         { executor }
-      )
-    );
+      );
+
+      if (emitted.length > 0) {
+        await this.transport.enqueue(
+          emitted.map(observation => ({
+            queue: "decide",
+            queueKey: `observation:${observation.payload.id}`,
+            maxAttempts: this.queueConfig.decide.retry.attempts,
+            payload: {
+              observation,
+              emissionId: randomUUID(),
+              pollId: null,
+              input: {
+                id: `destination:${item.id}`,
+                plugin: item.plugin.name,
+                name: item.destinationName,
+                module: item.entry.module ?? null
+              },
+              lineage: {
+                destinations: [...lineage.destinations, item.id],
+                depth: lineage.depth + 1
+              }
+            }
+          })),
+          { executor }
+        );
+      }
+    });
+
+    if (emitted.length > 0) {
+      this.logger.info?.(
+        "destination emitted observations",
+        {
+          ...destinationInfo,
+          observations: emitted.map(observation => observation.payload.id),
+          depth: lineage.depth + 1
+        }
+      );
+    }
 
     this.logger.debug?.(
       "destination handled decision",

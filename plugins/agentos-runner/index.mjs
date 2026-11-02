@@ -100,6 +100,8 @@ export default defineDestinationPlugin({
             ctx
           );
 
+          handOff(config, ctx, event, run, result);
+
           await markRun(config, ctx, event);
           await tools.clear();
 
@@ -302,6 +304,64 @@ async function runAgent(vm, config, event, signal, ctx, tools) {
 
 function permanentError(message) {
   return Object.assign(new Error(message), { permanent: true });
+}
+
+/*
+ * The report is the agent's final answer, or for a command task
+ * the outbox result's `report` field or stdout. It goes back to
+ * the core as an observation; the runtime enqueues it only when
+ * this delivery commits, and never routes it back here.
+ */
+function handOff(config, ctx, event, run, result) {
+  if (!config.handoff) return;
+
+  const original = event.observation.payload;
+  const report = String(
+    (typeof result?.report === "string" ? result.report : null) ??
+    run.text ??
+    run.stdout ??
+    ""
+  ).trim();
+
+  if (!report) {
+    ctx.logger.warn?.("agentos handoff skipped: the run produced no report", {});
+    return;
+  }
+
+  if (typeof ctx.emit !== "function") {
+    ctx.logger.warn?.("agentos handoff skipped: this runtime does not support ctx.emit", {});
+    return;
+  }
+
+  const destinationId = event.destination?.id ?? "agentos";
+
+  ctx.emit({
+    version: "1",
+    kind: "observation",
+    payload: {
+      id: `agentos:${destinationId}:${original.id}`,
+      source: { type: "agentos", name: destinationId },
+      type: config.handoff.type,
+      state: "reported",
+      timestamp: new Date().toISOString(),
+      title: truncate(`Report: ${original.title}`, 200),
+      message: truncate(report, config.handoff.maxChars),
+      facts: {
+        minimum_decision: config.handoff.minimumDecision,
+        report_for: original.id
+      },
+      data: {
+        reportFor: original.id,
+        reportForSource: original.source,
+        result: result ?? null
+      }
+    }
+  });
+
+  ctx.logger.info?.(
+    "agentos handoff emitted",
+    { observationId: `agentos:${destinationId}:${original.id}`, chars: report.length }
+  );
 }
 
 async function checkRequiredTools(config, tools, ctx, event) {

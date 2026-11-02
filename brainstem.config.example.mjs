@@ -130,7 +130,7 @@ export default {
       types: ["health_check"],
       config: {
         // A scripted task: no AI key needed.
-        command: "grep -n ERROR /mnt/logs/app.log | tail -20 > /tmp/errors; agentos-tools send-report --title {{observation.summary}} --markdown \"$(cat /tmp/errors)\"",
+        command: "grep -n ERROR /mnt/logs/app.log | tail -20 > /tmp/errors; agentos-tools send-report --title {{observation.title}} --markdown \"$(cat /tmp/errors)\"",
         mounts: [{ path: "/mnt/logs", hostPath: "/var/log/myapp" }],
         tools: {
           sendReport: {
