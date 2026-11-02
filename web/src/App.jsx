@@ -27,6 +27,7 @@ const nodeTypes = {
 const pages = [
   { id: "flow", label: "Flow", icon: "schema", permission: "dashboard:read" },
   { id: "stats", label: "Stats", icon: "query_stats", permission: "stats:read" },
+  { id: "deliveries", label: "Deliveries", icon: "outbox", permission: "runtime:read" },
   { id: "settings", label: "Settings", icon: "settings" }
 ];
 
@@ -269,6 +270,7 @@ export default function App() {
           />
         )}
         {page === "stats" && <StatsPage events={events} actualTheme={actualTheme} auth={auth} />}
+        {page === "deliveries" && <DeliveriesPage auth={auth} />}
         {page === "settings" && (
           <SettingsPage
             activeTab={settingsTab}
@@ -1512,6 +1514,202 @@ function CodeEditor({ value, onChange, theme }) {
   return <div className="code-editor" ref={containerRef} />;
 }
 
+const deliveryStatusFilters = [
+  ["", "All"],
+  ["failed", "Retrying"],
+  ["dead", "Dead"],
+  ["pending", "Pending"],
+  ["delivered", "Delivered"],
+  ["discarded", "Discarded"]
+];
+
+/*
+ * Delivery pipeline: queue depth, the delivery log and the
+ * dead-letter queue with redrive / discard.
+ */
+function DeliveriesPage({ auth }) {
+  const [summary, setSummary] = useState(null);
+  const [deadJobs, setDeadJobs] = useState([]);
+  const [deliveries, setDeliveries] = useState([]);
+  const [status, setStatus] = useState("");
+  const [selected, setSelected] = useState(() => new Set());
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState(null);
+  const canControl = hasPermission(auth.user, "runtime:control");
+
+  const load = useCallback(async () => {
+    try {
+      const query = status ? `?status=${encodeURIComponent(status)}&limit=200` : "?limit=200";
+      const [summaryBody, deadBody, deliveriesBody] = await Promise.all([
+        auth.apiFetch("/api/pipeline").then(response => response.json()),
+        auth.apiFetch("/api/jobs?state=dead&limit=200").then(response => response.json()),
+        auth.apiFetch(`/api/deliveries${query}`).then(response => response.json())
+      ]);
+      setSummary(summaryBody);
+      setDeadJobs(deadBody);
+      setDeliveries(deliveriesBody);
+      setSelected(current => new Set([...current].filter(id => deadBody.some(job => job.id === id))));
+    }
+    catch (error) {
+      setNotice({ type: "error", text: error.message });
+    }
+  }, [auth.apiFetch, status]);
+
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, 5_000);
+    return () => clearInterval(timer);
+  }, [load]);
+
+  const act = async (action, ids) => {
+    if (ids.length === 0) return;
+    if (action === "discard" && !window.confirm(`Discard ${ids.length} dead job(s)? They will not be retried.`)) return;
+
+    setBusy(true);
+    try {
+      const body = await auth.apiFetch(`/api/jobs/${action}`, {
+        method: "POST",
+        body: JSON.stringify({ ids })
+      }).then(response => response.json());
+      const done = body.redriven ?? body.discarded ?? [];
+      setNotice({
+        type: "success",
+        text: action === "redrive"
+          ? `Redrove ${done.length} job(s); they run on the next queue poll.`
+          : `Discarded ${done.length} job(s).`
+      });
+      setSelected(new Set());
+      await load();
+    }
+    catch (error) {
+      setNotice({ type: "error", text: error.message });
+    }
+    finally {
+      setBusy(false);
+    }
+  };
+
+  const toggle = id => setSelected(current => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
+
+  const queueCounts = queue => Object.fromEntries(
+    (summary?.jobs ?? []).filter(row => row.queue === queue).map(row => [row.state, row.count])
+  );
+
+  return (
+    <div className="panel-page deliveries-page">
+      <PageHeader title="Deliveries" subtitle="The durable decide → deliver pipeline: queued jobs, the delivery log, and dead jobs to redrive." />
+
+      {notice && <div className={`notice notice-${notice.type}`}>{notice.text}</div>}
+
+      <div className="pipeline-summary">
+        {["decide", "deliver"].map(queue => {
+          const counts = queueCounts(queue);
+          return (
+            <section className="admin-list-card pipeline-queue" key={queue}>
+              <header><div><h3>{queue === "decide" ? "Decide queue" : "Deliver queue"}</h3><p>{queue === "decide" ? "Observations waiting for a decision." : "Decisions waiting for a destination."}</p></div></header>
+              <div className="admin-summary">
+                <span><strong>{counts.ready ?? 0}</strong> queued</span>
+                <span><strong>{counts.running ?? 0}</strong> running</span>
+                <span className={counts.dead ? "pill-danger" : ""}><strong>{counts.dead ?? 0}</strong> dead</span>
+              </div>
+            </section>
+          );
+        })}
+        <section className="admin-list-card pipeline-queue">
+          <header><div><h3>Delivery log</h3><p>Finished deliveries are pruned after the retention window.</p></div></header>
+          <div className="admin-summary">
+            {["delivered", "failed", "dead"].map(key => (
+              <span key={key} className={key === "dead" && summary?.deliveries?.dead ? "pill-danger" : ""}><strong>{summary?.deliveries?.[key] ?? 0}</strong> {key === "failed" ? "retrying" : key}</span>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <section className="admin-list-card">
+        <header>
+          <div>
+            <h3>Dead jobs</h3>
+            <p>{deadJobs.length === 0 ? "Nothing is stuck. Jobs land here after their last retry fails." : "Out of retries. Fix the cause, then redrive them, or discard them."}</p>
+          </div>
+          {canControl && deadJobs.length > 0 && (
+            <div className="row-actions">
+              <button disabled={busy || selected.size === 0} onClick={() => act("redrive", [...selected])}>Redrive selected</button>
+              <button disabled={busy} onClick={() => act("redrive", deadJobs.map(job => job.id))}>Redrive all</button>
+              <button className="danger" disabled={busy || selected.size === 0} onClick={() => act("discard", [...selected])}>Discard selected</button>
+            </div>
+          )}
+        </header>
+        {deadJobs.length > 0 && (
+          <div className="admin-table-wrap">
+            <table className="admin-table">
+              <thead><tr>{canControl && <th aria-label="Select" />}<th>Job</th><th>Attempts</th><th>Last error</th><th>Updated</th>{canControl && <th>Actions</th>}</tr></thead>
+              <tbody>{deadJobs.map(job => (
+                <tr key={job.id}>
+                  {canControl && <td><input type="checkbox" aria-label={`Select job ${job.id}`} checked={selected.has(job.id)} onChange={() => toggle(job.id)} /></td>}
+                  <td><strong>{job.queue} #{job.id}</strong><span>{jobLabel(job)}</span></td>
+                  <td>{job.attempts}/{job.maxAttempts}</td>
+                  <td className="error-cell">{job.lastError ?? "—"}</td>
+                  <td>{formatDateTime(job.updatedAt)}</td>
+                  {canControl && (
+                    <td><div className="row-actions">
+                      <button disabled={busy} onClick={() => act("redrive", [job.id])}>Redrive</button>
+                      <button className="danger" disabled={busy} onClick={() => act("discard", [job.id])}>Discard</button>
+                    </div></td>
+                  )}
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="admin-list-card">
+        <header>
+          <div>
+            <h3>Delivery log</h3>
+            <p>One row per decision and destination. The key is the idempotency key the destination receives.</p>
+          </div>
+          <label className="inline-select">Status
+            <select value={status} onChange={event => setStatus(event.target.value)}>
+              {deliveryStatusFilters.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+        </header>
+        <div className="admin-table-wrap">
+          <table className="admin-table">
+            <thead><tr><th>Observation</th><th>Destination</th><th>Decision</th><th>Status</th><th>Attempts</th><th>Last error</th><th>Updated</th></tr></thead>
+            <tbody>
+              {deliveries.length === 0 && <tr><td colSpan="7">No deliveries{status ? ` with status ${status}` : ""}.</td></tr>}
+              {deliveries.map(delivery => (
+                <tr key={delivery.key}>
+                  <td><strong>{delivery.observationId}</strong><span title={delivery.key}>rev {delivery.revision}</span></td>
+                  <td>{delivery.destination}<span className="cell-muted">{delivery.plugin}</span></td>
+                  <td>{delivery.decision}</td>
+                  <td><span className={`status-pill delivery-${delivery.status}`}>{delivery.status === "failed" ? "retrying" : delivery.status}</span></td>
+                  <td>{delivery.attempts}</td>
+                  <td className="error-cell">{delivery.lastError ?? "—"}</td>
+                  <td>{formatDateTime(delivery.updatedAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function jobLabel(job) {
+  if (job.queue === "deliver") return job.payload?.key ?? "";
+  if (job.queue === "decide") return job.payload?.observation?.payload?.id ?? "";
+  return job.jobKey ?? "";
+}
+
 function PageHeader({ title, subtitle }) {
   return (
     <header className="page-header">
@@ -1523,6 +1721,7 @@ function PageHeader({ title, subtitle }) {
 
 function pageFromPath(pathname) {
   if (pathname === "/stats") return "stats";
+  if (pathname === "/deliveries") return "deliveries";
   if (pathname === "/config" || pathname.startsWith("/settings")) return "settings";
   return "flow";
 }
@@ -1534,6 +1733,7 @@ function settingsTabFromPath(pathname) {
 
 function pathForPage(pageId, settingsTab = "appearance") {
   if (pageId === "stats") return "/stats";
+  if (pageId === "deliveries") return "/deliveries";
   if (pageId === "settings") return pathForSettingsTab(settingsTab);
   return "/";
 }

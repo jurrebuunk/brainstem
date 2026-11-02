@@ -59,7 +59,7 @@ export function eventSourceKey(event) {
   const destinationKey = eventDestinationKey(event);
   if (destinationKey) return `destination:${destinationKey}`;
 
-  if (event?.kind === "brainstem.core.decision") return "core";
+  if (event?.kind === "brainstem.core.decision" || event?.kind === "brainstem.core.failed") return "core";
 
   return null;
 }
@@ -79,7 +79,14 @@ export function metricsForEvent(event) {
   if (kind === "brainstem.output") metrics.add("outputs.total");
   if (kind === "brainstem.destination.running") metrics.add("destinations.running");
   if (kind === "brainstem.destination.completed") metrics.add("destinations.completed");
-  if (kind === "brainstem.destination.failed") metrics.add("destinations.failed");
+  if (kind === "brainstem.destination.failed") {
+    metrics.add("destinations.failed");
+    if (payload.dead) metrics.add("destinations.dead");
+  }
+  if (kind === "brainstem.core.failed") {
+    metrics.add("decisions.failed");
+    if (payload.dead) metrics.add("decisions.dead");
+  }
   if (kind === "brainstem.plugin.log" && payload.level === "error") metrics.add("plugin.errors");
   if (kind === "brainstem.log" && payload.level === "error") metrics.add("runtime.errors");
   if (String(kind ?? "").includes("failed") || metrics.has("plugin.errors") || metrics.has("runtime.errors")) metrics.add("errors.total");

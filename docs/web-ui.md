@@ -51,10 +51,11 @@ It shows:
 
 Click a node to open the node inspector. It groups activity by the operational unit that matters for that node: input nodes show polls with poll logs and emitted observation envelopes, the core shows observation-in/decision-out pairs, and destination nodes show received decision envelopes with destination-scoped logs and output envelopes.
 
-The sidebar has three pages:
+The sidebar has these pages:
 
 - **Flow** — live inputs → core → destinations graph. Core edge handles are stacked vertically to avoid line congestion.
 - **Stats** — persisted counters, KPI cards, filterable metric tables, and interactive uPlot time-series charts with range controls, live pause, hover values, and drag-to-zoom.
+- **Deliveries** — the [delivery pipeline](delivery-pipeline.md): decide and deliver queue depth, the delivery log filtered by status, and dead jobs. Users with `runtime:control` can redrive or discard dead jobs. Needs `runtime:read`.
 - **Settings** — subtabs for:
   - **Appearance** — choose dark, light, or system theme.
   - **Config** — a syntax-highlighted editor for `brainstem.config.mjs`; saves are checked with `node --check` before writing.

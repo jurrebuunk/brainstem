@@ -119,9 +119,16 @@ runtime: {
     factor: 2
   },
 
-  destinations: {
-    // default false: output failures do not block input checkpoints
-    blockInputOnFailure: false
+  queue: {
+    // durable decide/deliver jobs; see docs/delivery-pipeline.md
+    pollIntervalMs: 1000,
+    leaseMs: 60000,
+    decide: { concurrency: 4, retry: { attempts: 5, minDelayMs: 1000, maxDelayMs: 60000, factor: 2 } },
+    deliver: { concurrency: 4, retry: { attempts: 8, minDelayMs: 5000, maxDelayMs: 900000, factor: 3 } }
+  },
+
+  deliveries: {
+    pruneAfterDays: 14
   },
 
   api: {
@@ -164,7 +171,13 @@ Use `pretty` for local/Docker Compose logs and `json` when shipping logs to a co
 
 `runtime.startupRetry` controls retries while starting the core. This is useful because the first startup may download the Laya model bundle and can fail on temporary network/DNS timeouts.
 
-`runtime.destinations.blockInputOnFailure` defaults to `false`, so destination outages do not cause inputs to reprocess the same source items. Set it to `true` only if you want destination failure to prevent input checkpoint commits.
+`runtime.retry` controls retries of a failing input poll.
+
+`runtime.queue` configures the durable pipeline: concurrency and retry policy of the `decide` and `deliver` stages, job leases, and the transport (`database` by default, `memory` when checkpoints are not in the database). A destination entry may set its own `retry`. `runtime.deliveries.pruneAfterDays` sets how long delivered rows stay in the delivery log. See [Delivery pipeline](delivery-pipeline.md).
+
+Give each destination entry a unique `id`. It is part of every delivery's idempotency key; without it the id depends on the entry's position in `destinations`.
+
+`runtime.destinations.blockInputOnFailure` from 1.x is ignored. Deliveries are retried per destination and never block input checkpoints.
 
 `runtime.telemetry` sends structured runtime events to an HTTP endpoint such as the Web UI. It emits snapshots, input poll events, observations, decisions, destination activity, failures, and plugin logs.
 

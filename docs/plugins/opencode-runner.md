@@ -98,4 +98,6 @@ When runtime telemetry is enabled, these logs appear under the OpenCode destinat
 
 ## Failure behavior
 
-OpenCode API errors throw from the destination. By default Brainstem logs destination failures but does not block input checkpoints. Set `runtime.destinations.blockInputOnFailure: true` only if you want agent-runner failure to prevent input checkpoint commits.
+OpenCode API errors throw from the destination, and Brainstem retries the delivery with backoff (see [Delivery pipeline](../delivery-pipeline.md)). A retry does not start a second agent run. The session is stored in `ctx.state` under the delivery's idempotency key, so the retry resumes the session the first attempt created. It only sends the prompt again if the first attempt failed before the prompt was accepted. The stored session is removed once the delivery succeeds.
+
+Long agent runs are fine: the job's lease (`runtime.queue.leaseMs`) is renewed while the delivery runs. If the process crashes mid-run, the delivery is retried once the lease expires and resumes the stored session.

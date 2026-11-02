@@ -194,7 +194,7 @@ Each phase is releasable on its own and keeps `role=all` working. Rough sizing a
 - Postgres dialect + migrations; `brainstem migrate`, `migrate sqlite-to-pg`.
 - Fix quick wins: `busy_timeout`, atomic first-admin, prune via periodic job instead of per-event.
 
-### Phase 2 — Durable pipeline (≈3–4 wks) → `1.3`
+### Phase 2 — Durable pipeline (≈3–4 wks) → `1.3` · implemented, see [Delivery pipeline](delivery-pipeline.md)
 - `Transport` interface + `sqlite` driver; `jobs` and `deliveries` tables.
 - Split the runtime into `poll`, `decide`, `deliver` stages connected by jobs (single process still).
 - Transactional checkpoint commit; record CAS; per-key serialization.

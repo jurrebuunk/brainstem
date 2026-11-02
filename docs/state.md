@@ -36,9 +36,11 @@ The schema is versioned. A single node applies pending migrations on start; clus
 | `auth_users`, `auth_roles`, `auth_user_roles`, `auth_sessions` | Web UI accounts, RBAC and sessions |
 | `auth_login_attempts` | Login rate limiting, shared across API replicas |
 | `maintenance_runs` | Bookkeeping for singleton tasks (pruning, imports) |
+| `jobs` | Pipeline job queue: decide and deliver jobs, including dead jobs ([Delivery pipeline](delivery-pipeline.md)) |
+| `deliveries` | Delivery log, one row per decision and destination, keyed by idempotency key |
 | `brainstem_migrations`, `brainstem_migrations_lock` | Applied schema migrations |
 
-Timestamps are ISO-8601 text and JSON is stored as text, so the same rows work on SQLite and Postgres.
+Timestamps are ISO-8601 text and JSON is stored as text, so the same rows work on SQLite and Postgres. The job queue's `run_at` and `locked_until` columns are epoch milliseconds.
 
 ## Core records
 

@@ -59,13 +59,16 @@ Inputs:
 Core:
 
 - `brainstem.core.decision`
+- `brainstem.core.failed`: a decide job failed. `dead: true` means out of attempts; otherwise `retryInMs` says when it runs again.
 
 Destinations:
 
 - `brainstem.destination.loaded`
 - `brainstem.destination.running`
 - `brainstem.destination.completed`
-- `brainstem.destination.failed`
+- `brainstem.destination.failed`: a delivery attempt failed, with `attempt`, `attempts`, `dead` and `retryInMs`
+
+Destination events carry `deliveryKey` (the idempotency key) and `destinationId`. Each delivery attempt emits its own `running` event, so a retried delivery shows up more than once.
 
 Plugins:
 

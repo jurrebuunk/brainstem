@@ -14,7 +14,22 @@ export const INPUT_PLUGIN_API_VERSION =
   "brainstem.input/v1";
 
 export const DESTINATION_PLUGIN_API_VERSION =
+  "brainstem.destination/v2";
+
+/*
+ * v1 destinations receive live plugin objects. They keep working
+ * through an adapter until 3.0 (ADR-0004), without idempotency
+ * keys.
+ */
+export const DESTINATION_PLUGIN_API_VERSION_V1 =
   "brainstem.destination/v1";
+
+export const DESTINATION_PLUGIN_API_VERSIONS = [
+  DESTINATION_PLUGIN_API_VERSION,
+  DESTINATION_PLUGIN_API_VERSION_V1
+];
+
+export const OUTPUT_ENVELOPE_VERSION = "1";
 
 /*
  * Adapter author helper.
@@ -71,7 +86,7 @@ export function defineDestinationPlugin(plugin) {
 export function validateDestinationPlugin(plugin) {
   validatePluginBase(
     plugin,
-    DESTINATION_PLUGIN_API_VERSION,
+    DESTINATION_PLUGIN_API_VERSIONS,
     "Destination"
   );
 
@@ -93,22 +108,25 @@ export function validateDestinationPlugin(plugin) {
 
     if (typeof destination.handle !== "function") {
       throw new TypeError(
-        `Destination '${name}' must define handle(ctx, event)`
+        `Destination '${name}' must define handle(ctx, output)`
       );
     }
   }
 }
 
-function validatePluginBase(plugin, apiVersion, label) {
+function validatePluginBase(plugin, apiVersions, label) {
   if (!plugin || typeof plugin !== "object") {
     throw new TypeError(
       `${label} plugin must export an object`
     );
   }
 
-  if (plugin.apiVersion !== apiVersion) {
+  const allowed =
+    [apiVersions].flat();
+
+  if (!allowed.includes(plugin.apiVersion)) {
     throw new TypeError(
-      `${label} plugin apiVersion must be '${apiVersion}'`
+      `${label} plugin apiVersion must be ${allowed.map(version => `'${version}'`).join(" or ")}`
     );
   }
 
@@ -157,6 +175,14 @@ export function createInputContext({
   };
 }
 
+/*
+ * ctx for destination.handle(ctx, output).
+ *
+ * idempotencyKey is stable across every retry of one delivery and
+ * unique per (decision, destination) emission. Pass it on to the
+ * receiving system (Idempotency-Key header, Matrix txnId, ...) so
+ * a retried delivery has no second effect. attempt starts at 1.
+ */
 export function createDestinationContext({
   config = {},
   signal,
@@ -164,12 +190,16 @@ export function createDestinationContext({
   stateStore,
   plugin,
   destination,
-  id
+  id,
+  idempotencyKey = null,
+  attempt = 1
 } = {}) {
   return {
     config,
     signal,
     logger,
+    idempotencyKey,
+    attempt,
     state: contextState(stateStore, {
       kind: "destination",
       plugin,
@@ -177,6 +207,65 @@ export function createDestinationContext({
       id
     })
   };
+}
+
+/*
+ * The brainstem.output envelope a v2 destination receives.
+ *
+ *   {
+ *     version: "1",
+ *     kind: "brainstem.output",
+ *     payload: {
+ *       timestamp, pollId, idempotencyKey,
+ *       decision,      // decision envelope
+ *       observation,   // observation envelope
+ *       input:       { id, plugin, name, module },
+ *       destination: { id, plugin, name, module }
+ *     }
+ *   }
+ *
+ * Plain JSON, so it can be queued, logged and redelivered.
+ */
+export function createOutputEnvelope({
+  decision,
+  observation,
+  pollId = null,
+  idempotencyKey = null,
+  input = {},
+  destination = {},
+  timestamp = new Date().toISOString()
+}) {
+  return {
+    version: OUTPUT_ENVELOPE_VERSION,
+    kind: "brainstem.output",
+    payload: {
+      timestamp,
+      pollId,
+      idempotencyKey,
+      decision,
+      observation,
+      input: {
+        id: input.id ?? null,
+        plugin: input.plugin ?? null,
+        name: input.name ?? null,
+        module: input.module ?? null
+      },
+      destination: {
+        id: destination.id ?? null,
+        plugin: destination.plugin ?? null,
+        name: destination.name ?? null,
+        module: destination.module ?? null
+      }
+    }
+  };
+}
+
+export function isOutputEnvelope(value) {
+  return (
+    value?.kind === "brainstem.output" &&
+    value?.version === OUTPUT_ENVELOPE_VERSION &&
+    isPlainObject(value.payload)
+  );
 }
 
 /*

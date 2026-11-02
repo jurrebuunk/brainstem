@@ -59,12 +59,17 @@ The destination POSTs:
   version: "1",
   kind: "brainstem.output",
   payload: {
-    timestamp,
+    timestamp,        // when the decision was made
     pollId,
+    idempotencyKey,
     decision,
     observation,
-    input,
-    destination
+    input:       { id, plugin, name, module },
+    destination: { id, plugin, name, module }
   }
 }
 ```
+
+Each request carries an `Idempotency-Key` header with the delivery's idempotency key. A retried delivery sends the same key and the same body, so the receiver can drop duplicates.
+
+A non-2xx response fails the delivery, and it is retried with backoff (see [Delivery pipeline](../delivery-pipeline.md)).

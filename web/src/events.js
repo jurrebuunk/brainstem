@@ -44,6 +44,8 @@ export function eventSummary(event) {
   if (event.kind === "brainstem.input.poll.completed") return `${p.id} completed (${p.observations ?? 0} observations)`;
   if (event.kind === "brainstem.input.observation") return `${p.observation?.payload?.id ?? p.id} emitted by ${p.id}`;
   if (event.kind === "brainstem.core.decision") return `${p.observationId} -> ${p.decision?.payload?.decision ?? p.decision}`;
+  if (event.kind === "brainstem.core.failed") return `${p.observationId} decision failed${p.dead ? " (dead)" : `; retry ${p.attempt}/${p.attempts}`}`;
+  if (event.kind === "brainstem.destination.failed") return `${p.plugin}.${p.destination} failed${p.dead ? " (dead)" : `; retry ${p.attempt}/${p.attempts}`}`;
   if (event.kind.startsWith("brainstem.destination.")) return `${p.plugin}.${p.destination} ${p.decision ?? ""}`.trim();
 
   return event.kind;

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { DatabaseCheckpointStore, createDeferredCheckpoint } from "./checkpoints.mjs";
 import { LazyPluginStateStore, MemoryPluginStateStore } from "./plugin-state.mjs";
 import { eventMatchesDestination } from "./destinations.mjs";
@@ -29,12 +31,54 @@ import {
 import { Brainstem } from "../core/brainstem.mjs";
 export { loadDestinationPlugin, loadInputPlugin } from "./plugin-loader.mjs";
 import {
+  DESTINATION_PLUGIN_API_VERSION_V1,
   assertObservation,
   createDestinationContext,
-  createInputContext
+  createInputContext,
+  createOutputEnvelope
 } from "../sdk/index.mjs";
+import {
+  DEFAULT_DELIVERY_PRUNE_AFTER_DAYS,
+  JobRunner,
+  PermanentJobError,
+  createPipelineAdmin,
+  createPipelineStorage,
+  deliveryChanges,
+  normalizeJobRetry
+} from "../queue/index.mjs";
 
 const DEFAULT_INTERVAL_MS = 60_000;
+
+const DELIVERY_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+
+/*
+ * Pipeline defaults (runtime.queue). Decisions retry quickly
+ * (Laya or the record store being briefly unavailable);
+ * deliveries back off for longer because the receiving system
+ * may be down for a while.
+ */
+export const DEFAULT_QUEUE_CONFIG = {
+  pollIntervalMs: 1_000,
+  leaseMs: 60_000,
+  decide: {
+    concurrency: 4,
+    retry: {
+      attempts: 5,
+      minDelayMs: 1_000,
+      maxDelayMs: 60_000,
+      factor: 2
+    }
+  },
+  deliver: {
+    concurrency: 4,
+    retry: {
+      attempts: 8,
+      minDelayMs: 5_000,
+      maxDelayMs: 15 * 60_000,
+      factor: 3
+    }
+  }
+};
 
 export class BrainstemRuntime {
   constructor({
@@ -48,7 +92,8 @@ export class BrainstemRuntime {
     checkpointStore,
     recordStore,
     pluginState,
-    database
+    database,
+    pipeline
   } = {}) {
     if (!brainstem && !config) {
       throw new Error(
@@ -123,10 +168,56 @@ export class BrainstemRuntime {
           : new MemoryPluginStateStore()
       );
 
+    /*
+     * Pipeline storage: the job transport and the
+     * delivery log. Durable (database) whenever
+     * checkpoints live in the database, so a
+     * checkpoint never advances past observations
+     * that are not stored yet.
+     */
+    this.queueConfig =
+      normalizeQueueConfig(
+        this.config.runtime?.queue
+      );
+
+    const checkpointsInDatabase =
+      this.checkpointStore instanceof DatabaseCheckpointStore;
+
+    this.pipeline =
+      pipeline ??
+      createPipelineStorage({
+        type:
+          this.queueConfig.transport ??
+          (checkpointsInDatabase ? "database" : "memory"),
+        database: () => this.database.get()
+      });
+
+    this.transport = this.pipeline.transport;
+    this.deliveries = this.pipeline.deliveries;
+    this.pipelineAdmin =
+      createPipelineAdmin(this.pipeline);
+
+    /*
+     * Checkpoints commit in the same transaction
+     * as the decide jobs when both use the
+     * runtime's own database handle.
+     */
+    this.checkpointsInTransaction =
+      !checkpointStore &&
+      !pipeline &&
+      checkpointsInDatabase &&
+      this.pipeline.type === "database";
+
     this.abortController = null;
     this.tasks = [];
+    this.runner = null;
+    this.deliveryPruneTimer = null;
+    this.deliveryPruning = null;
     this.destinationEntries = [];
+    this.destinationsById = new Map();
     this.loadedInputs = new Map();
+    this.inputsById = new Map();
+    this.warnedV1Plugins = new Set();
     this.telemetry = createTelemetrySink(
       this.config.runtime?.telemetry
     );
@@ -178,19 +269,32 @@ export class BrainstemRuntime {
       this.abortController.signal
     );
 
-    this.destinationEntries =
-      await this.#loadDestinationEntries();
+    await this.#loadDestinationEntries();
 
     this.#emitSnapshot();
     this.#startTelemetrySnapshots();
+    this.#startDeliveryPruning();
 
-    this.tasks = this.plugins.map((entry, index) =>
-      this.#runPluginEntry(
-        entry,
-        index,
-        this.abortController.signal
-      )
-    );
+    this.runner =
+      this.#createRunner();
+
+    this.tasks = [
+      ...this.plugins.map((entry, index) =>
+        this.#runPluginEntry(
+          entry,
+          index,
+          this.abortController.signal
+        )
+      ),
+      this.runner
+        .start(this.abortController.signal)
+        .catch(error => {
+          this.logger.error?.(
+            "job runner failed",
+            { error }
+          );
+        })
+    ];
 
     this.logger.info?.(
       "runtime started",
@@ -250,23 +354,66 @@ export class BrainstemRuntime {
         this.abortController.signal
       );
 
-      this.destinationEntries =
-        await this.#loadDestinationEntries();
+      await this.#loadDestinationEntries();
 
       this.#emitSnapshot();
 
-      await Promise.all(
-        this.plugins.map((entry, index) =>
-          this.#runPluginEntryOnce(
-            entry,
-            index,
-            this.abortController.signal
+      const polls =
+        await Promise.allSettled(
+          this.plugins.map((entry, index) =>
+            this.#runPluginEntryOnce(
+              entry,
+              index,
+              this.abortController.signal
+            )
           )
-        )
-      );
+        );
+
+      /*
+       * Decide and deliver everything the polls
+       * (and earlier runs) queued. Retries that
+       * are not due yet stay queued for the next
+       * run.
+       */
+      this.runner =
+        this.#createRunner();
+
+      const drained =
+        await this.runner.drain(
+          this.abortController.signal
+        );
+
+      await this.#reportPendingJobs();
+
+      const pollFailures =
+        polls
+          .filter(result => result.status === "rejected")
+          .map(result => result.reason);
+
+      if (pollFailures.length > 0) {
+        throw pollFailures.length === 1
+          ? pollFailures[0]
+          : new AggregateError(
+              pollFailures,
+              `${pollFailures.length} inputs failed to poll`
+            );
+      }
+
+      if (drained.failures.length > 0) {
+        const errors =
+          drained.failures.map(failure => failure.error);
+
+        throw new AggregateError(
+          errors,
+          `${errors.length} pipeline job(s) failed: ${errors[0]?.message ?? errors[0]}`
+        );
+      }
 
       this.logger.info?.(
-        "runtime run-once completed"
+        "runtime run-once completed",
+        {
+          jobs: drained.processed
+        }
       );
     }
     finally {
@@ -364,6 +511,13 @@ export class BrainstemRuntime {
       this.telemetryInterval = null;
     }
 
+    if (this.deliveryPruneTimer) {
+      clearInterval(this.deliveryPruneTimer);
+      this.deliveryPruneTimer = null;
+    }
+
+    await this.deliveryPruning;
+
     this.#emitTelemetry("brainstem.runtime.stopping", {});
 
     await Promise.allSettled(
@@ -372,12 +526,16 @@ export class BrainstemRuntime {
 
     await this.brainstem.close();
     await this.checkpointStore.close?.();
+    await this.transport.close?.();
     await this.database.close();
 
     this.abortController = null;
     this.tasks = [];
+    this.runner = null;
     this.destinationEntries = [];
+    this.destinationsById.clear();
     this.loadedInputs.clear();
+    this.inputsById.clear();
 
     this.#emitTelemetry("brainstem.runtime.stopped", {});
 
@@ -476,6 +634,11 @@ export class BrainstemRuntime {
     this.loadedInputs.set(
       checkpointKey,
       loadedInput
+    );
+
+    this.inputsById.set(
+      checkpointKey,
+      { entry, plugin }
     );
 
     this.logger.info?.(
@@ -600,12 +763,6 @@ export class BrainstemRuntime {
     this.telemetryInterval.unref?.();
   }
 
-  #destinationFailuresBlockInput() {
-    return this.config.runtime
-      ?.destinations
-      ?.blockInputOnFailure === true;
-  }
-
   #startupRetryConfig() {
     return normalizeRetry({
       ...DEFAULT_RETRY,
@@ -719,7 +876,7 @@ export class BrainstemRuntime {
     const observations =
       input.poll(ctx);
 
-    let observationCount = 0;
+    const jobs = [];
 
     for await (
       const observation of toAsyncIterable(
@@ -734,8 +891,6 @@ export class BrainstemRuntime {
         observation
       );
 
-      observationCount += 1;
-
       this.#emitTelemetry("brainstem.input.observation", {
         id: checkpointKey,
         plugin: plugin.name,
@@ -744,58 +899,106 @@ export class BrainstemRuntime {
         observation
       });
 
-      const decision =
-        await this.brainstem.process(
-          observation
-        );
-
-      await this.#handleDecision({
-        decision,
-        observation,
-        plugin,
-        input: inputName,
-        entry,
-        signal,
-        pollId
+      jobs.push({
+        queue: "decide",
+        queueKey: `observation:${observation.payload.id}`,
+        maxAttempts:
+          this.queueConfig.decide.retry.attempts,
+        payload: {
+          observation,
+          // Stable across decide retries, unique per emission.
+          emissionId: randomUUID(),
+          pollId,
+          input: {
+            id: checkpointKey,
+            plugin: plugin.name,
+            name: inputName,
+            module: entry.module ?? null
+          }
+        }
       });
     }
 
-    if (!signal.aborted) {
+    if (signal.aborted) {
+      return;
+    }
+
+    /*
+     * Store the observations (as decide jobs)
+     * before the checkpoint moves past them: in
+     * one transaction when both live in the
+     * runtime database, otherwise jobs first so a
+     * crash in between re-polls instead of losing
+     * observations.
+     */
+    if (this.checkpointsInTransaction) {
+      await this.transport.transaction(async executor => {
+        await this.transport.enqueue(jobs, { executor });
+        await checkpoint.commit({ executor });
+      });
+    }
+    else {
+      if (jobs.length > 0) {
+        await this.transport.enqueue(jobs);
+      }
+
       await checkpoint.commit();
+    }
 
-      const level = observationCount > 0
-        ? "info"
-        : "debug";
+    const level = jobs.length > 0
+      ? "info"
+      : "debug";
 
-      this.logger[level]?.(
-        "input poll completed",
-        {
-          id: checkpointKey,
-          plugin: plugin.name,
-          input: inputName,
-          pollId,
-          observations: observationCount
-        }
-      );
-      this.#emitTelemetry("brainstem.input.poll.completed", {
+    this.logger[level]?.(
+      "input poll completed",
+      {
         id: checkpointKey,
         plugin: plugin.name,
         input: inputName,
         pollId,
-        observations: observationCount
-      });
-    }
+        observations: jobs.length
+      }
+    );
+    this.#emitTelemetry("brainstem.input.poll.completed", {
+      id: checkpointKey,
+      plugin: plugin.name,
+      input: inputName,
+      pollId,
+      observations: jobs.length
+    });
   }
 
   async #loadDestinationEntries() {
-    return await Promise.all(
-      this.destinations.map(entry =>
-        this.#loadDestinationEntry(entry)
-      )
-    );
+    this.destinationEntries =
+      await Promise.all(
+        this.destinations.map((entry, index) =>
+          this.#loadDestinationEntry(entry, index)
+        )
+      );
+
+    this.destinationsById.clear();
+
+    for (const item of this.destinationEntries) {
+      if (this.destinationsById.has(item.id)) {
+        throw new Error(
+          `Duplicate destination id '${item.id}'. Give each destination a unique 'id'.`
+        );
+      }
+
+      this.destinationsById.set(item.id, item);
+    }
+
+    if (
+      this.config.runtime?.destinations
+        ?.blockInputOnFailure !== undefined
+    ) {
+      this.logger.warn?.(
+        "runtime.destinations.blockInputOnFailure is ignored: deliveries are queued and retried per destination (runtime.queue.deliver.retry)"
+      );
+    }
   }
 
-  async #loadDestinationEntry(entry) {
+  async #loadDestinationEntry(entry, index) {
     const { plugin } =
       await loadDestinationPlugin(
         entry.module,
@@ -817,7 +1020,30 @@ export class BrainstemRuntime {
       );
     }
 
+    /*
+     * The id is part of every delivery's
+     * idempotency key. Set `id` in the config so
+     * reordering destinations keeps it stable.
+     */
+    const id =
+      entry.id ??
+      `${plugin.name}.${destinationName}.${index}`;
+
+    if (
+      plugin.apiVersion ===
+        DESTINATION_PLUGIN_API_VERSION_V1 &&
+      !this.warnedV1Plugins.has(plugin.name)
+    ) {
+      this.warnedV1Plugins.add(plugin.name);
+
+      this.logger.warn?.(
+        "destination plugin uses the deprecated brainstem.destination/v1 API; it runs through a compatibility adapter until 3.0",
+        { plugin: plugin.name }
+      );
+    }
+
     const loadedDestination = {
+      id,
       plugin: plugin.name,
       destination: destinationName,
       module: entry.module,
@@ -837,42 +1063,111 @@ export class BrainstemRuntime {
     );
 
     return {
+      id,
       entry,
       plugin,
       destinationName,
-      destination
+      destination,
+      retry: normalizeJobRetry(
+        entry.retry ?? {},
+        this.queueConfig.deliver.retry
+      )
     };
   }
 
-  async #handleDecision(event) {
-    await this.onDecision?.(event);
+  #createRunner() {
+    return new JobRunner({
+      transport: this.transport,
+      leaseMs: this.queueConfig.leaseMs,
+      pollIntervalMs: this.queueConfig.pollIntervalMs,
+      logger: this.logger,
+      queues: {
+        decide: {
+          concurrency: this.queueConfig.decide.concurrency,
+          retry: this.queueConfig.decide.retry,
+          handler: (job, context) =>
+            this.#decide(job, context),
+          onFailure: (job, error, details) =>
+            this.#decideFailed(job, error, details)
+        },
+        deliver: {
+          concurrency: this.queueConfig.deliver.concurrency,
+          retryFor: job =>
+            this.destinationsById.get(job.payload.destination)?.retry ??
+            this.queueConfig.deliver.retry,
+          handler: (job, context) =>
+            this.#deliver(job, context),
+          onFailure: (job, error, details) =>
+            this.#deliverFailed(job, error, details)
+        }
+      }
+    });
+  }
+
+  /*
+   * Decide stage: one observation emission.
+   *
+   * The record write is a compare-and-set inside
+   * Brainstem. The delivery rows and deliver jobs
+   * commit together with the ack, so a retried
+   * decide job (same emission) produces the same
+   * idempotency keys and enqueues nothing twice.
+   */
+  async #decide(job, { signal, commit }) {
+    const {
+      observation,
+      emissionId,
+      pollId = null,
+      input = {}
+    } = job.payload;
+
+    const decision =
+      await this.brainstem.process(
+        observation
+      );
+
+    const loadedInput =
+      this.inputsById.get(input.id);
+
+    await this.onDecision?.({
+      decision,
+      observation,
+      plugin:
+        loadedInput?.plugin ??
+        { name: input.plugin },
+      input: input.name,
+      entry:
+        loadedInput?.entry ??
+        { id: input.id, module: input.module },
+      signal,
+      pollId
+    });
 
     const decisionPayload =
-      event.decision.payload;
+      decision.payload;
 
     const observationPayload =
-      event.observation.payload;
-
-    const decisionLogLevel =
-      decisionPayload.decision === "ignore"
-        ? "debug"
-        : "info";
+      observation.payload;
 
     const decisionInfo = {
       observationId: observationPayload.id,
       source: observationPayload.source.type,
       type: observationPayload.type,
       state: observationPayload.state,
-      inputId: event.entry.id ?? null,
-      inputPlugin: event.plugin.name,
-      inputName: event.input,
-      pollId: event.pollId ?? null,
+      inputId: loadedInput?.entry.id ?? null,
+      inputPlugin: input.plugin ?? null,
+      inputName: input.name ?? null,
+      pollId,
       decision: decisionPayload.decision,
       route: decisionPayload.route,
       reason: decisionPayload.reason
     };
 
-    this.logger[decisionLogLevel]?.(
+    this.logger[
+      decisionPayload.decision === "ignore"
+        ? "debug"
+        : "info"
+    ]?.(
       "observation decided",
       decisionInfo
     );
@@ -880,121 +1175,413 @@ export class BrainstemRuntime {
       "brainstem.core.decision",
       {
         ...decisionInfo,
-        decision: event.decision,
-        observation: event.observation
+        decision,
+        observation
       }
     );
 
-    const failures = [];
-
-    for (const destinationEntry of this.destinationEntries) {
-      if (
-        !eventMatchesDestination(
-          event,
-          destinationEntry.entry
+    const deliveries =
+      this.destinationEntries
+        .filter(item =>
+          eventMatchesDestination(
+            { decision, observation },
+            item.entry
+          )
         )
-      ) {
-        continue;
-      }
-
-      try {
-        const ctx =
-          createDestinationContext({
-            config: destinationEntry.entry.config ?? {},
-            signal: event.signal,
-            logger: this.#scopedPluginLogger({
-              scope: "destination",
-              plugin: destinationEntry.plugin.name,
-              destination: destinationEntry.destinationName
-            }),
-            stateStore: this.pluginState,
-            plugin: destinationEntry.plugin.name,
-            destination: destinationEntry.destinationName,
-            id: destinationEntry.entry.id
+        .map(item => {
+          const key = deliveryKey({
+            destinationId: item.id,
+            observationId: observationPayload.id,
+            revision: decisionPayload.revision,
+            emissionId: emissionId ?? `job-${job.id}`
           });
 
-        const destinationInfo = {
-          plugin: destinationEntry.plugin.name,
-          destination: destinationEntry.destinationName,
-          observationId: observationPayload.id,
-          decision: decisionPayload.decision,
-          pollId: event.pollId ?? null,
-          decisionEnvelope: event.decision,
-          observationEnvelope: event.observation
-        };
+          return {
+            item,
+            key,
+            output: createOutputEnvelope({
+              decision,
+              observation,
+              pollId,
+              idempotencyKey: key,
+              input,
+              destination: {
+                id: item.id,
+                plugin: item.plugin.name,
+                name: item.destinationName,
+                module: item.entry.module ?? null
+              }
+            })
+          };
+        });
 
-        this.logger.debug?.(
-          "destination handling decision",
-          destinationInfo
-        );
-        this.#emitTelemetry(
-          "brainstem.destination.running",
-          destinationInfo
-        );
-
-        await destinationEntry.destination.handle(
-          ctx,
+    await commit(async executor => {
+      for (const { item, key, output } of deliveries) {
+        await this.deliveries.create(
           {
-            decision: event.decision,
-            observation: event.observation,
-            pollId: event.pollId ?? null,
-            input: {
-              plugin: event.plugin,
-              name: event.input,
-              entry: event.entry
-            },
-            destination: {
-              plugin: destinationEntry.plugin,
-              name: destinationEntry.destinationName,
-              entry: destinationEntry.entry
-            }
+            key,
+            observationId: observationPayload.id,
+            revision: decisionPayload.revision ?? 0,
+            destination: item.id,
+            plugin: item.plugin.name,
+            decision: decisionPayload.decision,
+            output
+          },
+          { executor }
+        );
+      }
+
+      await this.transport.enqueue(
+        deliveries.map(({ item, key }) => ({
+          queue: "deliver",
+          jobKey: key,
+          // In order per destination and observation.
+          queueKey: `delivery:${item.id}:${observationPayload.id}`,
+          maxAttempts: item.retry.attempts,
+          payload: {
+            key,
+            destination: item.id
           }
-        );
+        })),
+        { executor }
+      );
+    });
+  }
 
-        this.logger.debug?.(
-          "destination handled decision",
-          destinationInfo
-        );
-        this.#emitTelemetry(
-          "brainstem.destination.completed",
-          destinationInfo
-        );
-      }
-      catch (error) {
-        failures.push(error);
+  #decideFailed(job, error, { dead, retryInMs }) {
+    const observationId =
+      job.payload.observation?.payload?.id ?? null;
 
-        const failureInfo = {
-          plugin: destinationEntry.plugin.name,
-          destination: destinationEntry.destinationName,
-          observationId: observationPayload.id,
-          decision: decisionPayload.decision,
-          pollId: event.pollId ?? null,
-          decisionEnvelope: event.decision,
-          observationEnvelope: event.observation,
-          error
-        };
+    const info = {
+      observationId,
+      inputId: job.payload.input?.id ?? null,
+      pollId: job.payload.pollId ?? null,
+      jobId: job.id,
+      attempt: job.attempts,
+      attempts: job.maxAttempts,
+      dead,
+      retryInMs,
+      error
+    };
 
-        this.logger.error?.(
-          "destination failed",
-          failureInfo
-        );
-        this.#emitTelemetry(
-          "brainstem.destination.failed",
-          failureInfo
-        );
-      }
+    this.logger[dead ? "error" : "warn"]?.(
+      dead
+        ? "observation decision failed; moved to dead jobs"
+        : "observation decision failed; retrying",
+      info
+    );
+    this.#emitTelemetry(
+      "brainstem.core.failed",
+      info
+    );
+  }
+
+  /*
+   * Deliver stage: one (decision, destination)
+   * emission. The delivery log is checked first,
+   * so a job that runs again after its delivery
+   * was recorded is acked without sending.
+   */
+  async #deliver(job, { signal, commit }) {
+    const {
+      key,
+      destination: destinationId
+    } = job.payload;
+
+    const item =
+      this.destinationsById.get(destinationId);
+
+    if (!item) {
+      throw new PermanentJobError(
+        `Destination '${destinationId}' is not configured`
+      );
     }
 
-    if (
-      failures.length > 0 &&
-      this.#destinationFailuresBlockInput()
-    ) {
-      throw new AggregateError(
-        failures,
-        `One or more destinations failed for observation '${observationPayload.id}'`
+    const delivery =
+      await this.deliveries.get(key);
+
+    if (!delivery) {
+      throw new PermanentJobError(
+        `Delivery '${key}' is missing from the delivery log`
+      );
+    }
+
+    const destinationInfo =
+      this.#destinationInfo(item, delivery, job);
+
+    if (delivery.status === "delivered") {
+      this.logger.debug?.(
+        "destination already delivered; skipping",
+        destinationInfo
+      );
+      return;
+    }
+
+    await this.deliveries.update(
+      key,
+      deliveryChanges.attempt(job.attempts)
+    );
+
+    this.logger.debug?.(
+      "destination handling decision",
+      destinationInfo
+    );
+    this.#emitTelemetry(
+      "brainstem.destination.running",
+      destinationInfo
+    );
+
+    const ctx =
+      createDestinationContext({
+        config: item.entry.config ?? {},
+        signal,
+        logger: this.#scopedPluginLogger({
+          scope: "destination",
+          plugin: item.plugin.name,
+          destination: item.destinationName
+        }),
+        stateStore: this.pluginState,
+        plugin: item.plugin.name,
+        destination: item.destinationName,
+        id: item.entry.id,
+        idempotencyKey: key,
+        attempt: job.attempts
+      });
+
+    await item.destination.handle(
+      ctx,
+      item.plugin.apiVersion === DESTINATION_PLUGIN_API_VERSION_V1
+        ? this.#legacyDestinationEvent(delivery.output, item)
+        : structuredClone(delivery.output)
+    );
+
+    await commit(executor =>
+      this.deliveries.update(
+        key,
+        deliveryChanges.delivered(job.attempts),
+        { executor }
+      )
+    );
+
+    this.logger.debug?.(
+      "destination handled decision",
+      destinationInfo
+    );
+    this.#emitTelemetry(
+      "brainstem.destination.completed",
+      destinationInfo
+    );
+  }
+
+  async #deliverFailed(job, error, { dead, retryInMs }) {
+    const { key, destination: destinationId } =
+      job.payload;
+
+    await this.deliveries.update(
+      key,
+      deliveryChanges.failed({
+        attempts: job.attempts,
+        error,
+        dead
+      })
+    );
+
+    const item =
+      this.destinationsById.get(destinationId);
+
+    const delivery =
+      await this.deliveries.get(key);
+
+    const failureInfo = {
+      ...this.#destinationInfo(item, delivery, job),
+      ...(item ? {} : { destinationId }),
+      dead,
+      retryInMs,
+      error
+    };
+
+    this.logger[dead ? "error" : "warn"]?.(
+      dead
+        ? "destination failed; moved to dead deliveries"
+        : "destination failed; retrying",
+      failureInfo
+    );
+    this.#emitTelemetry(
+      "brainstem.destination.failed",
+      failureInfo
+    );
+  }
+
+  #destinationInfo(item, delivery, job) {
+    const output =
+      delivery?.output?.payload ?? {};
+
+    return {
+      plugin: item?.plugin.name ?? delivery?.plugin ?? null,
+      destination: item?.destinationName ?? output.destination?.name ?? null,
+      destinationId: item?.id ?? delivery?.destination ?? null,
+      observationId: delivery?.observationId ?? null,
+      decision: delivery?.decision ?? null,
+      pollId: output.pollId ?? null,
+      deliveryKey: delivery?.key ?? job.payload.key,
+      attempt: job.attempts,
+      attempts: job.maxAttempts,
+      decisionEnvelope: output.decision ?? null,
+      observationEnvelope: output.observation ?? null
+    };
+  }
+
+  /*
+   * brainstem.destination/v1 adapter: rebuild the
+   * 1.x event (with live plugin objects where this
+   * process has them) from the output envelope.
+   */
+  #legacyDestinationEvent(output, item) {
+    const payload =
+      structuredClone(output.payload);
+
+    const loadedInput =
+      this.inputsById.get(payload.input.id);
+
+    return {
+      decision: payload.decision,
+      observation: payload.observation,
+      pollId: payload.pollId,
+      input: {
+        plugin:
+          loadedInput?.plugin ??
+          { name: payload.input.plugin },
+        name: payload.input.name,
+        entry:
+          loadedInput?.entry ??
+          {
+            id: payload.input.id,
+            module: payload.input.module
+          }
+      },
+      destination: {
+        plugin: item.plugin,
+        name: item.destinationName,
+        entry: item.entry
+      }
+    };
+  }
+
+  /*
+   * After run-once: jobs that still wait (for a
+   * retry backoff) survive only in a durable
+   * transport.
+   */
+  async #reportPendingJobs() {
+    const counts =
+      await this.transport.counts();
+
+    const waiting =
+      counts
+        .filter(row => row.state === "ready")
+        .reduce((sum, row) => sum + row.count, 0);
+
+    const dead =
+      counts
+        .filter(row => row.state === "dead")
+        .reduce((sum, row) => sum + row.count, 0);
+
+    if (waiting > 0) {
+      this.logger.warn?.(
+        this.transport.durable
+          ? "jobs are waiting for a retry; they run on the next start"
+          : "jobs are waiting for a retry but the queue is in memory; they are dropped on exit",
+        { jobs: waiting }
+      );
+    }
+
+    if (dead > 0) {
+      this.logger.warn?.(
+        "dead jobs need attention (redrive or discard them in the UI)",
+        { jobs: dead }
       );
     }
   }
+
+  #startDeliveryPruning() {
+    const days =
+      this.config.runtime?.deliveries?.pruneAfterDays ??
+      DEFAULT_DELIVERY_PRUNE_AFTER_DAYS;
+
+    if (
+      this.deliveryPruneTimer ||
+      typeof days !== "number" ||
+      days <= 0
+    ) {
+      return;
+    }
+
+    const run = () =>
+      this.deliveryPruning = this.deliveries
+        .prune({
+          olderThan: new Date(
+            Date.now() - days * 24 * 60 * 60 * 1000
+          ).toISOString()
+        })
+        .catch(error => {
+          this.logger.warn?.(
+            "delivery log prune failed",
+            { error }
+          );
+        });
+
+    run();
+
+    this.deliveryPruneTimer =
+      setInterval(run, DELIVERY_PRUNE_INTERVAL_MS);
+
+    this.deliveryPruneTimer.unref?.();
+  }
+}
+
+/*
+ * Idempotency key of one delivery:
+ *
+ *   <destination id>:<observation id>:r<revision>:<emission id>
+ *
+ * The emission id is fixed when the observation is
+ * polled, so every retry of the same delivery has
+ * the same key while a re-emitted (e.g. reminder)
+ * observation gets a new one.
+ */
+export function deliveryKey({
+  destinationId,
+  observationId,
+  revision,
+  emissionId
+}) {
+  return `${destinationId}:${observationId}:r${revision ?? 0}:${emissionId}`;
+}
+
+export function normalizeQueueConfig(queue = {}) {
+  const defaults =
+    DEFAULT_QUEUE_CONFIG;
+
+  return {
+    transport:
+      queue.transport ?? null,
+    pollIntervalMs:
+      Math.max(10, Number(queue.pollIntervalMs ?? defaults.pollIntervalMs)),
+    leaseMs:
+      Math.max(1_000, Number(queue.leaseMs ?? defaults.leaseMs)),
+    decide: {
+      concurrency:
+        Math.max(1, Number(queue.decide?.concurrency ?? defaults.decide.concurrency)),
+      retry:
+        normalizeJobRetry(queue.decide?.retry ?? {}, defaults.decide.retry)
+    },
+    deliver: {
+      concurrency:
+        Math.max(1, Number(queue.deliver?.concurrency ?? defaults.deliver.concurrency)),
+      retry:
+        normalizeJobRetry(queue.deliver?.retry ?? {}, defaults.deliver.retry)
+    }
+  };
 }
 
 export async function runBrainstemRuntime(options) {
