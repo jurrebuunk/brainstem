@@ -2790,3 +2790,105 @@ button:disabled {
 .core-running .core-dot { background: var(--success); }
 .core-lost .core-dot { background: var(--danger); }
 .core-stopped .core-dot { background: var(--muted-2); }
+
+/* Config versions (ADR-0005) */
+.config-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.config-comment {
+  min-width: 220px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+
+.config-page .notice code {
+  font-size: 0.95em;
+}
+
+.config-versions {
+  margin-top: var(--space-4);
+}
+
+.config-versions h3 {
+  font-size: var(--font-size-base);
+  margin: 0 0 var(--space-2);
+}
+
+.config-versions ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.config-versions li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.config-versions li:first-child {
+  border-top: 0;
+}
+
+.config-versions li > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.config-versions li span {
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.config-versions li.is-active strong {
+  color: var(--destination-active);
+}
+
+.config-version-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.config-version-actions button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 6px 10px;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.config-version-actions button:hover {
+  border-color: color-mix(in srgb, var(--input-active) 50%, var(--border));
+}
+
+@media (max-width: 720px) {
+  .config-actions {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .config-comment {
+    min-width: 0;
+  }
+}

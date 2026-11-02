@@ -776,7 +776,10 @@ function CoresPanel({ cores }) {
                   {core.status} · seen {formatTime(core.lastSeenAt)}
                   {core.version ? ` · v${core.version}` : ""}
                 </span>
-                <span>{[core.role, ...(core.queues ?? [])].join(" · ")}</span>
+                <span>
+                  {[core.role, ...(core.queues ?? [])].join(" · ")}
+                  {core.configVersion !== null && core.configVersion !== undefined ? ` · config v${core.configVersion}` : ""}
+                </span>
               </div>
             </li>
           ))}
@@ -1319,62 +1322,170 @@ function AppearanceSettings({ themePreference, setThemePreference }) {
   );
 }
 
+/*
+ * Config (ADR-0005). With configSource "file" the file is shown
+ * read-only. With "database" every save is a new version of the
+ * JSON config, guarded by If-Match; any version can be activated
+ * again (rollback). Cores reload the active version on their own.
+ */
 function ConfigSettings({ actualTheme, auth }) {
-  const [config, setConfig] = useState({ path: "", content: "" });
+  const [config, setConfig] = useState(null);
   const [draft, setDraft] = useState("");
+  const [comment, setComment] = useState("");
+  const [versions, setVersions] = useState([]);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState({ type: "info", text: "Loading config…" });
 
-  useEffect(() => {
-    auth.apiFetch("/api/config")
-      .then(response => response.json().then(body => ({ response, body })))
-      .then(({ response, body }) => {
-        if (!response.ok) throw new Error(body.error ?? "Failed to load config");
-        setConfig(body);
-        setDraft(body.content ?? "");
-        setNotice({ type: "info", text: `Loaded ${body.path}` });
-      })
-      .catch(error => setNotice({ type: "error", text: error.message }));
-  }, [auth.apiFetch]);
-
-  const save = async () => {
-    setSaving(true);
-    setNotice({ type: "info", text: "Checking and saving config…" });
+  const load = useCallback(async () => {
     try {
-      const response = await auth.apiFetch("/api/config", {
-        method: "PUT",
-        body: JSON.stringify({ content: draft })
-      });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error ?? "Save failed");
-      setConfig({ path: body.path, content: draft });
-      setNotice({ type: "success", text: `Saved ${new Date(body.savedAt).toLocaleTimeString()}. Restart Brainstem to reload it.` });
+      const response = await auth.apiFetch("/api/config");
+      // Backends before 2.0 send only { path, content }: a file.
+      const body = { source: "file", readOnly: true, ...(await response.json()) };
+      setConfig(body);
+      setDraft(body.content ?? "");
+      setVersions(body.source === "database"
+        ? await auth.apiFetch("/api/config/versions").then(result => result.json())
+        : []);
+      setNotice({ type: "info", text: "" });
     }
     catch (error) {
       setNotice({ type: "error", text: error.message });
+    }
+  }, [auth.apiFetch]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const activeId = config?.version?.id ?? null;
+  const ifMatch = activeId === null ? "none" : `"${activeId}"`;
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const response = await auth.apiFetch("/api/config", {
+        method: "PUT",
+        headers: { "if-match": ifMatch },
+        body: JSON.stringify({ content: draft, comment: comment || undefined })
+      });
+      const body = await response.json();
+      setComment("");
+      await load();
+      setNotice({
+        type: "success",
+        text: body.unchanged
+          ? "No changes: this is already the active version."
+          : `Saved and activated version ${body.version.id}. Running cores reload it now.`
+      });
+    }
+    catch (error) {
+      setNotice({
+        type: "error",
+        text: error.status === 409
+          ? "Someone else changed the active config. Reload to see their version before saving."
+          : error.message
+      });
     }
     finally {
       setSaving(false);
     }
   };
 
+  const activate = async version => {
+    if (!window.confirm(`Activate version ${version.id}? Every core switches to it.`)) return;
+    try {
+      await auth.apiFetch(`/api/config/versions/${version.id}/activate`, {
+        method: "POST",
+        headers: { "if-match": ifMatch },
+        body: "{}"
+      });
+      await load();
+      setNotice({ type: "success", text: `Version ${version.id} is active. Running cores reload it now.` });
+    }
+    catch (error) {
+      setNotice({ type: "error", text: error.message });
+    }
+  };
+
+  const openVersion = async version => {
+    try {
+      const body = await auth.apiFetch(`/api/config/versions/${version.id}`).then(response => response.json());
+      setDraft(JSON.stringify(body.spec, null, 2));
+      setNotice({ type: "info", text: `Loaded version ${version.id} into the editor. Saving stores it as a new version.` });
+    }
+    catch (error) {
+      setNotice({ type: "error", text: error.message });
+    }
+  };
+
+  const readOnly = !config || config.readOnly;
+  const isDatabase = config?.source === "database";
+
   return (
     <div className="settings-section config-page">
       <div className="config-header">
         <div>
           <h2>Configuration</h2>
-          <p>{config.path || "brainstem.config.mjs"}</p>
+          <p>
+            {!config && "Loading…"}
+            {config?.source === "file" && `${config.path} (file, read-only)`}
+            {isDatabase && (config.version
+              ? `Version ${config.version.id} · ${config.version.author ?? "unknown"} · ${formatTime(config.version.createdAt)}`
+              : "No version stored yet")}
+          </p>
         </div>
-        <button
-          className="config-save"
-          onClick={save}
-          disabled={saving || draft === config.content}
-        >
-          {saving ? "Saving…" : "Save config"}
-        </button>
+        {isDatabase && !readOnly && (
+          <div className="config-actions">
+            <input
+              className="config-comment"
+              placeholder="Change note (optional)"
+              value={comment}
+              maxLength={500}
+              onChange={event => setComment(event.target.value)}
+            />
+            <button
+              className="config-save"
+              onClick={save}
+              disabled={saving || draft === config.content}
+            >
+              {saving ? "Saving…" : "Save version"}
+            </button>
+          </div>
+        )}
       </div>
-      {notice.text && notice.type !== "info" && <div className={`notice notice-${notice.type}`}>{notice.text}</div>}
-      <CodeEditor key={actualTheme} value={draft} onChange={setDraft} theme={actualTheme} />
+      {config?.source === "file" && (
+        <div className="notice notice-info">
+          This config is a file: edit it and restart Brainstem. To edit it here, store it in the database with
+          {" "}<code>brainstem config import</code> and run with <code>BRAINSTEM_CONFIG_SOURCE=database</code>.
+        </div>
+      )}
+      {notice.text && <div className={`notice notice-${notice.type}`}>{notice.text}</div>}
+      {config && (
+        <CodeEditor
+          key={`${actualTheme}-${config.source}-${readOnly}`}
+          value={draft}
+          onChange={setDraft}
+          theme={actualTheme}
+          readOnly={readOnly}
+        />
+      )}
+      {isDatabase && versions.length > 0 && (
+        <div className="config-versions">
+          <h3>Versions</h3>
+          <ul>
+            {versions.map(version => (
+              <li key={version.id} className={version.active ? "is-active" : ""}>
+                <div>
+                  <strong>v{version.id}{version.active ? " · active" : ""}</strong>
+                  <span>{formatTime(version.createdAt)} · {version.author ?? "unknown"}{version.comment ? ` · ${version.comment}` : ""}</span>
+                </div>
+                <div className="config-version-actions">
+                  <button onClick={() => openVersion(version)}>Open</button>
+                  {!version.active && !readOnly && <button onClick={() => activate(version)}>Activate</button>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -1611,7 +1722,7 @@ function formatPermission(permission) {
   return permission.split(":").map(part => part.replace(/-/g, " ")).map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(" · ");
 }
 
-function CodeEditor({ value, onChange, theme }) {
+function CodeEditor({ value, onChange, theme, readOnly = false }) {
   const containerRef = useRef(null);
   const viewRef = useRef(null);
   const onChangeRef = useRef(onChange);
@@ -1630,6 +1741,8 @@ function CodeEditor({ value, onChange, theme }) {
         javascript({ jsx: true }),
         theme === "light" ? lightEditorTheme : oneDark,
         EditorView.lineWrapping,
+        EditorState.readOnly.of(readOnly),
+        EditorView.editable.of(!readOnly),
         EditorView.updateListener.of(update => {
           if (!update.docChanged) return;
           onChangeRef.current(update.state.doc.toString());
