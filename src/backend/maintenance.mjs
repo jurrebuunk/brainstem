@@ -5,6 +5,10 @@
  * claims a run with one conditional upsert, so when several
  * replicas tick at the same time only one of them does the work
  * and the others skip until the interval has passed again.
+ *
+ * With `lock` (an advisory-lock singleton, src/db/locks.mjs) a whole
+ * maintenance round runs in at most one process at a time, so a
+ * slow round on one replica never overlaps another's.
  */
 export const DEFAULT_MAINTENANCE_INTERVAL_MS = 10 * 60 * 1000;
 
@@ -42,7 +46,8 @@ export function createMaintenanceScheduler({
   db,
   tasks,
   intervalMs = DEFAULT_MAINTENANCE_INTERVAL_MS,
-  logger = console
+  logger = console,
+  lock = null
 }) {
   // Skip if another replica ran the task within most of the interval;
   // the slack keeps timer jitter from making a replica skip its turn.
@@ -50,7 +55,14 @@ export function createMaintenanceScheduler({
   let timer = null;
   let chain = Promise.resolve();
 
-  async function runAll({ force = false, now = new Date() } = {}) {
+  async function runAll(options = {}) {
+    if (!lock) return await runTasks(options);
+
+    const { ran, result } = await lock(() => runTasks(options));
+    return ran ? result : Object.fromEntries(Object.keys(tasks).map(name => [name, { ran: false }]));
+  }
+
+  async function runTasks({ force = false, now = new Date() } = {}) {
     const results = {};
     for (const [name, task] of Object.entries(tasks)) {
       const claimed = await claimMaintenanceRun(db, name, {

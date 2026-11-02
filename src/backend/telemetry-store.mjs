@@ -25,11 +25,34 @@ export function createTelemetryStore({
   return {
     path: describeDatabase(database.url),
 
+    // Returns the event's row id (used as the SSE event id).
     async persistEvent(event) {
-      await db.transaction().execute(async trx => {
-        await insertEvent(trx, event);
+      return await db.transaction().execute(async trx => {
+        const id = await insertEvent(trx, event);
         await recordStatsEvent(trx, event);
+        return id;
       });
+    },
+
+    async getEventsByIds(ids) {
+      if (ids.length === 0) return [];
+      const rows = await db.selectFrom("web_events")
+        .select(["id", "event_json"])
+        .where("id", "in", ids)
+        .orderBy("id")
+        .execute();
+      return rows.map(row => parseStoredEvent(row.event_json, Number(row.id))).filter(Boolean);
+    },
+
+    // Events after an SSE Last-Event-ID, oldest first.
+    async getEventsAfterId(id, limit = 2000) {
+      const rows = await db.selectFrom("web_events")
+        .select(["id", "event_json"])
+        .where("id", ">", Number(id))
+        .orderBy("id")
+        .limit(limit)
+        .execute();
+      return rows.map(row => parseStoredEvent(row.event_json, Number(row.id))).filter(Boolean);
     },
 
     async prune({ now = new Date() } = {}) {
@@ -64,7 +87,7 @@ export function createTelemetryStore({
 
 async function insertEvent(db, event) {
   const payload = event.payload ?? {};
-  await db.insertInto("web_events")
+  const row = await db.insertInto("web_events")
     .values({
       received_at: event.receivedAt ?? payload.timestamp ?? new Date().toISOString(),
       kind: String(event.kind ?? "external.json"),
@@ -72,7 +95,9 @@ async function insertEvent(db, event) {
       source: eventSourceKey(event),
       event_json: JSON.stringify(event)
     })
-    .execute();
+    .returning("id")
+    .executeTakeFirst();
+  return Number(row.id);
 }
 
 function eventLevelForStorage(event) {

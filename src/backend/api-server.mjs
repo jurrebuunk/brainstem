@@ -20,9 +20,13 @@ import { PERMISSIONS } from "./permissions.mjs";
 import { createSseHub } from "./sse.mjs";
 import { createTelemetryStore } from "./telemetry-store.mjs";
 import { createCoreRegistry, topologyFromCores } from "../runtime/cores.mjs";
+import { createInputLeaseStore } from "../runtime/input-leases.mjs";
+import { withSingletonLock } from "../db/locks.mjs";
 
 // Cores not seen for this long are removed from the registry.
 const CORE_PRUNE_AFTER_MS = 24 * 60 * 60 * 1000;
+// Inputs no core declared for this long are removed from the schedule.
+const INPUT_PRUNE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 8;
@@ -58,7 +62,7 @@ export function createBackendApiServer({
 } = {}) {
   const configStore = createConfigStore(configPath);
   const proxies = createTrustedProxies(trustedProxies);
-  const sse = createSseHub();
+  let sse = null;
   const events = [];
   let handle = null;
   let ownsHandle = false;
@@ -68,7 +72,9 @@ export function createBackendApiServer({
   let pipeline = null;
   let pipelineAdmin = null;
   let coreRegistry = null;
+  let inputLeases = null;
   let started = null;
+  let draining = false;
 
   async function start() {
     if (database) {
@@ -96,6 +102,7 @@ export function createBackendApiServer({
     maintenance = createMaintenanceScheduler({
       db: handle.db,
       intervalMs: maintenanceIntervalMs,
+      lock: fn => withSingletonLock(handle, "api.maintenance", fn),
       tasks: {
         "telemetry.prune": ({ now }) => telemetryStore.prune({ now }),
         "auth.prune": async ({ now }) => ({
@@ -104,10 +111,16 @@ export function createBackendApiServer({
         }),
         "cores.prune": async ({ now }) => ({
           cores: await coreRegistry.prune({ olderThanMs: CORE_PRUNE_AFTER_MS, now: new Date(now).getTime() })
+        }),
+        "inputs.prune": async ({ now }) => ({
+          inputs: await inputLeases.prune({ olderThanMs: INPUT_PRUNE_AFTER_MS, at: new Date(now).getTime() })
         })
       }
     });
     coreRegistry = createCoreRegistry({ database: async () => handle });
+    inputLeases = createInputLeaseStore({ database: async () => handle });
+    // Streams telemetry from every replica (LISTEN/NOTIFY on Postgres).
+    sse = createSseHub({ store: telemetryStore, notifier: handle.notifier });
     // The runtime's job queue and delivery log, in the same database.
     pipeline = createPipelineStorage({ type: "database", database: handle });
     pipelineAdmin = createPipelineAdmin(pipeline);
@@ -123,6 +136,28 @@ export function createBackendApiServer({
 
       if (request.method === "OPTIONS") {
         sendNoContent(response, 204);
+        return;
+      }
+
+      /*
+       * Probes (roadmap §5): liveness never touches the database;
+       * readiness needs it and fails while draining; startup waits
+       * for the schema and stores.
+       */
+      if (url.pathname === "/livez" && request.method === "GET") {
+        sendJson(response, { ok: true, role: "api" });
+        return;
+      }
+
+      if (url.pathname === "/readyz" && request.method === "GET") {
+        const ready = !draining && await databaseReachable(handle);
+        sendJson(response, { ok: ready, role: "api", draining }, ready ? 200 : 503);
+        return;
+      }
+
+      if (url.pathname === "/startupz" && request.method === "GET") {
+        const startedOk = Boolean(telemetryStore && authStore);
+        sendJson(response, { ok: startedOk, role: "api" }, startedOk ? 200 : 503);
         return;
       }
 
@@ -220,7 +255,7 @@ export function createBackendApiServer({
 
       if (url.pathname === "/api/stream" && request.method === "GET") {
         requirePermission(session.user, "events:read");
-        sse.stream(response);
+        await sse.stream(request, response);
         return;
       }
 
@@ -317,6 +352,13 @@ export function createBackendApiServer({
         return;
       }
 
+      // Input schedule and leases: which core polls what, and when next.
+      if (url.pathname === "/api/inputs" && request.method === "GET") {
+        requirePermission(session.user, "runtime:read");
+        sendJson(response, await inputLeases.list());
+        return;
+      }
+
       if (url.pathname === "/api/pipeline" && request.method === "GET") {
         requirePermission(session.user, "runtime:read");
         sendJson(response, await pipelineAdmin.summary());
@@ -374,14 +416,15 @@ export function createBackendApiServer({
 
   async function addEvent(event) {
     events.push(event);
+    let persisted = event;
     try {
-      await telemetryStore.persistEvent(event);
+      persisted = { ...event, persistedId: await telemetryStore.persistEvent(event) };
     }
     catch (error) {
       console.error("failed to persist backend telemetry", error);
     }
     while (events.length > maxEvents) events.shift();
-    sse.broadcast(event);
+    sse.publish(persisted);
   }
 
   async function currentSession(request) {
@@ -442,7 +485,25 @@ export function createBackendApiServer({
       return await maintenance.run(options);
     },
 
+    /*
+     * Graceful shutdown (SIGTERM): readiness fails at once so the
+     * load balancer stops sending traffic, SSE streams end so
+     * clients reconnect elsewhere, then the server closes.
+     */
+    async drain({ delayMs = 0 } = {}) {
+      draining = true;
+      if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
+      sse?.closeAll();
+      await api.close();
+    },
+
+    get draining() {
+      return draining;
+    },
+
     async close() {
+      sse?.close();
+      server.closeIdleConnections?.();
       if (server.listening) {
         await new Promise(resolveClose => server.close(() => resolveClose()));
       }
@@ -480,6 +541,27 @@ export function normalizeBackendApiConfig(config = {}, { repoRoot = process.cwd(
       DEFAULT_MAINTENANCE_INTERVAL_MS
     )
   };
+}
+
+async function databaseReachable(handle) {
+  if (!handle) return false;
+
+  let timer;
+  try {
+    await Promise.race([
+      handle.db.selectFrom("maintenance_runs").select("task").limit(1).execute(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("database ping timed out")), 2_000);
+      })
+    ]);
+    return true;
+  }
+  catch {
+    return false;
+  }
+  finally {
+    clearTimeout(timer);
+  }
 }
 
 function normalizeIncomingEvent(value) {
