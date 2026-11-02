@@ -85,6 +85,7 @@ export function normalizeConfig(config = {}) {
     minRouteConfidence: normalizeConfidence(config.minRouteConfidence),
     onMissingRequired: optionalFunction(config.onMissingRequired, "onMissingRequired"),
     onResult: optionalFunction(config.onResult, "onResult"),
+    handoff: normalizeHandoff(config.handoff),
     outputLogMaxChars: positiveInteger(config.outputLogMaxChars, "outputLogMaxChars") ?? 4000,
     adapter: normalizeAdapter(config.adapter)
   };
@@ -128,6 +129,35 @@ function normalizeModel(model) {
     name: model.name.trim(),
     apiKey: optionalString(model.apiKey, "model.apiKey"),
     apiKeyEnv: optionalString(model.apiKeyEnv, "model.apiKeyEnv")
+  };
+}
+
+const DECISIONS = ["ignore", "queue", "dispatch", "escalate"];
+
+/*
+ * Hand the run's report back to Brainstem as a new observation,
+ * so other destinations (Matrix, a bigger agent) can pick it up.
+ * `true` uses the defaults.
+ */
+function normalizeHandoff(handoff) {
+  if (handoff === undefined || handoff === false) return null;
+
+  const value = handoff === true ? {} : handoff;
+
+  if (!isPlainObject(value)) {
+    fail("handoff", "must be true or an object { type, minimumDecision, maxChars }");
+  }
+
+  const minimumDecision = value.minimumDecision ?? "queue";
+
+  if (!DECISIONS.includes(minimumDecision)) {
+    fail("handoff.minimumDecision", `must be one of ${DECISIONS.join(", ")}`);
+  }
+
+  return {
+    type: optionalString(value.type, "handoff.type") ?? "agent_report",
+    minimumDecision,
+    maxChars: positiveInteger(value.maxChars, "handoff.maxChars") ?? 4000
   };
 }
 

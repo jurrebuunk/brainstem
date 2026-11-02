@@ -81,6 +81,7 @@ Input plugins:
 - `email-imap` — polls IMAP inboxes for new email.
 - `http-health` — polls HTTP endpoints.
 - `tls-certificate` — checks TLS certificate validity and expiry.
+- `log-file` — watches a log file for new error lines.
 - `static-observations` — local smoke-test input.
 
 Destination plugins:

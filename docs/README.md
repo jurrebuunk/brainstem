@@ -31,6 +31,7 @@ Built-in plugin pages:
 - [HTTP JSON destination](plugins/http-json.md)
 - [OpenCode Runner destination](plugins/opencode-runner.md)
 - [agentOS Runner destination](plugins/agentos-runner.md)
+- [Log File input](plugins/log-file.md)
 
 ## Maintainer docs
 

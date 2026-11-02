@@ -381,3 +381,117 @@ test("delivery keys combine destination, observation, revision and emission", ()
     "matrix:obs:1:r3:e1"
   );
 });
+
+/*
+ * Destination that records what it receives and, when `emitAs`
+ * is set, hands a report observation back to the core.
+ */
+function handoffDestinationSource(dir, name, { emitAs = null, fail = false } = {}) {
+  return `
+import { appendFile } from "node:fs/promises";
+
+export default {
+  apiVersion: "brainstem.destination/v2",
+  name: "${name}",
+  destinations: {
+    default: {
+      async handle(ctx, output) {
+        const observation = output.payload.observation.payload;
+        let note = "";
+
+        if (${JSON.stringify(emitAs)}) {
+          try {
+            ctx.emit({
+              version: "1",
+              kind: "observation",
+              payload: {
+                id: \`${emitAs}:\${observation.id}\`,
+                source: { type: "agent", name: "${name}" },
+                type: "report",
+                state: "reported",
+                timestamp: new Date().toISOString(),
+                title: \`Report on \${observation.title}\`,
+                message: "summary",
+                facts: {},
+                data: {}
+              }
+            });
+          }
+          catch (error) {
+            note = \` emit-error:\${error.message}\`;
+          }
+        }
+
+        await appendFile(${JSON.stringify(join(dir, "handoff.log"))}, \`${name} \${observation.id} \${output.payload.input.id}\${note}\\n\`);
+        if (${fail}) throw new Error("${name} failed after emitting");
+      }
+    }
+  }
+};
+`;
+}
+
+dialectTest("a destination hands an observation back to the core, and it never returns to that destination", async ({ handle }) => {
+  const dir = await tempDir("pipeline-handoff");
+  const inputPath = await writePlugin(dir, "input.mjs", countingInputSource());
+  const agentPath = await writePlugin(dir, "agent.mjs", handoffDestinationSource(dir, "agent", { emitAs: "report" }));
+  const bigPath = await writePlugin(dir, "big.mjs", handoffDestinationSource(dir, "big"));
+
+  const runtime = new BrainstemRuntime({
+    brainstem: fakeBrainstem(),
+    config: databaseConfig(),
+    logger: silentLogger,
+    database: handle,
+    plugins: [{ id: "counter", module: inputPath }],
+    destinations: [
+      { id: "agent", module: agentPath, decisions: ["queue"] },
+      { id: "big", module: bigPath, decisions: ["queue"] }
+    ]
+  });
+
+  await runtime.runOnce();
+
+  assert.deepEqual((await readLines(join(dir, "handoff.log"))).sort(), [
+    "agent counter:0 counter",
+    "big counter:0 counter",
+    "big report:counter:0 destination:agent"
+  ], "the report reaches 'big' but not the agent that wrote it");
+
+  assert.deepEqual(await handle.db.selectFrom("jobs").selectAll().execute(), []);
+});
+
+dialectTest("handoff stops at runtime.handoff.maxDepth and emits nothing from a failed delivery", async ({ handle }) => {
+  const dir = await tempDir("pipeline-handoff-depth");
+  const inputPath = await writePlugin(dir, "input.mjs", countingInputSource());
+  const firstPath = await writePlugin(dir, "first.mjs", handoffDestinationSource(dir, "first", { emitAs: "a" }));
+  const secondPath = await writePlugin(dir, "second.mjs", handoffDestinationSource(dir, "second", { emitAs: "b" }));
+  const brokenPath = await writePlugin(dir, "broken.mjs", handoffDestinationSource(dir, "broken", { emitAs: "c", fail: true }));
+
+  const runtime = new BrainstemRuntime({
+    brainstem: fakeBrainstem(),
+    config: databaseConfig({
+      handoff: { maxDepth: 1 },
+      queue: { deliver: { retry: { attempts: 1, minDelayMs: 0, maxDelayMs: 0 } } }
+    }),
+    logger: silentLogger,
+    database: handle,
+    plugins: [{ id: "counter", module: inputPath }],
+    destinations: [
+      { id: "first", module: firstPath, decisions: ["queue"], sources: ["counter"] },
+      { id: "second", module: secondPath, decisions: ["queue"], sources: ["agent"] },
+      { id: "broken", module: brokenPath, decisions: ["queue"], sources: ["counter"] }
+    ]
+  });
+
+  await runtime.runOnce().catch(() => {});
+
+  const lines = await readLines(join(dir, "handoff.log"));
+
+  assert.ok(lines.includes("first counter:0 counter"));
+  assert.ok(
+    lines.includes("second a:counter:0 destination:first emit-error:ctx.emit: handoff depth 1 reached (runtime.handoff.maxDepth)"),
+    "a depth-1 delivery cannot emit when maxDepth is 1"
+  );
+  assert.ok(lines.includes("broken counter:0 counter"));
+  assert.ok(!lines.some(line => line.includes("c:counter:0")), "the failed delivery's emit was discarded");
+});

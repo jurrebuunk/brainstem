@@ -80,8 +80,9 @@ export function buildAgentPrompt(config, event) {
   const context = [
     "Observation:",
     `- id: ${observation?.id ?? "unknown"}`,
-    `- source/type: ${observation?.source ?? "?"}/${observation?.type ?? "?"}`,
-    `- summary: ${clip(observation?.summary, 300)}`,
+    `- source: ${observation?.source?.type ?? "?"}/${observation?.source?.name ?? "?"} (type ${observation?.type ?? "?"}, state ${observation?.state ?? "?"})`,
+    `- title: ${clip(observation?.title, 200)}`,
+    `- message: ${clip(observation?.message, 600)}`,
     `- decision: ${decision?.decision ?? "?"} (route ${decision?.route ?? "?"})`,
     decision?.reason ? `- reason: ${clip(decision.reason, 200)}` : null
   ].filter(Boolean).join("\n");

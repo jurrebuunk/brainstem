@@ -53,7 +53,7 @@ test("agentos-runner runs a command task in a real agentOS VM", { skip, timeout:
     observation: {
       version: "1",
       kind: "observation",
-      payload: { id: "http:api", source: "http-health", type: "health", summary: "api is down", facts: {}, data: { name: "api" } }
+      payload: { id: "http:api", source: { type: "http", name: "api" }, type: "health_check", state: "unhealthy", timestamp: "2026-11-02T10:00:00.000Z", title: "api is down", message: "api returned 503", facts: {}, data: { name: "api" } }
     }
   });
 

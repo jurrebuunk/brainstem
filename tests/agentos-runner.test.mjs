@@ -12,7 +12,7 @@ import {
   toolCommandName
 } from "../plugins/agentos-runner/prompt.mjs";
 import { MemoryPluginStateStore } from "../src/runtime/plugin-state.mjs";
-import { createDestinationContext, createOutputEnvelope } from "../src/sdk/index.mjs";
+import { assertObservation, createDestinationContext, createOutputEnvelope } from "../src/sdk/index.mjs";
 
 const MODEL = {
   baseUrl: "http://model.test/v1",
@@ -98,10 +98,12 @@ function outputEnvelope({
       kind: "observation",
       payload: {
         id,
-        source: "github",
+        source: { type: "github", name: "owner/repo" },
         type: "issue",
-        observedAt: "2026-11-02T10:00:00.000Z",
-        summary: data.title,
+        state: "open",
+        timestamp: "2026-11-02T10:00:00.000Z",
+        title: data.title,
+        message: `Issue body for ${data.title}`,
         facts: {},
         data
       }
@@ -110,7 +112,7 @@ function outputEnvelope({
   });
 }
 
-function context(config, { store = new MemoryPluginStateStore(), output, attempt = 1, logs = [] } = {}) {
+function context(config, { store = new MemoryPluginStateStore(), output, attempt = 1, logs = [], emit } = {}) {
   const ctx = createDestinationContext({
     config,
     stateStore: store,
@@ -119,6 +121,7 @@ function context(config, { store = new MemoryPluginStateStore(), output, attempt
     id: "issue-summary",
     idempotencyKey: output.payload.idempotencyKey,
     attempt,
+    emit,
     logger: {
       debug(message, data) { logs.push({ level: "debug", message, data }); },
       info(message, data) { logs.push({ level: "info", message, data }); },
@@ -170,6 +173,8 @@ test("agentos-runner config validates tools, mounts and limits", () => {
   assert.throws(() => normalizeConfig({ command: "x", mounts: [{ path: "logs", hostPath: "/var/log" }] }), /mounts\[0\]\.path/);
   assert.throws(() => normalizeConfig({ command: "x", timeoutMs: 0 }), /timeoutMs/);
   assert.throws(() => normalizeConfig({ command: "x", runOnce: "always" }), /runOnce/);
+  assert.throws(() => normalizeConfig({ command: "x", handoff: { minimumDecision: "urgent" } }), /handoff\.minimumDecision/);
+  assert.deepEqual(normalizeConfig({ command: "x", handoff: true }).handoff, { type: "agent_report", minimumDecision: "queue", maxChars: 4000 });
   assert.throws(() => normalizeConfig({ command: "x", minRouteConfidence: 2 }), /minRouteConfidence/);
   assert.throws(() => normalizeConfig({ command: "x", outboxPath: "/result.json" }), /outboxPath/);
   assert.throws(() => normalizeConfig({ command: "x", mounts: [{ path: "/outbox", hostPath: "/tmp" }] }), /outbox directory/);
@@ -240,7 +245,7 @@ test("agentos-runner runs a command task end to end", async () => {
   const results = [];
   const adapter = fakeAdapter(async vm => {
     const envelope = JSON.parse(vm.files.get("/inbox/envelope.json"));
-    await vm.callTool("sendReport", { title: envelope.payload.observation.payload.summary, markdown: "body" });
+    await vm.callTool("sendReport", { title: envelope.payload.observation.payload.title, markdown: "body" });
     vm.write("/outbox/result.json", JSON.stringify({ summary: "ok" }));
     return { exitCode: 0, stdout: "done" };
   });
@@ -630,4 +635,43 @@ test("agent prompts are cut to maxPromptChars", async () => {
   const requests = await withModel([{ content: "ok" }], () => handle(ctx, output));
 
   assert.ok(requests[0].body.messages[1].content.length < 600);
+});
+
+test("handoff turns the agent's final answer into a report observation", async () => {
+  const emitted = [];
+  const output = outputEnvelope();
+  const { ctx, logs } = context(agentConfig(fakeAdapter(), { handoff: { minimumDecision: "dispatch", maxChars: 40 } }), {
+    output,
+    emit: observation => emitted.push(observation)
+  });
+
+  await withModel([{ content: "Problem: crash on start. Next step: check the config loader." }], () => handle(ctx, output));
+
+  assert.equal(emitted.length, 1);
+  const [report] = emitted;
+  assertObservation(report);
+  assert.equal(report.payload.id, "agentos:issue-summary:github:repo#1");
+  assert.deepEqual(report.payload.source, { type: "agentos", name: "issue-summary" });
+  assert.equal(report.payload.type, "agent_report");
+  assert.equal(report.payload.title, "Report: Crash on start");
+  assert.equal(report.payload.message, "Problem: crash on start. Next step: chec…");
+  assert.equal(report.payload.facts.minimum_decision, "dispatch");
+  assert.equal(report.payload.data.reportFor, "github:repo#1");
+  assert.ok(logs.some(log => log.message === "agentos handoff emitted"));
+});
+
+test("handoff from a command task uses the outbox report, and warns without ctx.emit", async () => {
+  const emitted = [];
+  const adapter = fakeAdapter(async vm => {
+    vm.write("/outbox/result.json", JSON.stringify({ report: "3 errors, db pool exhausted" }));
+    return { exitCode: 0, stdout: "ignored" };
+  });
+  const output = outputEnvelope();
+
+  await handle(context({ adapter, command: "true", handoff: true }, { output, emit: o => emitted.push(o) }).ctx, output);
+  assert.equal(emitted[0].payload.message, "3 errors, db pool exhausted");
+
+  const { ctx, logs } = context({ adapter: fakeAdapter(async () => ({ exitCode: 0, stdout: "x" })), command: "true", handoff: true, runOnce: "emission" }, { output });
+  await handle(ctx, output);
+  assert.ok(logs.some(log => log.message === "agentos handoff skipped: this runtime does not support ctx.emit"));
 });

@@ -87,7 +87,7 @@ export default {
       config: defineAgentOsTask({
         command: [
           "grep -n ERROR /mnt/logs/app.log | tail -20 > /tmp/errors",
-          "agentos-tools send-report --title {{observation.summary}} --markdown \"$(cat /tmp/errors)\""
+          "agentos-tools send-report --title {{observation.title}} --markdown \"$(cat /tmp/errors)\""
         ].join("\n"),
         mounts: [{ path: "/mnt/logs", hostPath: "/var/log/myapp" }],
         tools: { sendReport }
@@ -155,9 +155,38 @@ failOnExitCode        // fail the delivery on a non-zero exit; default true
 runOnce               // "revision" (default) or "emission", see below
 minRouteConfidence    // skip decisions whose route confidence is below this (0..1)
 onMissingRequired     // ({ missing, event }, ctx) => void; replaces the failure when a required tool wasn't called
-onResult              // ({ result, exitCode, stdout, stderr, toolCalls, event }, ctx) => void
+onResult              // ({ result, text, exitCode, stdout, stderr, toolCalls, usage, event }, ctx) => void
+handoff               // true or { type, minimumDecision, maxChars }: emit the report as an observation
 outputLogMaxChars     // max chars of stdout/stderr/result per log entry; default 4000
 ```
+
+## Handoff
+
+With `handoff`, a successful run's report goes back to Brainstem as a new observation, so other destinations can act on it. For example, send it to Matrix, or give it to opencode-runner as a clean bug report instead of the raw issue.
+
+```js
+handoff: { type: "agent_report", minimumDecision: "queue", maxChars: 4000 }   // or: handoff: true
+```
+
+The report is the agent's final answer. For a `command` task, it's the outbox result's `report` field, or stdout if there's none. The observation looks like:
+
+```text
+id       agentos:<destination id>:<original observation id>
+source   { type: "agentos", name: <destination id> }
+type     handoff.type (default "agent_report")
+state    reported
+title    "Report: <original title>"
+message  the report, cut to handoff.maxChars
+facts    { minimum_decision: handoff.minimumDecision, report_for: <original id> }
+```
+
+`minimum_decision` keeps the core from ignoring the report. Route it with ordinary filters:
+
+```js
+{ id: "ops-room", module: "./plugins/matrix/index.mjs", destination: "room", sources: ["agentos"], types: ["agent_report"], config: { ... } }
+```
+
+The runtime never routes a report back to the task that wrote it, and limits chain depth (see [Handoff](../delivery-pipeline.md#handoff-destinations-emitting-observations)).
 
 ## Mounts and file permissions
 
@@ -206,14 +235,15 @@ Usage (requests and prompt/completion tokens) is logged per turn (`agentos agent
 String templates use `{{path}}` placeholders over the envelope, with the inner envelopes unwrapped:
 
 ```text
-{{observation.id}}  {{observation.summary}}  {{observation.data.title}}
+{{observation.id}}  {{observation.title}}  {{observation.message}}  {{observation.data.title}}
+{{observation.source.type}}  {{observation.source.name}}  {{observation.state}}
 {{decision.decision}}  {{decision.route}}  {{decision.reason}}
 {{input.id}}  {{destination.id}}  {{idempotencyKey}}
 ```
 
 Objects are rendered as JSON, and a missing path renders as an empty string.
 
-In a `command`, every value is **shell-quoted**, because observation data such as issue titles and email subjects is untrusted. A title like `x; rm -rf /` arrives as one harmless argument. Use placeholders as whole arguments (`--title {{observation.summary}}`), not inside your own quotes.
+In a `command`, every value is **shell-quoted**, because observation data such as issue titles and email subjects is untrusted. A title like `x; rm -rf /` arrives as one harmless argument. Use placeholders as whole arguments (`--title {{observation.title}}`), not inside your own quotes.
 
 A function template receives the raw `brainstem.output` payload and must return the final text, with any quoting done by you.
 
@@ -267,6 +297,7 @@ Logs appear under the entry's destination node:
 
 - `agentos runner started` / `agentos runner skipped` / `agentos runner completed`
 - `agentos agent turn` / `agentos agent command` / `agentos agent output`: tool calls, commands, final text and token usage
+- `agentos handoff emitted` / `agentos handoff skipped`
 - `agentos command output`: exit code, stdout and stderr (truncated)
 - `agentos tool call` / `agentos tool call replayed` / `agentos tool call failed`
 - `agentos required tools not called`
