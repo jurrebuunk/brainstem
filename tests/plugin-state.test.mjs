@@ -200,7 +200,7 @@ export default {
 });
 
 function matrixEvent({ id, decision, state }) {
-  return {
+  return outputEnvelope({
     decision: {
       payload: {
         observation_id: id,
@@ -220,7 +220,7 @@ function matrixEvent({ id, decision, state }) {
         data: { url: "https://example.com/health" }
       }
     }
-  };
+  });
 }
 
 function matrixConfig(notify = {}) {
@@ -435,3 +435,15 @@ test("matrix imports the legacy notification state file once", async () => {
   );
   assert.equal(calls.length, 1);
 });
+
+/*
+ * Wrap { decision, observation, ... } as the brainstem.output
+ * envelope a v2 destination receives.
+ */
+function outputEnvelope(payload) {
+  return {
+    version: "1",
+    kind: "brainstem.output",
+    payload: { pollId: null, input: {}, destination: {}, ...payload }
+  };
+}

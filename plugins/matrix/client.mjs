@@ -1,11 +1,20 @@
+/*
+ * txnId makes the send idempotent: Matrix returns the original
+ * event for a repeated (access token, txnId) pair. Pass the
+ * delivery's idempotency key; without one a random id is used
+ * for this call (shared by its retries).
+ */
 export async function sendRoomMessage({
   homeserver,
   roomId,
   token,
   content,
   retry,
-  signal
+  signal,
+  txnId
 }) {
+  txnId ??= randomTxnId();
+
   return await withRetry(
     retry,
     signal,
@@ -14,9 +23,14 @@ export async function sendRoomMessage({
       roomId,
       token,
       content,
-      signal
+      signal,
+      txnId
     })
   );
+}
+
+function randomTxnId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 const MAX_ERROR_BODY_LENGTH = 500;
@@ -26,11 +40,9 @@ async function sendOnce({
   roomId,
   token,
   content,
-  signal
+  signal,
+  txnId
 }) {
-  const txnId =
-    `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
   const url =
     `${homeserver}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${encodeURIComponent(txnId)}`;
 
@@ -61,12 +73,15 @@ async function sendOnce({
 
       delete fallbackContent["m.relates_to"];
 
+      // The rejected request created no event, so the
+      // fallback may reuse the txnId under a suffix.
       return await sendOnce({
         homeserver,
         roomId,
         token,
         content: fallbackContent,
-        signal
+        signal,
+        txnId: `${txnId}-unthreaded`
       });
     }
 

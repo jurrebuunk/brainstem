@@ -16,7 +16,7 @@ import opencodeRunnerPlugin from "../plugins/opencode-runner/index.mjs";
 import matrixPlugin from "../plugins/matrix/index.mjs";
 import { resetNotificationState } from "../plugins/matrix/notify.mjs";
 import { MemoryPluginStateStore } from "../src/runtime/plugin-state.mjs";
-import { createDestinationContext } from "../src/sdk/index.mjs";
+import { createDestinationContext, createOutputEnvelope } from "../src/sdk/index.mjs";
 import { evaluateCertificate } from "../plugins/tls-certificate/check.mjs";
 import { shouldEmitCertificateObservation } from "../plugins/tls-certificate/state.mjs";
 import { fetchIssues } from "../plugins/github-issues/api.mjs";
@@ -68,7 +68,7 @@ test("input checkpoints commit after successful processing", async () => {
   });
 });
 
-test("input checkpoints are not committed when processing fails", async () => {
+test("processing failures keep the observation queued and still commit the checkpoint", async () => {
   const dir = await mkdtemp(join(tmpdir(), "brainstem-checkpoint-failure-"));
   const pluginPath = join(dir, "checkpoint-plugin.mjs");
   const checkpointPath = join(dir, "checkpoints.json");
@@ -92,13 +92,21 @@ test("input checkpoints are not committed when processing fails", async () => {
 
   await assert.rejects(
     () => runtime.runOnce(),
-    /process failed/
+    /pipeline job\(s\) failed: process failed/
   );
 
-  assert.equal(
-    existsSync(checkpointPath),
-    false
+  // The observation is stored as a decide job, so the
+  // checkpoint may move on.
+  assert.deepEqual(
+    JSON.parse(await readFile(checkpointPath, "utf8")),
+    { "checkpoint-test-input": { count: 1 } }
   );
+
+  const [job] = await runtime.transport.listJobs({});
+  assert.equal(job.queue, "decide");
+  assert.equal(job.state, "ready");
+  assert.equal(job.lastError, "process failed");
+  assert.ok(job.runAt > Date.now());
 });
 
 test("sqlite core records are reused after restart", async () => {
@@ -182,7 +190,10 @@ test("destination failures do not block input checkpoints by default", async () 
     ]
   });
 
-  await runtime.runOnce();
+  await assert.rejects(
+    () => runtime.runOnce(),
+    /destination exploded/
+  );
 
   const saved = JSON.parse(
     await readFile(checkpointPath, "utf8")
@@ -193,9 +204,14 @@ test("destination failures do not block input checkpoints by default", async () 
       count: 1
     }
   });
+
+  const [delivery] = await runtime.deliveries.list({});
+  assert.equal(delivery.status, "failed");
+  assert.equal(delivery.attempts, 1);
+  assert.equal(delivery.lastError, "destination exploded");
 });
 
-test("destination failures can block checkpoint commits when configured", async () => {
+test("blockInputOnFailure is ignored: the checkpoint commits and the delivery is retried on its own", async () => {
   const dir = await mkdtemp(join(tmpdir(), "brainstem-destination-blocking-"));
   const pluginPath = join(dir, "checkpoint-plugin.mjs");
   const destinationPath = join(dir, "failing-destination.mjs");
@@ -239,13 +255,17 @@ test("destination failures can block checkpoint commits when configured", async 
 
   await assert.rejects(
     () => runtime.runOnce(),
-    /destinations failed/i
+    /destination exploded/
   );
 
-  assert.equal(
-    existsSync(checkpointPath),
-    false
+  assert.deepEqual(
+    JSON.parse(await readFile(checkpointPath, "utf8")),
+    { "checkpoint-test-input": { count: 1 } }
   );
+
+  const [job] = await runtime.transport.listJobs({});
+  assert.equal(job.queue, "deliver");
+  assert.equal(job.state, "ready");
 });
 
 test("http health input emits unhealthy observations", async () => {
@@ -546,9 +566,11 @@ test("http json destination posts output envelope", async () => {
           }
         },
         signal: new AbortController().signal,
-        logger: silentLogger
+        logger: silentLogger,
+        idempotencyKey: "api-hook:http:example:health:r1:e1"
       },
-      {
+      createOutputEnvelope({
+        idempotencyKey: "api-hook:http:example:health:r1:e1",
         decision: {
           version: "1",
           kind: "decision",
@@ -574,25 +596,18 @@ test("http json destination posts output envelope", async () => {
           }
         },
         input: {
-          plugin: {
-            name: "@brainstem/http-health"
-          },
+          id: "api-health",
+          plugin: "@brainstem/http-health",
           name: "check",
-          entry: {
-            id: "api-health",
-            module: "./plugins/http-health/index.mjs"
-          }
+          module: "./plugins/http-health/index.mjs"
         },
         destination: {
-          plugin: {
-            name: "@brainstem/http-json"
-          },
+          id: "api-hook",
+          plugin: "@brainstem/http-json",
           name: "default",
-          entry: {
-            module: "./plugins/http-json/index.mjs"
-          }
+          module: "./plugins/http-json/index.mjs"
         }
-      }
+      })
     );
   }
   finally {
@@ -604,6 +619,10 @@ test("http json destination posts output envelope", async () => {
   assert.equal(calls[0].options.method, "POST");
   assert.equal(calls[0].options.headers["content-type"], "application/json");
   assert.equal(calls[0].options.headers["x-test"], "yes");
+  assert.equal(
+    calls[0].options.headers["idempotency-key"],
+    "api-hook:http:example:health:r1:e1"
+  );
 
   const body = JSON.parse(calls[0].options.body);
   assert.equal(body.version, "1");
@@ -617,6 +636,8 @@ test("http json destination posts output envelope", async () => {
     "dispatch"
   );
   assert.equal(body.payload.input.id, "api-health");
+  assert.equal(body.payload.destination.id, "api-hook");
+  assert.equal(body.payload.idempotencyKey, "api-hook:http:example:health:r1:e1");
 });
 
 test("opencode runner destination calls server API and logs events", async () => {
@@ -702,7 +723,7 @@ test("opencode runner destination calls server API and logs events", async () =>
         signal: new AbortController().signal,
         logger: captureLogger(logs)
       },
-      {
+      outputEnvelope({
         decision: {
           version: "1",
           kind: "decision",
@@ -727,7 +748,7 @@ test("opencode runner destination calls server API and logs events", async () =>
             message: "Something is broken"
           }
         }
-      }
+      })
     );
   }
   finally {
@@ -753,6 +774,84 @@ test("opencode runner destination calls server API and logs events", async () =>
   );
   assert.ok(
     logs.some(log => log.message === "opencode api runner completed")
+  );
+});
+
+test("opencode runner resumes the session of a retried delivery", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  const store = new MemoryPluginStateStore();
+  let failPrompt = true;
+
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), method: options.method ?? "GET" });
+
+    if (String(url).includes("/event?")) {
+      return { ok: true, status: 200, statusText: "OK", body: asyncIterable([]) };
+    }
+
+    if (String(url).includes("/session?")) {
+      return jsonResponse({ id: "ses_retry", title: "Brainstem task" });
+    }
+
+    if (String(url).includes("/session/ses_retry/prompt_async")) {
+      if (failPrompt) {
+        failPrompt = false;
+        throw new Error("connection reset");
+      }
+      return noContentResponse();
+    }
+
+    if (String(url).includes("/session/status")) {
+      return jsonResponse({});
+    }
+
+    if (String(url).includes("/session/ses_retry/message")) {
+      return jsonResponse([]);
+    }
+
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  const context = attempt => createDestinationContext({
+    config: { serverUrl: "http://opencode.test", dir: "/tmp/brainstem-test", timeoutMs: 5_000 },
+    signal: new AbortController().signal,
+    logger: silentLogger,
+    stateStore: store,
+    plugin: "@brainstem/opencode-runner",
+    destination: "default",
+    idempotencyKey: "runner:github:repo:issue:1:r1:e1",
+    attempt
+  });
+
+  const output = outputEnvelope({
+    decision: { version: "1", kind: "decision", payload: { observation_id: "github:repo:issue:1", decision: "queue", route: "coding" } },
+    observation: {
+      version: "1",
+      kind: "observation",
+      payload: { id: "github:repo:issue:1", source: { type: "github", name: "repo" }, type: "issue", state: "open", title: "Fix bug", message: "Broken" }
+    }
+  });
+
+  try {
+    await assert.rejects(
+      () => opencodeRunnerPlugin.destinations.default.handle(context(1), output),
+      /connection reset/
+    );
+    await opencodeRunnerPlugin.destinations.default.handle(context(2), output);
+  }
+  finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const created = calls.filter(call => call.url.includes("/session?") && call.method === "POST");
+  assert.equal(created.length, 1, "the retry must reuse the first session");
+  assert.equal(calls.filter(call => call.url.includes("/prompt_async")).length, 2);
+
+  // Finished deliveries do not leave session state behind.
+  assert.equal(
+    await store.get("destination:@brainstem/opencode-runner:default", "session:runner:github:repo:issue:1:r1:e1"),
+    undefined
   );
 });
 
@@ -784,9 +883,10 @@ test("matrix destination sends room messages", async () => {
           }
         },
         signal: new AbortController().signal,
-        logger: silentLogger
+        logger: silentLogger,
+        idempotencyKey: "matrix:http:example:health:r1:e1"
       },
-      {
+      outputEnvelope({
         decision: {
           payload: {
             decision: "dispatch",
@@ -809,13 +909,19 @@ test("matrix destination sends room messages", async () => {
             }
           }
         }
-      }
+      })
     );
 
     assert.equal(calls.length, 1);
     assert.match(
       calls[0].url,
       /^https:\/\/matrix\.example\/_matrix\/client\/v3\/rooms\//
+    );
+    // The delivery's idempotency key is the Matrix txnId.
+    assert.ok(
+      calls[0].url.endsWith(
+        `/send/m.room.message/${encodeURIComponent("matrix:http:example:health:r1:e1")}`
+      )
     );
     assert.equal(calls[0].options.method, "PUT");
     assert.equal(calls[0].options.headers.authorization, "Bearer secret");
@@ -1386,7 +1492,7 @@ function matrixEvent({
   decision,
   state
 }) {
-  return {
+  return outputEnvelope({
     decision: {
       payload: {
         observation_id: id,
@@ -1414,7 +1520,7 @@ function matrixEvent({
         }
       }
     }
-  };
+  });
 }
 
 function checkpointConfig(path) {
@@ -1558,4 +1664,16 @@ export default {
   }
 };
 `;
+}
+
+/*
+ * Wrap { decision, observation, ... } as the brainstem.output
+ * envelope a v2 destination receives.
+ */
+function outputEnvelope(payload) {
+  return {
+    version: "1",
+    kind: "brainstem.output",
+    payload: { pollId: null, input: {}, destination: {}, ...payload }
+  };
 }

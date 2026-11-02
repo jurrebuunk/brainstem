@@ -1,12 +1,15 @@
 import { defineDestinationPlugin } from "../../src/sdk/index.mjs";
 
 export default defineDestinationPlugin({
-  apiVersion: "brainstem.destination/v1",
+  apiVersion: "brainstem.destination/v2",
   name: "@brainstem/log-decisions",
 
   destinations: {
     default: {
-      async handle(ctx, event) {
+      async handle(ctx, output) {
+        const event =
+          output.payload;
+
         const decision =
           event.decision.payload.decision;
 

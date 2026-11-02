@@ -2,16 +2,32 @@ import { defineDestinationPlugin } from "../../src/sdk/index.mjs";
 import { normalizeConfig } from "./config.mjs";
 import { buildPrompt } from "./prompt.mjs";
 
+/*
+ * Sessions are keyed on the delivery's idempotency key in
+ * ctx.state, so a retried delivery resumes the session it
+ * already created (and does not prompt it twice) instead of
+ * starting a new agent run.
+ */
+const SESSION_KEY_PREFIX = "session:";
+
 export default defineDestinationPlugin({
-  apiVersion: "brainstem.destination/v1",
+  apiVersion: "brainstem.destination/v2",
   name: "@brainstem/opencode-runner",
 
   destinations: {
     default: {
-      async handle(ctx, event) {
+      async handle(ctx, output) {
+        // { decision, observation, pollId, input, destination }
+        const event = output.payload;
         const config = normalizeConfig(ctx.config);
         const prompt = buildPrompt(config, event);
         const startedAt = Date.now();
+        const stateKey = ctx.idempotencyKey
+          ? SESSION_KEY_PREFIX + ctx.idempotencyKey
+          : null;
+        const previous = stateKey
+          ? await ctx.state.get(stateKey)
+          : null;
 
         ctx.logger.info?.(
           "opencode api runner started",
@@ -19,30 +35,64 @@ export default defineDestinationPlugin({
             observationId: event.observation.payload.id,
             decision: event.decision.payload.decision,
             route: event.decision.payload.route,
-            serverUrl: config.serverUrl
+            serverUrl: config.serverUrl,
+            attempt: ctx.attempt
           }
         );
 
-        const session = await createSession(config, event, ctx);
+        const session = previous?.sessionId
+          ? { id: previous.sessionId, title: previous.title }
+          : await createSession(config, event, ctx);
 
-        ctx.logger.info?.(
-          "opencode session created",
-          {
-            sessionId: session.id,
-            title: session.title,
-            url: `${config.serverUrl}/session/${session.id}`
+        if (previous?.sessionId) {
+          ctx.logger.info?.(
+            "opencode session resumed",
+            {
+              sessionId: session.id,
+              promptSent: previous.promptSent === true
+            }
+          );
+        }
+        else {
+          if (stateKey) {
+            await ctx.state.set(stateKey, {
+              sessionId: session.id,
+              title: session.title ?? null,
+              promptSent: false
+            });
           }
-        );
+
+          ctx.logger.info?.(
+            "opencode session created",
+            {
+              sessionId: session.id,
+              title: session.title,
+              url: `${config.serverUrl}/session/${session.id}`
+            }
+          );
+        }
 
         const eventStream = streamEvents(config, ctx, session.id);
 
         try {
-          const result = await sendPrompt(
-            config,
-            session.id,
-            prompt,
-            ctx
-          );
+          let result = { accepted: true, mode: "resumed" };
+
+          if (previous?.promptSent !== true) {
+            result = await sendPrompt(
+              config,
+              session.id,
+              prompt,
+              ctx
+            );
+
+            if (stateKey) {
+              await ctx.state.set(stateKey, {
+                sessionId: session.id,
+                title: session.title ?? null,
+                promptSent: true
+              });
+            }
+          }
 
           const completion = config.waitForCompletion || config.captureOutput
             ? await waitForSessionIdle(config, session.id, ctx)
@@ -66,6 +116,10 @@ export default defineDestinationPlugin({
               messages: summarizeMessages(messages)
             }
           );
+
+          if (stateKey) {
+            await ctx.state.delete(stateKey);
+          }
         }
         finally {
           eventStream.abort();
