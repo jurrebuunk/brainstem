@@ -77,8 +77,7 @@ runtime: {
   api: {
     enabled: true,
     host: "127.0.0.1",
-    port: 5174,
-    telemetryDbPath: "data/web-stats.sqlite"
+    port: 5174
   }
 }
 ```
@@ -105,10 +104,15 @@ GET  /api/roles        role and permission list
 POST /api/roles        create role
 PUT  /api/roles/:id    update role
 DELETE /api/roles/:id  delete custom role
+GET  /api/pipeline     job queue and delivery log counts
+GET  /api/jobs         pipeline jobs (?state=ready|running|dead&queue=decide|deliver)
+GET  /api/deliveries   delivery log (?status=pending|failed|delivered|dead|discarded)
+POST /api/jobs/redrive re-queue dead jobs: { "ids": [...] }
+POST /api/jobs/discard drop dead jobs: { "ids": [...] }
 GET  /api/health       health check
 ```
 
-The backend persists raw telemetry/output events and derived stats in SQLite at `data/web-stats.sqlite` by default. Override with `BRAINSTEM_API_DB=/path/to/web-stats.sqlite` or `runtime.api.telemetryDbPath`. On Web UI restart, the Flow page reloads recent events from the backend and continues with live updates from `/api/stream`.
+The backend persists raw telemetry/output events and derived stats in the same database as the runtime (`runtime.database`, or `BRAINSTEM_DATABASE_URL`; see [State](state.md)). The 1.x settings `runtime.api.telemetryDbPath` and `BRAINSTEM_API_DB` are no longer used; an old `data/web-stats.sqlite` is imported once on first start. On Web UI restart, the Flow page reloads recent events from the backend and continues with live updates from `/api/stream`.
 
 Event log retention is controlled by `WEB_EVENTS_PRUNE_AFTER_DAYS` and `WEB_EVENTS_MAX_ROWS` (defaults: 14 days and 50,000 rows). Set either to `0` to disable that pruning mode. Old time-series rows are pruned after 14 days by default; override with `STATS_PRUNE_AFTER_DAYS` or set it to `0` to disable time-series pruning.
 

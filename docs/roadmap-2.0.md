@@ -1,6 +1,6 @@
 # Brainstem 2.0 — Scale-out architecture & roadmap
 
-Status: **accepted** (all decisions in §7 are final) · Target: `v2.0.0` · Baseline: `v0.1.0` (single Node process + SQLite)
+Status: **accepted** (all decisions in §7 are final) · Current release: `v1.3.0` (Phases 0–2) · Target: `v2.0.0` · Baseline: `v0.1.0` (single Node process + SQLite)
 
 ## 1. Goal
 
@@ -182,19 +182,19 @@ Core tables: `inputs` (schedule + lease), `checkpoints`, `observations`, `record
 
 Each phase is releasable on its own and keeps `role=all` working. Rough sizing assumes one developer.
 
-### Phase 0 — Safety net (≈1 wk) → `1.1`
+### Phase 0 — Safety net (≈1 wk) → `1.1` · shipped in 1.3.0
 - CI workflow running `npm test` on PRs (today only the Docker build runs).
 - Tests for: `start()` loop/abort, poll-retry re-delivery, per-ID ordering, config save, SSE.
 - Multi-process test harness (spawn 2–3 cores against one DB, assert no duplicate deliveries) — this becomes the 2.0 acceptance test.
 - Record the decisions in §7 as ADRs `docs/adr/0001`–`0006`.
 
-### Phase 1 — Storage abstraction (≈2–3 wks) → `1.2`
+### Phase 1 — Storage abstraction (≈2–3 wks) → `1.2` · shipped in 1.3.0
 - Introduce Kysely; make `RecordStore`, `CheckpointStore`, telemetry, auth stores **async**.
 - Move checkpoints and Matrix state from JSON files into DB tables (`checkpoints`, `plugin_state`).
 - Postgres dialect + migrations; `brainstem migrate`, `migrate sqlite-to-pg`.
 - Fix quick wins: `busy_timeout`, atomic first-admin, prune via periodic job instead of per-event.
 
-### Phase 2 — Durable pipeline (≈3–4 wks) → `1.3` · implemented, see [Delivery pipeline](delivery-pipeline.md)
+### Phase 2 — Durable pipeline (≈3–4 wks) → `1.3` · shipped in 1.3.0, see [Delivery pipeline](delivery-pipeline.md)
 - `Transport` interface + `sqlite` driver; `jobs` and `deliveries` tables.
 - Split the runtime into `poll`, `decide`, `deliver` stages connected by jobs (single process still).
 - Transactional checkpoint commit; record CAS; per-key serialization.
