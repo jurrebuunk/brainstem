@@ -47,3 +47,7 @@ Follow-ups:
 - Leases with fencing epochs, `cores` heartbeat table, advisory-lock singletons (Phase 3).
 - Optional `ctx.lease` for long-lived inputs (Phase 3, see [ADR-0004](0004-destination-plugin-sdk-v2.md)).
 - Tune lease TTL and claim batch size; chaos-test core kills mid-poll (Phase 5).
+
+## Implementation
+
+Implemented in Phase 3 (2.0.0-beta): the `inputs` table (migration `0005_cluster`) and `src/runtime/input-leases.mjs`. The checkpoint commit runs `fence(lease)` in the same transaction as the decide jobs. Leases held by cores the registry reports `stopped` or `lost` are reclaimed immediately (the ADR-0008 follow-up). Inputs receive `ctx.lease`. Singletons (delivery-log pruning, API maintenance) use `withSingletonLock` (`src/db/locks.mjs`); on SQLite that lock is process-local.

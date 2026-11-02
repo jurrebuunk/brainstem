@@ -46,5 +46,5 @@ Negative:
 
 Follow-ups:
 
-- Phase 3: input leases and job reclaim can use `lost` cores to take over work faster than lease expiry alone.
-- When config becomes versioned data (ADR-0005), record each core's config version in its row and compare it with the active version.
+- Phase 3: input leases can use `lost` cores to take over work faster than lease expiry alone (done: stopped or lost owners' input leases are claimable at once).
+- When config becomes versioned data (ADR-0005), record each core's config version in its row and compare it with the active version (done: `cores.config_version`; the topology is consistent when running cores share a version, and merged across cores that run different `--queues`).

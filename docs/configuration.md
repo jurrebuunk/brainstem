@@ -200,7 +200,37 @@ Give each destination entry a unique `id`. It is part of every delivery's idempo
 `runtime.laya` is passed to `Laya.load()`. Useful options:
 
 - `cacheDir`: where downloaded Laya model files are cached
-- `modelDir`: use a pre-downloaded model directory and skip network downloads
+- `modelDir`: use a pre-downloaded model directory and skip network downloads (also `BRAINSTEM_LAYA_MODEL_DIR`, for example the mounted `brainstem-models` image)
+- `workers`: run Laya in this many worker threads (default 0: in the main thread). Changed observations are then evaluated in parallel, up to `workers` at a time, and never block the event loop. Each worker holds its own model session, so memory grows with it. `--decide-concurrency N` sets this and `queue.decide.concurrency` together.
+
+Graceful shutdown and input scheduling:
+
+```js
+runtime: {
+  shutdown: { timeoutMs: 25000 },  // SIGTERM: let in-flight work finish this long
+  inputs: { leaseMs: 30000, concurrency: 16 }  // see delivery-pipeline.md#input-scheduling
+}
+```
+
+## Versioned config
+
+By default the config is this file (`configSource: "file"`). The Web UI shows it read-only, and the API never writes or executes config files.
+
+To edit config in the UI, or to run several cores, store it in the database:
+
+```sh
+node brainstem.mjs config import --comment "initial"
+BRAINSTEM_CONFIG_SOURCE=database node brainstem.mjs
+```
+
+- Every save is a new, immutable version in `config_versions`, validated against the [JSON Schema](../src/config/schema.mjs) (`GET /api/config/schema`). One version is active.
+- Saves in the UI or through `PUT /api/config` send `If-Match` with the version they edited. When someone else activated another version meanwhile, the save fails with 409 instead of overwriting their change.
+- Activating a version (`brainstem config activate <id>`, or **Activate** in the UI) is a rollback. Running cores reload the active version without a restart: claiming stops, in-flight work finishes, inputs and destinations reload, and work resumes. A version that fails to load is logged, and the previous one keeps running.
+- Stored config must be plain data: functions (such as agentOS `tools.*.run`) can't be stored, and `config import` reports where they are.
+- Bootstrap settings stay per process, in the file or the environment: `runtime.database`, `api`, `logging`, `telemetry`, `coreId`, `role`, `queues`. They are left out on import, and a process's own values win.
+- `brainstem config export` writes a version back as a config module (GitOps, backups).
+
+Hot reload covers inputs, destinations, policy, Laya questions and load options, `runtime.queue` (not `transport`), `inputs` (not `scheduling`), `handoff` and `shutdown`. The other settings need a restart.
 
 ## Secrets
 

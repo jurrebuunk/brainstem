@@ -217,6 +217,19 @@ export default {
       }
     },
 
+    // Input scheduling: with the database transport inputs are leased from
+    // the `inputs` table, so several cores never poll one input at once
+    // (docs/delivery-pipeline.md#input-scheduling).
+    inputs: {
+      leaseMs: 30000,
+      concurrency: 16
+    },
+
+    // SIGTERM: stop claiming, let in-flight polls and jobs finish this long.
+    shutdown: {
+      timeoutMs: 25000
+    },
+
     // Delivered and discarded rows are pruned from the delivery log after
     // this many days. Dead deliveries stay until redriven or discarded.
     deliveries: {
@@ -243,6 +256,8 @@ export default {
       // modelDir: "./data/laya-model",
       // Optional: override download cache location.
       // cacheDir: "./data/laya-cache"
+      // Optional: evaluate in N worker threads (parallel, off the event loop).
+      // workers: 1
     }
   },
 

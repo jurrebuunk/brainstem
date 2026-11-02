@@ -1,6 +1,6 @@
 # Brainstem 2.0 — Scale-out architecture & roadmap
 
-Status: **accepted** (all decisions in §7 are final) · Current release: `v1.3.0` (Phases 0–2) · Target: `v2.0.0` · Baseline: `v0.1.0` (single Node process + SQLite)
+Status: **accepted** (all decisions in §7 are final) · Current release: `v1.4.0` (Phases 0–2) · Phase 3 implemented on main · Target: `v2.0.0` · Baseline: `v0.1.0` (single Node process + SQLite)
 
 ## 1. Goal
 
@@ -202,7 +202,7 @@ Each phase is releasable on its own and keeps `role=all` working. Rough sizing a
 - Retries/backoff/DLQ + DLQ view and redrive in the UI.
 - **Plugin SDK v2** (`brainstem.destination/v2`): `handle(ctx, output)` receives the serializable `brainstem.output` payload + `ctx.idempotencyKey` instead of live plugin objects. v1 adapter shim kept.
 
-### Phase 3 — Multi-core (≈3–4 wks) → `2.0.0-beta`
+### Phase 3 — Multi-core (≈3–4 wks) → `2.0.0-beta` · implemented, see [Cluster mode](cluster.md)
 - `postgres` transport driver (SKIP LOCKED, LISTEN/NOTIFY).
 - Lease-based input scheduling with fencing epochs; `cores` heartbeat table.
 - `--role` / `--queues` switches; advisory-lock singletons.

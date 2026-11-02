@@ -146,6 +146,12 @@ Event log retention is controlled by `WEB_EVENTS_PRUNE_AFTER_DAYS` and `WEB_EVEN
 
 The backend config API writes atomically after `node --check` validation and creates a timestamped `.bak` file next to the config before replacement. Override the editable config path with `BRAINSTEM_CONFIG=/path/to/brainstem.config.mjs`. Request bodies are capped at 1 MiB by default; override with `MAX_BODY_BYTES`.
 
+### Configuration
+
+The Config page shows where the config comes from. With `configSource: "file"`, it shows the config file read-only: edit the file and restart. With `configSource: "database"`, it edits the active version as JSON. **Save version** stores and activates a new version: the save sends `If-Match`, so a concurrent change by someone else is reported instead of overwritten. The version list can open any version in the editor or activate it (rollback). Running cores reload the active version on their own. See [Configuration](configuration.md#versioned-config).
+
+The live stream reconnects with `Last-Event-ID`, so behind several API replicas the browser resumes on any of them without missing events.
+
 ## Authentication and authorization
 
 The first browser visit starts a guided first-run onboarding flow. It explains the security model, warns when setup is not running on localhost/HTTPS, requires a strong confirmed password, and creates the initial administrator. Brainstem ships no default credentials and the setup endpoint refuses to run again after an administrator exists.

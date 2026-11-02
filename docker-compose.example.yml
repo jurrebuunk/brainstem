@@ -13,8 +13,10 @@ services:
       # To use the optional postgres service below instead:
       # BRAINSTEM_DATABASE_URL: postgres://brainstem:${POSTGRES_PASSWORD}@postgres:5432/brainstem
     volumes:
-      # Writable so backend-owned /api/config can save. Keep Web/API behind localhost or auth.
-      - ./brainstem.config.mjs:/app/brainstem.config.mjs
+      # Read-only: the API never writes the config file. To edit config in
+      # the UI, run `brainstem config import` and set
+      # BRAINSTEM_CONFIG_SOURCE=database (docs/configuration.md).
+      - ./brainstem.config.mjs:/app/brainstem.config.mjs:ro
       - brainstem-data:/app/data
     command: ["node", "brainstem.mjs"]
     # depends_on:

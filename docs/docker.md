@@ -196,7 +196,8 @@ BRAINSTEM_API_HOST         default 127.0.0.1
 BRAINSTEM_API_PORT         default 5174
 BRAINSTEM_DATABASE_URL     database for all state; default sqlite:data/brainstem.sqlite
 BRAINSTEM_API_TOKEN        optional bearer token for machine telemetry ingestion/proxy calls
-BRAINSTEM_CONFIG           editable config path; default brainstem.config.mjs
+BRAINSTEM_CONFIG           config file path; default brainstem.config.mjs
+BRAINSTEM_CONFIG_SOURCE    file (default, read-only in the UI) or database (versioned)
 MAX_EVENTS                 live in-memory SSE safety buffer; default 2000
 MAX_BODY_BYTES             request body cap; default 1048576
 STATS_PRUNE_AFTER_DAYS     stats time-series retention; default 14; set 0 to disable
@@ -214,7 +215,11 @@ WEB_BACKEND_URL            backend API base URL; default http://127.0.0.1:5174
 WEB_BACKEND_TOKEN          optional bearer token forwarded to backend API
 ```
 
-Config saves are owned by the backend API, syntax-checked with `node --check`, written atomically, and backed up as timestamped `.bak` files next to the config. The first Web UI visit creates the initial administrator; no default credentials are shipped.
+The API never writes or executes the config file: mount it read-only. To edit config in the UI, store it in the database (`docker compose run --rm brainstem node brainstem.mjs config import`) and set `BRAINSTEM_CONFIG_SOURCE=database`. See [Configuration](configuration.md#versioned-config). The first Web UI visit creates the initial administrator; no default credentials are shipped.
+
+## Cluster roles
+
+The same image runs every role: `node brainstem.mjs --role core --queues deliver`, `--role api`, `--role web`. The Laya model is published as `ghcr.io/jurrebuunk/brainstem-models:laya-<version>` for mounting at `/models` (`BRAINSTEM_LAYA_MODEL_DIR=/models`). See [Cluster mode](cluster.md).
 
 ## Verify published image
 

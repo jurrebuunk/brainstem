@@ -48,3 +48,14 @@ Follow-ups:
 - Config as versioned data, JSON Schema, hot reload, `config import|export` (Phase 3).
 - `configSource` value in the Helm chart (Phase 4).
 - Upgrade guide section for JS-based configs (Phase 5).
+
+## Implementation
+
+Implemented in Phase 3 (2.0.0-beta):
+
+- `config_versions` and `active_config` (migration `0005_cluster`), stored in `src/config/versions.mjs`.
+- Validation against `CONFIG_SCHEMA` (`src/config/schema.mjs`) with a small in-house validator for the JSON Schema subset it uses, avoiding a dependency. The schema is served at `GET /api/config/schema`.
+- `brainstem config import|export|list|show|activate|validate`.
+- `BRAINSTEM_CONFIG_SOURCE=file|database`. In file mode the API is read-only; the API no longer writes or executes config files.
+- Hot reload through `runtime.reconfigure()`, driven by the `config` notification plus a periodic check (`src/config/watch.mjs`).
+- Bootstrap keys (`runtime.database`, `api`, `logging`, `telemetry`, `coreId`, `role`, `queues`) stay per process.
