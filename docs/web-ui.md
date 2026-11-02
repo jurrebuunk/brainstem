@@ -54,6 +54,11 @@ Click a node to open the node inspector. It groups activity by the operational u
 The sidebar has these pages:
 
 - **Flow** — live inputs → core → destinations graph. Core edge handles are stacked vertically to avoid line congestion.
+  - **Structure** comes from `GET /api/topology`: one node per configured input and destination `id`, so two tasks of one plugin (for example two agentOS tasks) are separate nodes. Against a backend without that endpoint, or without `runtime:read`, it falls back to the latest snapshot and the ids seen in events.
+  - **Core pool**: the core node summarises the registered cores ("2 cores · 1 running · 1 lost") and turns `degraded` or `offline` when cores are lost or none run. The **Cores** panel (top right) lists each core with its status, last heartbeat, version, role and queues. Once there are several cores, input nodes show which core polled them last.
+  - **Handoffs**: a destination that hands observations back to the core (`ctx.emit`, for example an agent's report) gets a dashed return edge into the core, labelled with the number handed off and animated while active. Handed-off observations are never drawn as inputs. Events from older runtimes, which recorded a handoff as input `destination:<id>`, are drawn the same way.
+  - **Inspector**: destinations match their events by id. Core decisions show the observation's origin (an input, or "handoff from log-triage (depth 1)") and the core that decided it.
+  - Activity, animation and per-node counts come from the event window the Web UI holds (the most recent 2000 events).
 - **Stats** — persisted counters, KPI cards, filterable metric tables, and interactive uPlot time-series charts with range controls, live pause, hover values, and drag-to-zoom.
 - **Deliveries** — the [delivery pipeline](delivery-pipeline.md): decide and deliver queue depth, the delivery log filtered by status, and dead jobs. Users with `runtime:control` can redrive or discard dead jobs. Needs `runtime:read`.
 - **Settings** — subtabs for:

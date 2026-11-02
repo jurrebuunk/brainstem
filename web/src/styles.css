@@ -2651,3 +2651,116 @@ button:disabled {
   color: var(--muted);
   font-size: var(--font-size-xs);
 }
+
+/* Handoffs: a destination handing observations back to the core. */
+.react-flow__handle.node-handle.handoff-handle {
+  background: var(--brainstem-active) !important;
+  border-radius: 50% !important;
+}
+
+.react-flow__edge.edge-handoff .react-flow__edge-text {
+  fill: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+}
+
+.react-flow__edge.edge-handoff .react-flow__edge-textbg {
+  fill: var(--panel);
+}
+
+.node-footnote {
+  overflow: hidden;
+  margin-top: 9px;
+  color: var(--muted-2);
+  font-size: var(--font-size-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Cores: the runtime processes behind the core pool node. */
+.cores-panel {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 9;
+  width: min(320px, calc(100% - 36px));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  box-shadow: 0 10px 24px var(--shadow);
+  color: var(--text);
+  font-size: var(--font-size-xs);
+}
+
+.cores-panel-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 8px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cores-panel-toggle .material-symbols-outlined {
+  font-size: 18px;
+  color: var(--muted);
+}
+
+.cores-panel-count {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.cores-panel-list {
+  display: grid;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 0;
+  border-top: 1px solid var(--border);
+  padding: 6px;
+  list-style: none;
+}
+
+.core-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  border-radius: var(--radius-md);
+  padding: 6px 8px;
+}
+
+.core-row div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.core-row strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.core-row span {
+  color: var(--muted);
+}
+
+.core-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--muted-2);
+}
+
+.core-running .core-dot { background: var(--success); }
+.core-lost .core-dot { background: var(--danger); }
+.core-stopped .core-dot { background: var(--muted-2); }

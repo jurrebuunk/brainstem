@@ -14,10 +14,7 @@ import {
   useEdgesState,
   useNodesState
 } from "@xyflow/react";
-import {
-  buildGraph,
-  eventNodeIds
-} from "./events.js";
+import { buildFlowModel } from "./flow/model.js";
 import NodeInspector from "./components/NodeInspector.jsx";
 
 const nodeTypes = {
@@ -106,15 +103,16 @@ export default function App() {
   const auth = useAuth();
   const [flowInstance, setFlowInstance] = useState(null);
   const autoFitDoneRef = useRef(false);
+  const topology = useTopology(auth);
   const graph = useMemo(() => {
     try {
-      return buildGraph(events, clock);
+      return buildFlowModel({ topology, events, now: clock });
     }
     catch (error) {
       console.error("Failed to build flow graph", error);
-      return { nodes: [], edges: [], error };
+      return { nodes: [], edges: [], cores: [], nodeIdsFor: () => [], error };
     }
-  }, [events, clock]);
+  }, [topology, events, clock]);
   const [nodes, setNodes, onNodesChange] = useNodesState(graph.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(graph.edges);
 
@@ -221,9 +219,9 @@ export default function App() {
 
     return events
       .map((event, index) => ({ event, index }))
-      .filter(({ event }) => eventNodeIds(event).includes(selectedNode.id))
+      .filter(({ event }) => graph.nodeIdsFor(event).includes(selectedNode.id))
       .reverse();
-  }, [events, selectedNode]);
+  }, [events, selectedNode, graph]);
 
   if (auth.loading) {
     return <AuthShell title="Loading Brainstem…" />;
@@ -262,6 +260,8 @@ export default function App() {
           <FlowPage
             nodes={nodes}
             edges={edges}
+            cores={graph.cores}
+            structure={graph.structure}
             graphError={graph.error}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
@@ -288,11 +288,52 @@ export default function App() {
           node={selectedNode}
           events={nodeEvents}
           allEvents={events}
+          nodeIdsFor={graph.nodeIdsFor}
           onClose={() => setSelectedNode(null)}
         />
       )}
     </main>
   );
+}
+
+/*
+ * Structure for the Flow page from GET /api/topology (cores plus
+ * configured inputs/destinations). null when the user may not read
+ * it or the backend predates the endpoint; the flow model then
+ * falls back to snapshot events.
+ */
+function useTopology(auth) {
+  const [topology, setTopology] = useState(null);
+  const allowed = Boolean(auth.user) && hasPermission(auth.user, "runtime:read");
+
+  useEffect(() => {
+    if (!allowed) {
+      setTopology(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const load = () => {
+      auth.apiFetch("/api/topology")
+        .then(response => response.json())
+        .then(body => {
+          if (!cancelled) setTopology(body);
+        })
+        .catch(() => {
+          if (!cancelled) setTopology(null);
+        });
+    };
+
+    load();
+    const interval = setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [allowed, auth.user?.id]);
+
+  return topology;
 }
 
 function useAuth() {
@@ -622,11 +663,12 @@ function Sidebar({ page, setPage, collapsed, setCollapsed, width, setWidth, user
   );
 }
 
-function FlowPage({ nodes, edges, graphError, onNodesChange, onEdgesChange, onNodeClick, onInit }) {
+function FlowPage({ nodes, edges, cores = [], structure, graphError, onNodesChange, onEdgesChange, onNodeClick, onInit }) {
   const [interactive, setInteractive] = useState(false);
 
   return (
     <div className="flow-page">
+      {cores.length > 0 && <CoresPanel cores={cores} />}
       {graphError && (
         <FlowNotice
           title="Flow unavailable"
@@ -660,6 +702,43 @@ function FlowPage({ nodes, edges, graphError, onNodesChange, onEdgesChange, onNo
         <Controls onInteractiveChange={setInteractive} />
       </ReactFlow>
     </div>
+  );
+}
+
+/*
+ * The registered cores: one row per runtime process, with its
+ * heartbeat status. With one runtime this is a single row.
+ */
+function CoresPanel({ cores }) {
+  const [open, setOpen] = useState(false);
+  const running = cores.filter(core => core.status === "running").length;
+
+  return (
+    <aside className={`cores-panel${open ? " is-open" : ""}`} aria-label="Cores">
+      <button className="cores-panel-toggle" onClick={() => setOpen(value => !value)} aria-expanded={open}>
+        <span className="material-symbols-outlined" aria-hidden="true">memory</span>
+        <span>{cores.length} core{cores.length === 1 ? "" : "s"}</span>
+        <span className="cores-panel-count">{running} running</span>
+        <span className="material-symbols-outlined" aria-hidden="true">{open ? "expand_less" : "expand_more"}</span>
+      </button>
+      {open && (
+        <ul className="cores-panel-list">
+          {cores.map(core => (
+            <li key={core.id} className={`core-row core-${core.status}`}>
+              <span className="core-dot" aria-hidden="true" />
+              <div>
+                <strong title={core.id}>{core.id}</strong>
+                <span>
+                  {core.status} · seen {formatTime(core.lastSeenAt)}
+                  {core.version ? ` · v${core.version}` : ""}
+                </span>
+                <span>{[core.role, ...(core.queues ?? [])].join(" · ")}</span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </aside>
   );
 }
 
@@ -708,6 +787,12 @@ function BrainstemNode({ data }) {
       {isDestination && (
         <Handle id="in" type="target" position={Position.Left} className={`node-handle${data.handleActive || data.active ? " is-handle-active" : ""}`} />
       )}
+      {isDestination && data.handoffOut && (
+        <Handle id="handoff-out" type="source" position={Position.Bottom} className={`node-handle handoff-handle${data.handoffActive ? " is-handle-active" : ""}`} />
+      )}
+      {isCore && data.handoffIn && (
+        <Handle id="handoff-in" type="target" position={Position.Bottom} className={`node-handle handoff-handle${data.handoffActive ? " is-handle-active" : ""}`} />
+      )}
 
       <div className="node-header">
         <span>{data.nodeType}</span>
@@ -725,6 +810,8 @@ function BrainstemNode({ data }) {
           </span>
         ))}
       </div>
+
+      {data.footnote && <div className="node-footnote">{data.footnote}</div>}
 
       {isInput && (
         <Handle id="out" type="source" position={Position.Right} className={`node-handle${data.handleActive || data.active ? " is-handle-active" : ""}`} />

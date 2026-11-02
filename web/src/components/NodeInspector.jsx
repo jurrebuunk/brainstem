@@ -8,7 +8,7 @@ import {
 } from "../events.js";
 import { buildInspectorRecords, inspectorMode } from "../telemetry/inspector-records.js";
 
-export default function NodeInspector({ node, events, allEvents, onClose }) {
+export default function NodeInspector({ node, events, allEvents, nodeIdsFor, onClose }) {
   const indexedEvents = useMemo(() => allEvents.map((event, index) => ({ event, index })), [allEvents]);
   const fallbackEvents = useMemo(() => events.map(({ event, index }) => ({
     id: eventId(event, index),
@@ -25,9 +25,9 @@ export default function NodeInspector({ node, events, allEvents, onClose }) {
     rightBlocks: [{ type: "json", title: "payload", value: event.payload ?? {} }]
   })), [events]);
   const records = useMemo(() => {
-    const built = buildInspectorRecords(node, indexedEvents);
+    const built = buildInspectorRecords(node, indexedEvents, { nodeIdsFor });
     return built.length > 0 ? built : fallbackEvents;
-  }, [node, indexedEvents, fallbackEvents]);
+  }, [node, indexedEvents, fallbackEvents, nodeIdsFor]);
   const mode = inspectorMode(node);
   const [selectedRecordId, setSelectedRecordId] = useState(null);
   const selectedRecord = useMemo(() => {
