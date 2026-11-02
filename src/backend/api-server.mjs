@@ -15,6 +15,7 @@ import {
   sendNoContent
 } from "./http-utils.mjs";
 import { createMaintenanceScheduler, DEFAULT_MAINTENANCE_INTERVAL_MS } from "./maintenance.mjs";
+import { DELIVERY_STATUSES, JOB_STATES, createPipelineAdmin, createPipelineStorage } from "../queue/index.mjs";
 import { PERMISSIONS } from "./permissions.mjs";
 import { createSseHub } from "./sse.mjs";
 import { createTelemetryStore } from "./telemetry-store.mjs";
@@ -60,6 +61,8 @@ export function createBackendApiServer({
   let telemetryStore = null;
   let authStore = null;
   let maintenance = null;
+  let pipeline = null;
+  let pipelineAdmin = null;
   let started = null;
 
   async function start() {
@@ -96,6 +99,10 @@ export function createBackendApiServer({
         })
       }
     });
+    // The runtime's job queue and delivery log, in the same database.
+    pipeline = createPipelineStorage({ type: "database", database: handle });
+    pipelineAdmin = createPipelineAdmin(pipeline);
+
     api.telemetryStore = telemetryStore;
     api.authStore = authStore;
     api.database = handle;
@@ -285,6 +292,52 @@ export function createBackendApiServer({
         return;
       }
 
+      if (url.pathname === "/api/pipeline" && request.method === "GET") {
+        requirePermission(session.user, "runtime:read");
+        sendJson(response, await pipelineAdmin.summary());
+        return;
+      }
+
+      if (url.pathname === "/api/deliveries" && request.method === "GET") {
+        requirePermission(session.user, "runtime:read");
+        sendJson(response, await pipeline.deliveries.list({
+          status: oneOf(url.searchParams.get("status"), DELIVERY_STATUSES, "status"),
+          observationId: url.searchParams.get("observationId") || undefined,
+          destination: url.searchParams.get("destination") || undefined,
+          before: url.searchParams.get("before") || undefined,
+          limit: Math.min(clampLimit(url.searchParams.get("limit"), 100), 500)
+        }));
+        return;
+      }
+
+      if (url.pathname === "/api/jobs" && request.method === "GET") {
+        requirePermission(session.user, "runtime:read");
+        sendJson(response, await pipeline.transport.listJobs({
+          state: oneOf(url.searchParams.get("state"), JOB_STATES, "state"),
+          queue: url.searchParams.get("queue") || undefined,
+          beforeId: url.searchParams.get("beforeId") || undefined,
+          limit: Math.min(clampLimit(url.searchParams.get("limit"), 100), 500)
+        }));
+        return;
+      }
+
+      // Redrive or discard dead jobs: { ids: [...] }.
+      const jobAction = url.pathname.match(/^\/api\/jobs\/(redrive|discard)$/);
+      if (jobAction && request.method === "POST") {
+        requirePermission(session.user, "runtime:control");
+        const body = await readJsonBody(request, {}, { maxBodyBytes });
+        const ids = jobIds(body.ids);
+        const jobs = [];
+
+        for (const id of ids) {
+          const job = await pipelineAdmin[jobAction[1]](id);
+          if (job) jobs.push(job);
+        }
+
+        sendJson(response, { [jobAction[1] === "redrive" ? "redriven" : "discarded"]: jobs.map(job => job.id) });
+        return;
+      }
+
       sendJson(response, { error: "Not found" }, 404);
     }
     catch (error) {
@@ -465,6 +518,24 @@ function parseCookies(header = "") {
       return [part.slice(0, index).trim(), decodeURIComponent(part.slice(index + 1).trim())];
     }).filter(Boolean)
   );
+}
+
+function oneOf(value, allowed, name) {
+  if (!value) return undefined;
+  if (!allowed.includes(value)) throw httpError(400, `Unknown ${name} '${value}'`);
+  return value;
+}
+
+function jobIds(value) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 500) {
+    throw httpError(400, "Expected ids: a list of 1 to 500 job ids");
+  }
+
+  return value.map(id => {
+    const number = Number(id);
+    if (!Number.isSafeInteger(number) || number <= 0) throw httpError(400, `Invalid job id '${id}'`);
+    return number;
+  });
 }
 
 function httpError(statusCode, message) {

@@ -6,7 +6,8 @@ import { join } from "node:path";
 
 import { createBackendApiServer, normalizeBackendApiConfig } from "../src/backend/api-server.mjs";
 import { openMigratedDatabase } from "../src/db/index.mjs";
-import { DIALECTS, isolatedDatabaseUrl } from "./helpers/database.mjs";
+import { createPipelineStorage } from "../src/queue/index.mjs";
+import { DIALECTS, dialectTest, isolatedDatabaseUrl } from "./helpers/database.mjs";
 
 test("backend api persists telemetry and exposes stats/history", async () => {
   const dir = await mkdtemp(join(tmpdir(), "brainstem-api-"));
@@ -420,3 +421,83 @@ async function setupAdmin(api) {
   const cookie = setup.headers.getSetCookie().map(value => value.split(";")[0]).join("; ");
   return { cookie, csrfToken: body.csrfToken, user: body.user };
 }
+
+dialectTest("backend api lists dead jobs and redrives or discards them", async ({ handle }) => {
+  const dir = await mkdtemp(join(tmpdir(), "brainstem-api-pipeline-"));
+  const configPath = join(dir, "brainstem.config.mjs");
+  await writeFile(configPath, "export default {}\n");
+
+  // A dead delivery, as the runtime would leave it.
+  const { transport, deliveries } = createPipelineStorage({ type: "database", database: handle });
+  const ids = [];
+  for (const key of ["hook:obs:1:r1:a", "hook:obs:2:r1:b"]) {
+    await deliveries.create({ key, observationId: key.split(":")[1], revision: 1, destination: "hook", plugin: "@brainstem/http-json", decision: "dispatch", output: { kind: "brainstem.output" } });
+    ids.push(...await transport.enqueue([{ queue: "deliver", jobKey: key, payload: { key, destination: "hook" } }]));
+  }
+  for (const job of await transport.claim({ queues: ["deliver"], limit: 2, leaseMs: 60_000, workerId: "w" })) {
+    await transport.nack(job, { error: new Error("HTTP 503"), dead: true });
+    await deliveries.update(job.payload.key, { status: "dead", attempts: 1, last_error: "HTTP 503" });
+  }
+
+  const api = createBackendApiServer({ host: "127.0.0.1", port: 0, configPath, database: handle });
+  await api.listen();
+
+  try {
+    const setup = await fetch(`${api.url}/api/auth/setup`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "v3ry-long-random-root-passphrase!" })
+    });
+    const cookie = setup.headers.getSetCookie?.().join("; ") ?? setup.headers.get("set-cookie");
+    const { csrfToken } = await setup.json();
+    const post = (path, body, headers = {}) => fetch(`${api.url}${path}`, {
+      method: "POST",
+      headers: { cookie, "x-csrf-token": csrfToken, "content-type": "application/json", ...headers },
+      body: JSON.stringify(body)
+    });
+
+    const summary = await fetch(`${api.url}/api/pipeline`, { headers: { cookie } }).then(response => response.json());
+    assert.equal(summary.transport, "database");
+    assert.deepEqual(summary.deliveries, { dead: 2 });
+    assert.deepEqual(summary.jobs.map(({ queue, state, count }) => [queue, state, count]), [["deliver", "dead", 2]]);
+
+    const dead = await fetch(`${api.url}/api/jobs?state=dead`, { headers: { cookie } }).then(response => response.json());
+    assert.deepEqual(dead.map(job => job.id).sort(), [...ids].sort());
+    assert.equal(dead[0].lastError, "HTTP 503");
+
+    const listed = await fetch(`${api.url}/api/deliveries?status=dead`, { headers: { cookie } }).then(response => response.json());
+    assert.equal(listed.length, 2);
+    assert.equal(listed[0].lastError, "HTTP 503");
+
+    assert.equal((await fetch(`${api.url}/api/jobs?state=bogus`, { headers: { cookie } })).status, 400);
+    assert.equal((await post("/api/jobs/redrive", { ids: [] })).status, 400);
+
+    const redrive = await post("/api/jobs/redrive", { ids: [ids[0]] }).then(response => response.json());
+    assert.deepEqual(redrive, { redriven: [ids[0]] });
+    assert.equal((await deliveries.get("hook:obs:1:r1:a")).status, "pending");
+    assert.equal((await transport.getJob(ids[0])).state, "ready");
+
+    const discard = await post("/api/jobs/discard", { ids: [ids[0], ids[1]] }).then(response => response.json());
+    // ids[0] is no longer dead, so only ids[1] is discarded.
+    assert.deepEqual(discard, { discarded: [ids[1]] });
+    assert.equal((await deliveries.get("hook:obs:2:r1:b")).status, "discarded");
+
+    // Viewers can look but not act.
+    const roles = await fetch(`${api.url}/api/roles`, { headers: { cookie } }).then(response => response.json());
+    const viewer = roles.roles.find(role => role.name === "Viewer");
+    await post("/api/users", { username: "viewer", password: "v3ry-long-random-root-passphrase!", roleIds: [viewer.id] });
+    const login = await fetch(`${api.url}/api/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "viewer", password: "v3ry-long-random-root-passphrase!" })
+    });
+    const viewerCookie = login.headers.getSetCookie?.().join("; ") ?? login.headers.get("set-cookie");
+    const { csrfToken: viewerCsrf } = await login.json();
+
+    assert.equal((await fetch(`${api.url}/api/jobs`, { headers: { cookie: viewerCookie } })).status, 200);
+    assert.equal((await post("/api/jobs/redrive", { ids: [ids[0]] }, { cookie: viewerCookie, "x-csrf-token": viewerCsrf })).status, 403);
+  }
+  finally {
+    await api.close();
+  }
+});

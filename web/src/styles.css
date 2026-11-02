@@ -2583,3 +2583,71 @@ button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
+
+/* Deliveries page */
+
+.deliveries-page {
+  display: grid;
+  gap: var(--space-4);
+  align-content: start;
+}
+
+.pipeline-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
+}
+
+.pipeline-queue .admin-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+.admin-summary span.pill-danger,
+.status-pill.delivery-dead {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+  color: var(--danger);
+}
+
+.status-pill.delivery-failed {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning) 9%, var(--surface));
+  color: var(--warning);
+}
+
+.status-pill.delivery-delivered {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  background: color-mix(in srgb, var(--success) 9%, var(--surface));
+  color: var(--success);
+}
+
+.deliveries-page .admin-list-card > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.deliveries-page .error-cell {
+  max-width: 360px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.deliveries-page .cell-muted {
+  display: block;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.inline-select {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
