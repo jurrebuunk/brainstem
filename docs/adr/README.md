@@ -26,3 +26,5 @@ Status values:
 | [0004](0004-destination-plugin-sdk-v2.md) | Destination plugin SDK v2 with a v1 shim through 2.x | Accepted |
 | [0005](0005-config-as-versioned-data.md) | Config as versioned, JSON-Schema-validated data | Accepted |
 | [0006](0006-model-distribution-oci-image.md) | Laya model ships as a separate `brainstem-models` OCI image | Accepted |
+| [0007](0007-destination-handoff.md) | Destinations hand observations back to the core | Accepted |
+| [0008](0008-core-registry-and-topology.md) | Core registry with heartbeats as the source of topology | Accepted |

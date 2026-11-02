@@ -112,6 +112,8 @@ The database transport works on SQLite and Postgres. Each claim is a single atom
 
 ## Handoff: destinations emitting observations
 
+See [ADR-0007](adr/0007-destination-handoff.md) for the reasoning.
+
 A v2 destination can hand an observation back to the core with `ctx.emit(observation)`. For example, an agent task's report can be picked up by Matrix or by a bigger agent. Emitted observations go through the normal decide stage, including the policy, `facts.minimum_decision` and the destination filters.
 
 - **Committed with the delivery.** Emitted observations are enqueued in the same transaction that marks the delivery delivered. A delivery that fails or is retried emits nothing twice.

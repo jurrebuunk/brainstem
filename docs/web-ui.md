@@ -122,6 +122,8 @@ The backend persists raw telemetry/output events and derived stats in the same d
 
 ### Topology
 
+See [ADR-0008](adr/0008-core-registry-and-topology.md) for the reasoning.
+
 `GET /api/topology` (permission `runtime:read`) describes the structure independently of which core sent the latest telemetry:
 
 ```js
