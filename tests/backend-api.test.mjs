@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { createBackendApiServer, normalizeBackendApiConfig } from "../src/backend/api-server.mjs";
 import { openMigratedDatabase } from "../src/db/index.mjs";
 import { createPipelineStorage } from "../src/queue/index.mjs";
+import { createCoreRegistry } from "../src/runtime/cores.mjs";
 import { DIALECTS, dialectTest, isolatedDatabaseUrl } from "./helpers/database.mjs";
 
 test("backend api persists telemetry and exposes stats/history", async () => {
@@ -496,6 +497,45 @@ dialectTest("backend api lists dead jobs and redrives or discards them", async (
 
     assert.equal((await fetch(`${api.url}/api/jobs`, { headers: { cookie: viewerCookie } })).status, 200);
     assert.equal((await post("/api/jobs/redrive", { ids: [ids[0]] }, { cookie: viewerCookie, "x-csrf-token": viewerCsrf })).status, 403);
+  }
+  finally {
+    await api.close();
+  }
+});
+
+dialectTest("backend api serves the topology from the core registry", async ({ handle }) => {
+  const dir = await mkdtemp(join(tmpdir(), "brainstem-api-topology-"));
+  const configPath = join(dir, "brainstem.config.mjs");
+  await writeFile(configPath, "export default {}\n");
+
+  const registry = createCoreRegistry({ database: async () => handle });
+  const topology = {
+    inputs: [{ id: "app-log", plugin: "@brainstem/log-file", input: "lines" }],
+    destinations: [
+      { id: "log-triage", plugin: "@brainstem/agentos-runner", destination: "default" },
+      { id: "issue-summary", plugin: "@brainstem/agentos-runner", destination: "default" }
+    ]
+  };
+  await registry.register({ id: "core-old", heartbeatMs: 10_000, topology: { inputs: [], destinations: [] }, now: Date.now() - 60_000 });
+  await registry.stop("core-old", { now: Date.now() - 60_000 });
+  await registry.register({ id: "core-live", heartbeatMs: 10_000, topology });
+
+  const api = createBackendApiServer({ host: "127.0.0.1", port: 0, configPath, database: handle });
+  await api.listen();
+
+  try {
+    assert.equal((await fetch(`${api.url}/api/topology`)).status, 401);
+
+    const { cookie } = await setupAdmin(api);
+    const body = await fetch(`${api.url}/api/topology`, { headers: { cookie } }).then(response => response.json());
+
+    assert.deepEqual(body.cores.map(core => [core.id, core.status]), [["core-live", "running"], ["core-old", "stopped"]]);
+    assert.equal(body.cores[0].topology, undefined, "per-core topology is not repeated");
+    assert.ok(body.cores[0].topologyHash);
+    assert.deepEqual(body.source, { coreId: "core-live", status: "running", topologyHash: body.cores[0].topologyHash });
+    assert.equal(body.consistent, true);
+    assert.deepEqual(body.inputs, topology.inputs);
+    assert.deepEqual(body.destinations.map(destination => destination.id), ["log-triage", "issue-summary"]);
   }
   finally {
     await api.close();
