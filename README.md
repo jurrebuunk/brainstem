@@ -89,6 +89,7 @@ Destination plugins:
 - `matrix` — sends decisions to a Matrix room.
 - `http-json` — posts output envelopes to an HTTP endpoint or the Brainstem backend.
 - `opencode-runner` — starts matching work on an opencode server.
+- `agentos-runner` — runs a configured task in a Rivet agentOS VM with host-side tools (optional dependency).
 
 See the [plugin catalog](docs/plugins.md).
 

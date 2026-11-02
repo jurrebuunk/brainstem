@@ -20,6 +20,7 @@ Brainstem ships local plugins under `plugins/`.
 | Matrix | `./plugins/matrix/index.mjs` | Send matching decisions to a Matrix room. | [Matrix](matrix-destination.md) |
 | HTTP JSON | `./plugins/http-json/index.mjs` | POST output envelopes to an HTTP endpoint. | [HTTP JSON](plugins/http-json.md) |
 | OpenCode Runner | `./plugins/opencode-runner/index.mjs` | Run opencode for matching decisions and stream runner logs. | [OpenCode Runner](plugins/opencode-runner.md) |
+| agentOS Runner | `./plugins/agentos-runner/index.mjs` | Run a configured task (command, or agent prompt) in an agentOS VM with host-side tools. Optional dependency. | [agentOS Runner](plugins/agentos-runner.md) |
 
 ## Plugin APIs
 

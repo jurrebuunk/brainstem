@@ -118,6 +118,50 @@ export default {
       }
     }
     */
+
+    /*
+    // agentOS runner: one entry per task. Needs the optional dependency
+    // @rivet-dev/agentos-core. See docs/plugins/agentos-runner.md.
+    ,{
+      id: "log-triage",
+      module: "./plugins/agentos-runner/index.mjs",
+      decisions: ["queue", "escalate"],
+      sources: ["http"],
+      types: ["health_check"],
+      config: {
+        // A scripted task: no AI key needed.
+        command: "grep -n ERROR /mnt/logs/app.log | tail -20 > /tmp/errors; agentos-tools send-report --title {{observation.summary}} --markdown \"$(cat /tmp/errors)\"",
+        mounts: [{ path: "/mnt/logs", hostPath: "/var/log/myapp" }],
+        tools: {
+          sendReport: {
+            description: "Send a short markdown report to the operator",
+            input: { title: "string", markdown: { type: "string", maxLength: 4000 } },
+            required: true,
+            maxCalls: 1,
+            async run({ title, markdown }, ctx) {
+              // Runs on the host: secrets stay out of the VM. Send it to
+              // Matrix, a webhook, a file... ctx.idempotencyKey is stable
+              // across retries.
+              console.log(title, markdown);
+              return { sent: true };
+            }
+          }
+        }
+      }
+    }
+    ,{
+      id: "issue-summary",
+      module: "./plugins/agentos-runner/index.mjs",
+      decisions: ["queue"],
+      sources: ["github"],
+      types: ["issue"],
+      config: {
+        // An agent task (agent sessions are not implemented yet).
+        prompt: "Rewrite GitHub issue {{observation.data.title}} as a clear bug report for a coding agent.",
+        allowHosts: ["api.anthropic.com"]
+      }
+    }
+    */
   ],
 
   runtime: {

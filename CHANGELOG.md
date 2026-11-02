@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- New `agentos-runner` destination: runs a configured task in a [Rivet agentOS](https://rivet.dev/agent-os) VM for each matching decision. One plugin serves many tasks; each destination entry has its own filters, `command` (or agent `prompt`), network allowlist, read-only mounts, env, and host-side tools. Tools are validated, limited by `maxCalls`, can be `required`, and are replayed instead of repeated when a delivery is retried. `runOnce: "revision"` skips re-emitted observations by default. Agent sessions for `prompt` tasks are not implemented yet. See `docs/plugins/agentos-runner.md`.
+- `@rivet-dev/agentos-core` is an optional dependency. The Docker image omits optional dependencies unless built with `--build-arg INSTALL_OPTIONAL=true`.
+
 ## 1.3.0 — 2026-11-02
 
 First release on the way to 2.0: one database for all state (SQLite or Postgres) and a durable decide/deliver pipeline. Includes the unreleased 2.0 Phase 0 and Phase 1 work. See "Behaviour changes" below before upgrading.

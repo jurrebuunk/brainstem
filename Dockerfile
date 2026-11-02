@@ -3,7 +3,10 @@ FROM node:24-slim AS build
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+# Optional dependencies (the agentOS runner's VM runtime) are left out
+# unless built with --build-arg INSTALL_OPTIONAL=true.
+ARG INSTALL_OPTIONAL=false
+RUN if [ "$INSTALL_OPTIONAL" = "true" ]; then npm ci --omit=dev; else npm ci --omit=dev --omit=optional; fi
 
 COPY web/package.json web/package-lock.json ./web/
 RUN npm --prefix web ci
