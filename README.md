@@ -1,6 +1,6 @@
 # Brainstem
 
-[![Release](https://img.shields.io/github/v/release/jurrebuunk/brainstem?label=release)](https://github.com/jurrebuunk/brainstem/releases/tag/v0.1.0)
+[![Release](https://img.shields.io/github/v/release/jurrebuunk/brainstem?label=release)](https://github.com/jurrebuunk/brainstem/releases/latest)
 [![License: ISC](https://img.shields.io/badge/license-ISC-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D24-339933?logo=node.js&logoColor=white)](package.json)
 [![Status](https://img.shields.io/badge/status-stable-brightgreen.svg)](CHANGELOG.md)
@@ -160,6 +160,7 @@ export default {
 
   destinations: [
     {
+      id: "log",
       module: "./plugins/log-decisions/index.mjs",
       destination: "default",
       decisions: ["queue", "dispatch", "escalate"],
@@ -174,19 +175,17 @@ export default {
     api: {
       enabled: true,
       host: "127.0.0.1",
-      port: 5174,
-      telemetryDbPath: "data/web-stats.sqlite"
+      port: 5174
+    },
+
+    // One database for records, checkpoints, plugin state, the job
+    // queue, telemetry and auth. Or set BRAINSTEM_DATABASE_URL.
+    database: {
+      url: "sqlite:data/brainstem.sqlite"
     },
 
     records: {
-      type: "sqlite",
-      path: "data/brainstem.sqlite",
       pruneAfterDays: 90
-    },
-
-    checkpoints: {
-      type: "json",
-      path: "data/checkpoints.json"
     }
   }
 };
@@ -218,14 +217,14 @@ docker run --rm \
   --env-file .env \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0 \
+  ghcr.io/jurrebuunk/brainstem:v1.3.0 \
   node brainstem.mjs --once
 ```
 
 Verify the image:
 
 ```sh
-docker manifest inspect ghcr.io/jurrebuunk/brainstem:v0.1.0
+docker manifest inspect ghcr.io/jurrebuunk/brainstem:v1.3.0
 ```
 
 See [`docs/docker.md`](docs/docker.md).

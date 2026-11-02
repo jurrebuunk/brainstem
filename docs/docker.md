@@ -168,7 +168,7 @@ docker compose run --rm brainstem node brainstem.mjs migrate sqlite-to-pg \
 
 ### Upgrading a 1.x volume
 
-1.x kept state in `data/brainstem.sqlite`, `data/web-stats.sqlite` and `data/checkpoints.json`. Back up the volume, stop the old containers, then import into the 2.0 database before starting 2.0:
+1.x kept state in `data/brainstem.sqlite`, `data/web-stats.sqlite` and `data/checkpoints.json`. Back up the volume and stop the old containers. 1.3 and later import these files automatically on first start; to do it by hand first:
 
 ```sh
 docker compose run --rm brainstem node brainstem.mjs migrate import-v1 --data-dir data

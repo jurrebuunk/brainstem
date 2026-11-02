@@ -160,7 +160,7 @@ runtime: {
 
 URL formats: `sqlite:<relative path>`, `sqlite:/absolute/path`, `postgres://user:pass@host:5432/db`. Keep Postgres passwords out of committed config by setting `BRAINSTEM_DATABASE_URL` in `.env` instead of `url`. The `brainstem migrate` commands use the same resolution; see [CLI](cli.md#database-commands).
 
-1.x settings `runtime.records.type/path`, `runtime.checkpoints` and `runtime.api.telemetryDbPath` pointed at separate files. In 2.0 those files are only read once by `brainstem migrate import-v1`.
+1.x settings `runtime.records.type/path`, `runtime.checkpoints` and `runtime.api.telemetryDbPath` pointed at separate files. Since 1.3 those files are only read, once: automatically on first start, or by hand with `brainstem migrate import-v1`.
 
 `runtime.logging` controls application/runtime logs. These are separate from the optional `log-decisions` destination.
 
