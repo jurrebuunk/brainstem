@@ -612,7 +612,8 @@ test("a retried delivery does not talk to the model again", async () => {
 
 test("agent fails permanently without an API key and sends nothing", async () => {
   const output = outputEnvelope();
-  const { ctx } = context(agentConfig(fakeAdapter(), {
+  const adapter = fakeAdapter();
+  const { ctx } = context(agentConfig(adapter, {
     model: { baseUrl: MODEL.baseUrl, name: MODEL.name, apiKeyEnv: "BRAINSTEM_TEST_NO_SUCH_KEY" }
   }), { output });
 
@@ -623,6 +624,7 @@ test("agent fails permanently without an API key and sends nothing", async () =>
   });
 
   assert.equal(requests.length, 0);
+  assert.equal(adapter.vms.length, 0, "no VM is booted for a run that can't work");
 });
 
 test("agent prompts are cut to maxPromptChars", async () => {
@@ -674,4 +676,21 @@ test("handoff from a command task uses the outbox report, and warns without ctx.
   const { ctx, logs } = context({ adapter: fakeAdapter(async () => ({ exitCode: 0, stdout: "x" })), command: "true", handoff: true, runOnce: "emission" }, { output });
   await handle(ctx, output);
   assert.ok(logs.some(log => log.message === "agentos handoff skipped: this runtime does not support ctx.emit"));
+});
+
+test("a sidecar that can't start fails permanently with a readable error", async () => {
+  const output = outputEnvelope();
+  const adapter = {
+    async createVm() {
+      throw Object.assign(new Error("write EPIPE"), { code: "EPIPE", syscall: "write" });
+    }
+  };
+  const { ctx } = context({ adapter, command: "true" }, { output });
+
+  const error = await handle(ctx, output).catch(e => e);
+
+  assert.match(error.message, /agentOS sidecar could not start \(EPIPE\)/);
+  assert.match(error.message, /programs\.nix-ld/);
+  assert.equal(error.permanent, true, "retrying won't help");
+  assert.equal(error.cause.code, "EPIPE");
 });

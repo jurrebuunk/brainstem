@@ -28,7 +28,13 @@ The plugin only loads agentOS when an `agentos-runner` entry actually runs.
 
 ### NixOS
 
-agentOS starts a native sidecar binary built for generic Linux, which NixOS can't start directly. Point `AGENTOS_SIDECAR_BIN` at a wrapper that runs it through the Nix glibc loader, or enable `programs.nix-ld`:
+agentOS starts a native sidecar binary built for generic Linux. NixOS runs it once **nix-ld** is enabled:
+
+```nix
+programs.nix-ld.enable = true;
+```
+
+Without nix-ld, point `AGENTOS_SIDECAR_BIN` at a wrapper that starts the binary through the Nix glibc loader:
 
 ```sh
 #!/bin/sh
@@ -37,7 +43,7 @@ exec /nix/store/<glibc>/lib64/ld-linux-x86-64.so.2 \
   /path/to/node_modules/@rivet-dev/agentos-runtime-sidecar-linux-x64-gnu/agentos-native-sidecar "$@"
 ```
 
-Without a working sidecar, VM creation hangs. The plugin gives up after `bootTimeoutMs` and the delivery is retried.
+When the sidecar can't start, the delivery fails permanently with a message saying so ("the agentOS sidecar could not start"), instead of retrying. If VM creation hangs, the plugin gives up after `bootTimeoutMs`.
 
 ## Module
 

@@ -71,6 +71,9 @@ export default defineDestinationPlugin({
           [ctx.signal, AbortSignal.timeout(config.timeoutMs)].filter(Boolean)
         );
 
+        // Fail before booting a VM when the run can't work anyway.
+        const apiKey = config.mode === "agent" ? modelApiKey(config) : null;
+
         const adapter = config.adapter ?? await loadAgentOsAdapter();
         const outboxDir = await mkdtemp(join(tmpdir(), "brainstem-agentos-"));
         let vm;
@@ -81,7 +84,7 @@ export default defineDestinationPlugin({
 
           const run = config.mode === "command"
             ? await runCommand(vm, config, event, signal, ctx)
-            : await runAgent(vm, config, event, signal, ctx, tools);
+            : await runAgent(vm, config, event, signal, ctx, tools, apiKey);
 
           const result = parseResult(
             await readFile(join(outboxDir, posix.basename(config.outboxPath)), "utf8")
@@ -188,7 +191,7 @@ async function bootVm(adapter, config, tools, signal, outboxDir) {
       boot,
       new Promise((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`agentos-runner: VM did not boot within ${config.bootTimeoutMs}ms`)),
+          () => reject(new Error(`agentos-runner: VM did not boot within ${config.bootTimeoutMs}ms; if this keeps happening, the agentOS sidecar may not be able to start (on NixOS: programs.nix-ld)`)),
           config.bootTimeoutMs
         );
         signal.addEventListener("abort", () => reject(signal.reason), { once: true });
@@ -198,7 +201,7 @@ async function bootVm(adapter, config, tools, signal, outboxDir) {
   catch (error) {
     // If the VM shows up after we gave up, don't leak it.
     boot.then(vm => vm.dispose()).catch(() => {});
-    throw error;
+    throw sidecarStartError(error) ?? error;
   }
   finally {
     clearTimeout(timer);
@@ -249,15 +252,7 @@ async function runCommand(vm, config, event, signal, ctx) {
  * permanently: the delivery becomes a dead job that can be
  * redriven from the Web UI, instead of spending more requests.
  */
-async function runAgent(vm, config, event, signal, ctx, tools) {
-  const apiKey = config.model.apiKey ?? process.env[config.model.apiKeyEnv];
-
-  if (!apiKey) {
-    throw permanentError(
-      `agentos-runner: no model API key; set ${config.model.apiKeyEnv ?? "model.apiKey"}`
-    );
-  }
-
+async function runAgent(vm, config, event, signal, ctx, tools, apiKey) {
   const attemptKey = ctx.idempotencyKey
     ? AGENT_KEY_PREFIX + ctx.idempotencyKey
     : null;
@@ -300,6 +295,42 @@ async function runAgent(vm, config, event, signal, ctx, tools) {
   );
 
   return outcome;
+}
+
+function modelApiKey(config) {
+  const apiKey = config.model.apiKey ?? process.env[config.model.apiKeyEnv];
+
+  if (!apiKey) {
+    throw permanentError(
+      `agentos-runner: no model API key; set ${config.model.apiKeyEnv ?? "model.apiKey"} (Brainstem loads it from .env)`
+    );
+  }
+
+  return apiKey;
+}
+
+/*
+ * The agentOS sidecar is a native binary. When it can't start (a
+ * missing platform package, or NixOS without nix-ld) agentOS fails
+ * with low-level pipe errors; retrying won't help.
+ */
+function sidecarStartError(error) {
+  const code = error?.code ?? error?.cause?.code;
+  const name = String(error?.name ?? "");
+
+  if (!["EPIPE", "ECONNRESET", "ENOENT", "EACCES"].includes(code) && !name.startsWith("Sidecar")) {
+    return null;
+  }
+
+  return Object.assign(
+    new Error(
+      `agentos-runner: the agentOS sidecar could not start (${code ?? name}). ` +
+      "Check that @rivet-dev/agentos-core installed its native sidecar for this platform; " +
+      "on NixOS enable programs.nix-ld or set AGENTOS_SIDECAR_BIN.",
+      { cause: error }
+    ),
+    { permanent: true }
+  );
 }
 
 function permanentError(message) {

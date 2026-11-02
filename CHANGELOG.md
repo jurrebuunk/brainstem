@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `agentos-runner` fails fast and clearly: a missing model API key is reported before a VM boots, and a sidecar that can't start (`EPIPE` and similar) becomes a permanent, readable error ("the agentOS sidecar could not start … on NixOS enable programs.nix-ld") instead of retried pipe errors. On NixOS, nix-ld is now the recommended setup; the real-VM test runs whenever nix-ld (or `AGENTOS_SIDECAR_BIN`) is available.
+- Fix: `npm run check` now fails on syntax errors (it used `find -exec`, which ignored them) and also checks `brainstem-api.mjs` and the Web UI flow model.
+
 - Web UI Flow page brought up to date with the runtime: structure from `/api/topology` (one node per configured id, so tasks of the same plugin are no longer merged), a core pool node and a Cores panel from the core registry, handoffs shown only while they happen (a short-lived "handing off" pill node linked to the destination) instead of fake `destination:<id>` input nodes, and an inspector that matches destinations by id and shows each decision's origin and core. Falls back to snapshot events against an older backend. The graph logic moved into a pure, unit-tested `web/src/flow/model.js`.
 
 - Core registry and `GET /api/topology`: each runtime registers in a new `cores` table (migration `0003_cores`) with its role, queues, version and loaded topology, heartbeats every `runtime.cores.heartbeatMs` (default 10 s) and marks itself stopped on shutdown. Cores that miss 3 heartbeats are reported as `lost`, and rows unseen for 24 h are pruned. `/api/topology` serves the cores plus the inputs and destinations (with ids) from the freshest running core, and flags running cores that loaded different configs. The Web UI no longer has to derive structure from snapshot events.

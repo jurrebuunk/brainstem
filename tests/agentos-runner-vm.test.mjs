@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
@@ -21,9 +21,23 @@ import { tempDir } from "./helpers/fixtures.mjs";
 const missingPackage = await import("@rivet-dev/agentos-core")
   .then(() => false, () => "@rivet-dev/agentos-core is not installed");
 
+// NixOS can run the generic-Linux sidecar only with nix-ld (or an
+// AGENTOS_SIDECAR_BIN wrapper); its default stub loader can't.
+const nixosStubLoader =
+  existsSync("/etc/NIXOS") &&
+  !process.env.AGENTOS_SIDECAR_BIN &&
+  (() => {
+    try {
+      return realpathSync("/lib64/ld-linux-x86-64.so.2").includes("stub-ld");
+    }
+    catch {
+      return true;
+    }
+  })();
+
 const skip = missingPackage || (
-  existsSync("/etc/NIXOS") && !process.env.AGENTOS_SIDECAR_BIN
-    ? "NixOS needs AGENTOS_SIDECAR_BIN to start the agentOS sidecar"
+  nixosStubLoader
+    ? "NixOS needs programs.nix-ld (or AGENTOS_SIDECAR_BIN) to start the agentOS sidecar"
     : false
 );
 
