@@ -1,0 +1,39 @@
+# brainstem-models: the Laya ONNX bundle as a versioned OCI image
+# (roadmap 4.8, ADR-0006).
+#
+#   Kubernetes >= 1.31: mount it as an image volume at /models
+#   older clusters:     init container `cp -r /models/. /shared/`
+#   Docker:             docker run -v laya-model:/models ... (or copy)
+#
+# Point Brainstem at it with BRAINSTEM_LAYA_MODEL_DIR=/models (or
+# runtime.laya.modelDir); nothing is downloaded at start.
+FROM alpine:3.22 AS fetch
+
+ARG LAYA_REPO=receptron/laya-onnx
+ARG LAYA_REVISION=main
+# Empty for the English checkpoint, e.g. "multilingual" otherwise.
+ARG LAYA_SUBFOLDER=
+
+RUN apk add --no-cache curl ca-certificates
+
+WORKDIR /models
+RUN set -eu; \
+  base="https://huggingface.co/${LAYA_REPO}/resolve/${LAYA_REVISION}"; \
+  if [ -n "${LAYA_SUBFOLDER}" ]; then base="${base}/${LAYA_SUBFOLDER}"; fi; \
+  mkdir -p tokenizer; \
+  for file in laya.onnx laya.onnx.data laya_config.json tokenizer/tokenizer.json tokenizer/tokenizer_config.json; do \
+    curl -fsSL --retry 5 --retry-delay 5 -o "${file}" "${base}/${file}"; \
+  done; \
+  printf '{"repo":"%s","revision":"%s","subfolder":"%s"}\n' "${LAYA_REPO}" "${LAYA_REVISION}" "${LAYA_SUBFOLDER}" > SOURCE.json; \
+  ls -la . tokenizer
+
+# busybox keeps `cp` available for init containers.
+FROM busybox:1.37
+
+COPY --from=fetch --chown=1000:1000 /models /models
+
+LABEL org.opencontainers.image.title="brainstem-models" \
+  org.opencontainers.image.description="Laya ONNX model bundle for Brainstem (mount at /models, set BRAINSTEM_LAYA_MODEL_DIR=/models)"
+
+USER 1000
+CMD ["ls", "-la", "/models"]

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { Laya } from "@receptron/laya";
+import { DEFAULT_LAYA_MODULE, LayaPool } from "./laya-pool.mjs";
 
 import {
   MemoryRecordStore,
@@ -26,7 +26,8 @@ const DECISIONS = [
 export class Brainstem {
   constructor(config, {
     store,
-    cacheKey
+    cacheKey,
+    layaModule = DEFAULT_LAYA_MODULE
   } = {}) {
     this.config =
       structuredClone(config);
@@ -50,17 +51,34 @@ export class Brainstem {
     this.locks =
       new Map();
 
+    this.layaModule = layaModule;
+
     /*
-     * Global semantic evaluation queue.
+     * Semantic evaluations in flight.
      *
-     * Only one changed observation may use
-     * Laya at a time.
-     *
-     * Cached observations never enter this
-     * queue.
+     * With Laya in this thread one changed
+     * observation uses it at a time; with a
+     * worker pool (runtime.laya.workers) up to
+     * one per worker. Cached observations never
+     * wait here.
      */
-    this.evaluationQueue =
-      Promise.resolve();
+    this.evaluations = new Set();
+    this.evaluationWaiters = [];
+    this.evaluationConcurrency = 1;
+  }
+
+  /*
+   * Laya workers (runtime.laya.workers or
+   * BRAINSTEM_LAYA_WORKERS). 0 runs Laya in
+   * this thread.
+   */
+  get layaWorkers() {
+    const value =
+      this.config.runtime?.laya?.workers ??
+      process.env.BRAINSTEM_LAYA_WORKERS ??
+      0;
+
+    return Math.max(0, Math.floor(Number(value) || 0));
   }
 
 
@@ -73,13 +91,69 @@ export class Brainstem {
     await this.records.open?.();
 
     if (!this.laya) {
-      this.laya =
-        await Laya.load(
-          layaLoadOptionsFromConfig(
-            this.config
-          )
-        );
+      await this.#loadLaya();
     }
+  }
+
+
+  async #loadLaya() {
+    const options =
+      layaLoadOptionsFromConfig(
+        this.config
+      );
+    const workers =
+      this.layaWorkers;
+
+    if (workers > 0) {
+      this.laya =
+        await LayaPool.load(options, {
+          size: workers,
+          module: this.layaModule
+        });
+    }
+    else {
+      const { Laya } =
+        await import(this.layaModule);
+
+      this.laya =
+        await Laya.load(options);
+    }
+
+    this.layaOptionsKey =
+      JSON.stringify({ options, workers });
+    this.evaluationConcurrency =
+      Math.max(1, workers);
+  }
+
+
+  /*
+   * Apply a new config (hot reload). Policy and
+   * questions take effect for the next
+   * evaluation; the model is reloaded only when
+   * its load options or worker count changed.
+   * Call it while no observation is in flight.
+   */
+  async reconfigure(config) {
+    this.config =
+      structuredClone(config);
+
+    this.cacheKey =
+      cacheKeyOf(this.config);
+
+    if (!this.laya) return;
+
+    const key =
+      JSON.stringify({
+        options: layaLoadOptionsFromConfig(this.config),
+        workers: this.layaWorkers
+      });
+
+    if (key === this.layaOptionsKey) return;
+
+    await Promise.allSettled([...this.evaluations]);
+    await this.laya.close();
+    this.laya = null;
+    await this.#loadLaya();
   }
 
 
@@ -93,10 +167,11 @@ export class Brainstem {
     );
 
     /*
-     * Wait for the semantic queue.
+     * Wait for running evaluations.
      */
-    await this.evaluationQueue
-      .catch(() => {});
+    await Promise.allSettled(
+      [...this.evaluations]
+    );
 
     await this.laya?.close();
     await this.records?.close?.();
@@ -372,44 +447,46 @@ export class Brainstem {
 
 
   /*
-   * Global evaluation queue.
+   * Evaluation limiter.
    *
-   * Each queued item represents one complete
-   * changed observation, not one question.
+   * Each slot is one complete changed
+   * observation, not one question, so all
+   * questions of an observation stay together.
    */
   async #queueEvaluation(
     observation
   ) {
+    while (
+      this.evaluations.size >=
+      this.evaluationConcurrency
+    ) {
+      await new Promise(resolve =>
+        this.evaluationWaiters.push(resolve)
+      );
+    }
+
     const run =
-      this.evaluationQueue
-        .catch(() => {})
-        .then(() =>
-          this.#evaluate(
-            observation
-          )
-        );
-
-
-    /*
-     * Keep the queue alive even when one
-     * evaluation fails.
-     */
-    this.evaluationQueue =
-      run.then(
-        () => undefined,
-        () => undefined
+      this.#evaluate(
+        observation
       );
 
+    this.evaluations.add(run);
 
-    return await run;
+    try {
+      return await run;
+    }
+    finally {
+      this.evaluations.delete(run);
+      this.evaluationWaiters.shift()?.();
+    }
   }
 
 
   /*
    * Complete semantic evaluation.
    *
-   * Once this starts, no other observation
-   * can use Laya until it returns.
+   * Holds one evaluation slot (see
+   * #queueEvaluation) until it returns.
    */
   async #evaluate(
     observation
@@ -559,9 +636,9 @@ export class Brainstem {
    *
    * There is deliberately no queue here.
    *
-   * #evaluate() itself is globally
-   * serialized, so all questions belonging
-   * to one observation remain together.
+   * #evaluate() holds an evaluation slot, so
+   * all questions belonging to one
+   * observation remain together.
    */
   async #ask(
     observation,
@@ -879,8 +956,19 @@ function layaLoadOptionsFromConfig(config) {
       process.env[options.tokenEnv];
   }
 
+  // A mounted model (the brainstem-models image) wins over
+  // downloading.
+  if (
+    !options.modelDir &&
+    process.env.BRAINSTEM_LAYA_MODEL_DIR
+  ) {
+    options.modelDir =
+      process.env.BRAINSTEM_LAYA_MODEL_DIR;
+  }
+
   delete options.tokenEnv;
   delete options.retry;
+  delete options.workers;
 
   return options;
 }

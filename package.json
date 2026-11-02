@@ -68,6 +68,7 @@
     "brainstem.config.example.mjs",
     "docker-compose.example.yml",
     "Dockerfile",
+    "Dockerfile.models",
     ".env.example",
     "src/",
     "plugins/",
