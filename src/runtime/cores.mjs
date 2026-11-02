@@ -122,20 +122,32 @@ export function topologyFromCores(cores) {
     }
   }
 
+  /*
+   * Cores on the same stored config version agree by definition.
+   * Otherwise compare what overlapping cores loaded: inputs among
+   * cores that poll, destinations among cores that decide or deliver.
+   */
   const versions = new Set(running.map(core => core.configVersion ?? null));
-  const inputHashes = new Set(running.map(core => topologyHash(core.topology.inputs ?? [])));
+  const sameVersion = versions.size === 1 && !versions.has(null);
+  const runs = (core, queue) => !core.queues?.length || core.queues.includes(queue);
+  const inputHashes = new Set(
+    running
+      .filter(core => runs(core, "poll"))
+      .map(core => topologyHash((core.topology.inputs ?? []).map(input => input.id)))
+  );
   const destinationHashes = new Set(
     running
-      .filter(core => (core.topology.destinations ?? []).length > 0)
-      .map(core => topologyHash(core.topology.destinations))
+      .filter(core => runs(core, "decide") || runs(core, "deliver"))
+      .map(core => topologyHash(core.topology.destinations ?? []))
   );
+  const consistent = sameVersion || (versions.size <= 1 && inputHashes.size <= 1 && destinationHashes.size <= 1);
 
   return {
     source: source
       ? { coreId: source.id, status: source.status, topologyHash: source.topologyHash }
       : null,
     configVersion: versions.size === 1 ? [...versions][0] : null,
-    consistent: versions.size <= 1 && inputHashes.size <= 1 && destinationHashes.size <= 1,
+    consistent,
     inputs: [...inputs.values()],
     destinations: [...destinations.values()]
   };

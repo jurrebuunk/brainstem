@@ -68,9 +68,14 @@ test("topologyFromCores serves the freshest running core and flags disagreement"
   assert.deepEqual(topologyFromCores([]), { source: null, configVersion: null, consistent: true, inputs: [], destinations: [] });
 
   // Cores running different queues: merged, still consistent.
-  const deliverOnly = { ...core("d", "running", ["x"]), topology: { inputs: [], destinations: topology(["x"]).destinations } };
-  const pollOnly = { ...core("p", "running", []), topology: { inputs: topology(["x"]).inputs, destinations: [] } };
+  const deliverOnly = { ...core("d", "running", ["x"]), queues: ["deliver"], topology: { inputs: [], destinations: topology(["x"]).destinations } };
+  const pollOnly = { ...core("p", "running", []), queues: ["poll"], topology: { inputs: topology(["x"]).inputs, destinations: [] } };
   const split = topologyFromCores([pollOnly, deliverOnly]);
+  assert.equal(split.consistent, true, "cores running different queues agree");
+  assert.equal(topologyFromCores([
+    { ...pollOnly, configVersion: 2 },
+    { ...deliverOnly, configVersion: 2, topology: { inputs: [{ id: "only-ids" }], destinations: [] } }
+  ]).consistent, true, "same config version");
   assert.deepEqual(split.destinations.map(destination => destination.id), ["x"]);
   assert.equal(split.inputs.length, topology(["x"]).inputs.length);
 
