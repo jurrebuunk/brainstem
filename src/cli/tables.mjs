@@ -1,7 +1,7 @@
 import { sql } from "kysely";
 
 /*
- * Tables created by 0001_initial, in foreign-key-safe order
+ * Tables created by the migrations, in foreign-key-safe order
  * (parents before children). `identity` marks a column the
  * database generates; Postgres needs OVERRIDING SYSTEM VALUE to
  * accept explicit ids and a sequence reset afterwards.
@@ -18,7 +18,9 @@ export const SCHEMA_TABLES = [
   { name: "auth_user_roles", key: ["user_id", "role_id"] },
   { name: "auth_sessions", key: ["token"] },
   { name: "auth_login_attempts", key: ["key"] },
-  { name: "maintenance_runs", key: ["task"] }
+  { name: "maintenance_runs", key: ["task"] },
+  { name: "jobs", key: ["id"], identity: "id" },
+  { name: "deliveries", key: ["key"] }
 ];
 
 export async function countRows(db, table) {

@@ -1,6 +1,7 @@
 import { Migrator } from "kysely/migration";
 
 import { createMigration as m0001 } from "./migrations/0001_initial.mjs";
+import { createMigration as m0002 } from "./migrations/0002_pipeline.mjs";
 
 /*
  * Ordered list of migrations. Append new entries; never edit
@@ -8,7 +9,8 @@ import { createMigration as m0001 } from "./migrations/0001_initial.mjs";
  * so migrations stay a single portable file.
  */
 const MIGRATIONS = [
-  ["0001_initial", m0001]
+  ["0001_initial", m0001],
+  ["0002_pipeline", m0002]
 ];
 
 export const LATEST_MIGRATION = MIGRATIONS.at(-1)[0];
