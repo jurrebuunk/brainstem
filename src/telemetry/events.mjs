@@ -38,6 +38,44 @@ export function eventInputId(event) {
   return null;
 }
 
+/*
+ * Where the event's observation came from:
+ *   { kind: "input", id } or { kind: "destination", id, depth, lineage }.
+ * Events from runtimes before origins existed: real inputs map to
+ * { kind: "input" }; a handoff was recorded as input id
+ * "destination:<id>".
+ */
+export function eventOrigin(event) {
+  const payload = event?.payload ?? {};
+  const origin = payload.origin ?? payload.decisionEnvelope?.origin ?? null;
+
+  if (origin) return origin;
+
+  const inputId = payload.inputId ?? payload.input?.id ?? null;
+
+  if (typeof inputId === "string" && inputId.startsWith("destination:")) {
+    return { kind: "destination", id: inputId.slice("destination:".length) };
+  }
+
+  return inputId ? { kind: "input", id: inputId } : null;
+}
+
+/*
+ * The configured destination entry id (unique per entry, unlike
+ * plugin + destination name).
+ */
+export function eventDestinationId(event) {
+  const payload = event?.payload ?? {};
+
+  if (event?.kind === "brainstem.output") return payload.destination?.id ?? null;
+
+  return payload.destinationId ?? null;
+}
+
+export function eventCoreId(event) {
+  return event?.payload?.coreId ?? null;
+}
+
 export function eventDestinationKey(event) {
   const payload = event?.payload ?? {};
 
@@ -77,6 +115,7 @@ export function metricsForEvent(event) {
     metrics.add(`decisions.${payload.decision?.payload?.decision ?? payload.decision ?? "unknown"}`);
   }
   if (kind === "brainstem.output") metrics.add("outputs.total");
+  if (kind === "brainstem.destination.emitted") metrics.add("handoffs.emitted");
   if (kind === "brainstem.destination.running") metrics.add("destinations.running");
   if (kind === "brainstem.destination.completed") metrics.add("destinations.completed");
   if (kind === "brainstem.destination.failed") {

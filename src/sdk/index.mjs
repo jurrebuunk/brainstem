@@ -223,7 +223,10 @@ export function createDestinationContext({
  *       timestamp, pollId, idempotencyKey,
  *       decision,      // decision envelope
  *       observation,   // observation envelope
- *       input:       { id, plugin, name, module },
+ *       origin,        // { kind: "input", id } or, for an observation a
+ *                      // destination handed back (ctx.emit),
+ *                      // { kind: "destination", id, plugin, name, depth, lineage }
+ *       input:       { id, plugin, name, module },  // nulls for a handoff
  *       destination: { id, plugin, name, module }
  *     }
  *   }
@@ -236,6 +239,7 @@ export function createOutputEnvelope({
   pollId = null,
   idempotencyKey = null,
   input = {},
+  origin = null,
   destination = {},
   timestamp = new Date().toISOString()
 }) {
@@ -248,6 +252,7 @@ export function createOutputEnvelope({
       idempotencyKey,
       decision,
       observation,
+      origin: origin ?? (input.id ? { kind: "input", id: input.id } : null),
       input: {
         id: input.id ?? null,
         plugin: input.plugin ?? null,

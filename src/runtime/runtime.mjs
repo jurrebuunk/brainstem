@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 
 import { DatabaseCheckpointStore, createDeferredCheckpoint } from "./checkpoints.mjs";
 import { LazyPluginStateStore, MemoryPluginStateStore } from "./plugin-state.mjs";
@@ -102,6 +103,16 @@ export class BrainstemRuntime {
     }
 
     this.config = config ?? {};
+
+    /*
+     * Identifies this runtime process in telemetry and as the job
+     * worker. Stable for the process lifetime; with several cores
+     * each one reports its own id.
+     */
+    this.coreId =
+      this.config.runtime?.coreId ??
+      process.env.BRAINSTEM_CORE_ID ??
+      `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
 
     /*
      * One database handle shared by the
@@ -720,7 +731,7 @@ export class BrainstemRuntime {
   }
 
   #emitTelemetry(kind, payload = {}) {
-    this.telemetry?.send(telemetryEvent(kind, payload));
+    this.telemetry?.send(telemetryEvent(kind, { coreId: this.coreId, ...payload }));
   }
 
   #emitSnapshot() {
@@ -739,9 +750,11 @@ export class BrainstemRuntime {
         };
       }),
       core: {
+        id: this.coreId,
         status: this.brainstem?.laya ? "running" : "starting"
       },
       destinations: this.destinationEntries.map(item => ({
+        id: item.id,
         plugin: item.plugin.name,
         destination: item.destinationName,
         module: item.entry.module,
@@ -919,6 +932,7 @@ export class BrainstemRuntime {
           // Stable across decide retries, unique per emission.
           emissionId: randomUUID(),
           pollId,
+          origin: { kind: "input", id: checkpointKey },
           input: {
             id: checkpointKey,
             plugin: plugin.name,
@@ -1088,6 +1102,7 @@ export class BrainstemRuntime {
   #createRunner() {
     return new JobRunner({
       transport: this.transport,
+      workerId: this.coreId,
       leaseMs: this.queueConfig.leaseMs,
       pollIntervalMs: this.queueConfig.pollIntervalMs,
       logger: this.logger,
@@ -1129,7 +1144,7 @@ export class BrainstemRuntime {
       emissionId,
       pollId = null,
       input = {},
-      lineage = null
+      origin = legacyOrigin(job.payload)
     } = job.payload;
 
     const decision =
@@ -1168,6 +1183,7 @@ export class BrainstemRuntime {
       inputId: loadedInput?.entry.id ?? null,
       inputPlugin: input.plugin ?? null,
       inputName: input.name ?? null,
+      origin,
       pollId,
       decision: decisionPayload.decision,
       route: decisionPayload.route,
@@ -1200,7 +1216,7 @@ export class BrainstemRuntime {
           ) &&
           // An emitted observation never returns to a destination
           // already in its chain.
-          !lineage?.destinations?.includes(item.id)
+          !(origin?.lineage ?? []).includes(item.id)
         )
         .map(item => {
           const key = deliveryKey({
@@ -1219,6 +1235,7 @@ export class BrainstemRuntime {
               pollId,
               idempotencyKey: key,
               input,
+              origin,
               destination: {
                 id: item.id,
                 plugin: item.plugin.name,
@@ -1255,7 +1272,7 @@ export class BrainstemRuntime {
           payload: {
             key,
             destination: item.id,
-            ...(lineage ? { lineage } : {})
+            ...(origin ? { origin } : {})
           }
         })),
         { executor }
@@ -1300,9 +1317,14 @@ export class BrainstemRuntime {
   async #deliver(job, { signal, commit }) {
     const {
       key,
-      destination: destinationId,
-      lineage = { destinations: [], depth: 0 }
+      destination: destinationId
     } = job.payload;
+
+    // Where the decided observation came from; a handoff chain
+    // grows from here.
+    const origin = legacyOrigin(job.payload);
+    const lineage = origin?.lineage ?? [];
+    const depth = origin?.depth ?? 0;
 
     const item =
       this.destinationsById.get(destinationId);
@@ -1359,7 +1381,8 @@ export class BrainstemRuntime {
         logger: this.#scopedPluginLogger({
           scope: "destination",
           plugin: item.plugin.name,
-          destination: item.destinationName
+          destination: item.destinationName,
+          destinationId: item.id
         }),
         stateStore: this.pluginState,
         plugin: item.plugin.name,
@@ -1368,7 +1391,7 @@ export class BrainstemRuntime {
         idempotencyKey: key,
         attempt: job.attempts,
         emit: observation => {
-          if (lineage.depth + 1 > this.handoffConfig.maxDepth) {
+          if (depth + 1 > this.handoffConfig.maxDepth) {
             throw new Error(
               `ctx.emit: handoff depth ${this.handoffConfig.maxDepth} reached (runtime.handoff.maxDepth)`
             );
@@ -1408,15 +1431,15 @@ export class BrainstemRuntime {
               observation,
               emissionId: randomUUID(),
               pollId: null,
-              input: {
-                id: `destination:${item.id}`,
+              // Not from an input: `input` stays empty and the
+              // origin names the destination that emitted it.
+              origin: {
+                kind: "destination",
+                id: item.id,
                 plugin: item.plugin.name,
                 name: item.destinationName,
-                module: item.entry.module ?? null
-              },
-              lineage: {
-                destinations: [...lineage.destinations, item.id],
-                depth: lineage.depth + 1
+                depth: depth + 1,
+                lineage: [...lineage, item.id]
               }
             }
           })),
@@ -1426,13 +1449,23 @@ export class BrainstemRuntime {
     });
 
     if (emitted.length > 0) {
+      const emittedInfo = {
+        plugin: destinationInfo.plugin,
+        destination: destinationInfo.destination,
+        destinationId: destinationInfo.destinationId,
+        observationId: destinationInfo.observationId,
+        deliveryKey: destinationInfo.deliveryKey,
+        observations: emitted.map(observation => observation.payload.id),
+        depth: depth + 1
+      };
+
       this.logger.info?.(
         "destination emitted observations",
-        {
-          ...destinationInfo,
-          observations: emitted.map(observation => observation.payload.id),
-          depth: lineage.depth + 1
-        }
+        emittedInfo
+      );
+      this.#emitTelemetry(
+        "brainstem.destination.emitted",
+        emittedInfo
       );
     }
 
@@ -1622,6 +1655,28 @@ export class BrainstemRuntime {
  * the same key while a re-emitted (e.g. reminder)
  * observation gets a new one.
  */
+/*
+ * The origin of a decide or deliver job. Jobs queued before
+ * origins existed carry `lineage` (handoffs) or only `input`.
+ */
+function legacyOrigin(payload) {
+  if (payload.origin) return payload.origin;
+
+  if (payload.lineage) {
+    const lineage = payload.lineage.destinations ?? [];
+    return {
+      kind: "destination",
+      id: lineage.at(-1) ?? null,
+      depth: payload.lineage.depth ?? lineage.length,
+      lineage
+    };
+  }
+
+  return payload.input?.id
+    ? { kind: "input", id: payload.input.id }
+    : null;
+}
+
 export function deliveryKey({
   destinationId,
   observationId,
