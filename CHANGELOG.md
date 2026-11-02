@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 — 2026-11-02
+
+Small agent tasks and the groundwork for multi-core: a generic agentOS runner for cheap, bounded agent work, destinations that hand results back to the core, a log file input, telemetry and a core registry that identify cores and destinations, and a Web UI flow built on them.
+
+Upgrading:
+
+- Migrations `0003_cores` and `0004_node_stats` run automatically on start.
+- The Docker image omits optional dependencies (the agentOS VM runtime). Build with `--build-arg INSTALL_OPTIONAL=true` to use `agentos-runner` in Docker.
+- Handed-off observations no longer pretend to come from an input named `destination:<id>`: their `input` is empty and `origin` names the destination. Consumers of telemetry or output envelopes that relied on that input id should read `origin`.
+- Web UI destination nodes show `delivered` instead of `outputs`. Per-node totals start counting from the upgrade; earlier history isn't backfilled.
+
+Changes:
 
 - Per-node totals: the API counts polls, observations, decisions, completed deliveries, handoffs, errors and the last event time per flow node in a new `stat_nodes` table (migration `0004_node_stats`) as telemetry arrives, and returns them as `nodes` in `GET /api/stats`. The Flow page shows these totals, so node counters no longer reset when events leave the 2000-event window. Destination nodes now show `delivered` (completed deliveries) instead of `outputs`, which only ever counted the HTTP JSON destination's output events.
 

@@ -219,14 +219,14 @@ docker run --rm \
   --env-file .env \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v1.3.0 \
+  ghcr.io/jurrebuunk/brainstem:v1.4.0 \
   node brainstem.mjs --once
 ```
 
 Verify the image:
 
 ```sh
-docker manifest inspect ghcr.io/jurrebuunk/brainstem:v1.3.0
+docker manifest inspect ghcr.io/jurrebuunk/brainstem:v1.4.0
 ```
 
 See [`docs/docker.md`](docs/docker.md).
