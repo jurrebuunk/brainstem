@@ -11,7 +11,6 @@ import { pathToFileURL } from "node:url";
  *              toolCollection }) → vm
  *   vm.writeFile(path, text)
  *   vm.exec(command, { timeoutMs, signal }) → { exitCode, stdout, stderr, ... }
- *   vm.runSession({ agent, prompt, timeoutMs, signal, onEvent })
  *   vm.dispose()
  *
  * `@rivet-dev/agentos-core` is an optional dependency: it is only
@@ -176,17 +175,6 @@ function wrapVm(vm) {
         stderrTruncated: result.stderrTruncated === true,
         outcome: result.outcome ?? null
       };
-    },
-
-    /*
-     * Agent sessions are step 2 of the agentos-runner plan. They
-     * are not part of @rivet-dev/agentos-core 0.4.x; the session
-     * API lives in the @rivet-dev/agentos runtime SDK.
-     */
-    async runSession() {
-      throw new Error(
-        "agentos-runner: agent sessions ('prompt' tasks) are not implemented yet; use a 'command' task for now"
-      );
     },
 
     async dispose() {

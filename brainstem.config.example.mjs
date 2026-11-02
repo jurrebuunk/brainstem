@@ -156,9 +156,15 @@ export default {
       sources: ["github"],
       types: ["issue"],
       config: {
-        // An agent task (agent sessions are not implemented yet).
+        // An agent task. The model is called from the host; the key
+        // never enters the VM. Budgets are small by default.
         prompt: "Rewrite GitHub issue {{observation.data.title}} as a clear bug report for a coding agent.",
-        allowHosts: ["api.anthropic.com"]
+        model: {
+          baseUrl: "http://127.0.0.1:8317/v1",
+          name: "gpt-5.6-luna",
+          apiKeyEnv: "AGENTOS_MODEL_API_KEY"
+        },
+        limits: { maxTurns: 4, maxCommands: 2 }
       }
     }
     */

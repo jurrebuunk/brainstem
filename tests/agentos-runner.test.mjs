@@ -14,6 +14,12 @@ import {
 import { MemoryPluginStateStore } from "../src/runtime/plugin-state.mjs";
 import { createDestinationContext, createOutputEnvelope } from "../src/sdk/index.mjs";
 
+const MODEL = {
+  baseUrl: "http://model.test/v1",
+  name: "gpt-5.6-luna",
+  apiKey: "test-key"
+};
+
 const handle = (ctx, output) =>
   agentosRunnerPlugin.destinations.default.handle(ctx, output);
 
@@ -142,8 +148,13 @@ function reportTool(sent, overrides = {}) {
 
 test("agentos-runner config requires exactly one of prompt or command", () => {
   assert.throws(() => normalizeConfig({}), /exactly one of 'prompt'/);
+  assert.throws(() => normalizeConfig({ prompt: "a" }), /model is required/);
+  assert.throws(() => normalizeConfig({ prompt: "a", model: { ...MODEL, baseUrl: "model.test" } }), /model\.baseUrl/);
+  assert.throws(() => normalizeConfig({ prompt: "a", model: { baseUrl: MODEL.baseUrl, name: "m" } }), /apiKeyEnv/);
+  assert.throws(() => normalizeConfig({ prompt: "a", model: MODEL, limits: { maxTokens: 5 } }), /limits\.maxTokens is not a known limit/);
+  assert.equal(normalizeConfig({ prompt: "a", model: MODEL, limits: { maxTurns: 3 } }).limits.maxTurns, 3);
   assert.throws(() => normalizeConfig({ prompt: "a", command: "b" }), /exactly one of 'prompt'/);
-  assert.equal(normalizeConfig({ prompt: "Summarize" }).mode, "agent");
+  assert.equal(normalizeConfig({ prompt: "Summarize", model: MODEL }).mode, "agent");
   assert.equal(normalizeConfig({ command: "true" }).mode, "command");
 });
 
@@ -203,19 +214,24 @@ test("templates resolve envelope paths and quote command values", () => {
   assert.throws(() => renderTemplate(() => "", event), /non-empty string/);
 });
 
-test("agent prompts add the inbox, outbox and tool instructions", () => {
+test("agent prompts carry budgets and a compact observation summary", () => {
   const config = normalizeConfig({
     prompt: "Summarize issue {{observation.data.title}}.",
+    model: MODEL,
     tools: { sendReport: { ...reportTool([]), required: true, maxCalls: 1 } }
   });
 
-  const prompt = buildAgentPrompt(config, outputEnvelope().payload);
+  const { system, prompt } = buildAgentPrompt(
+    config,
+    outputEnvelope({ data: { title: "Crash on start", body: "x".repeat(50_000) } }).payload
+  );
 
+  assert.match(system, /at most 4 commands and 6 turns/);
+  assert.match(system, /\/inbox\/envelope\.json/);
+  assert.match(system, /You must call sendReport/);
   assert.match(prompt, /^Summarize issue Crash on start\./);
-  assert.match(prompt, /\/inbox\/envelope\.json/);
-  assert.match(prompt, /\/outbox\/result\.json/);
-  assert.match(prompt, /agentos-tools <tool>/);
-  assert.match(prompt, /send-report: Send a report to the operator \(required: call it before you finish, at most 1 call\)/);
+  assert.match(prompt, /- id: github:repo#1/);
+  assert.ok(prompt.length < 1000, "observation data is not inlined");
   assert.equal(toolCommandName("send_report"), "send_report");
 });
 
@@ -425,20 +441,193 @@ test("agentos-runner gives up on a VM that never boots", async () => {
   assert.equal(late.disposed, true, "a VM that boots after the deadline is disposed");
 });
 
-test("agentos-runner passes the built prompt to the agent session", async () => {
-  const adapter = fakeAdapter(async () => ({}));
-  const output = outputEnvelope();
-  const { ctx } = context({
+/*
+ * A stand-in for the chat completions endpoint: replies are
+ * served in order, request bodies are recorded.
+ */
+async function withModel(replies, fn) {
+  const requests = [];
+  const original = globalThis.fetch;
+
+  globalThis.fetch = async (url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push({ url: String(url), headers: options.headers, body });
+    const reply = typeof replies === "function" ? replies(requests.length, body) : replies[requests.length - 1];
+
+    if (!reply) throw new Error(`unexpected model request ${requests.length}`);
+
+    return new Response(JSON.stringify({
+      choices: [{ message: { role: "assistant", content: null, ...reply } }],
+      usage: { prompt_tokens: 100, completion_tokens: 10 }
+    }), { status: 200 });
+  };
+
+  try {
+    await fn(requests);
+  }
+  finally {
+    globalThis.fetch = original;
+  }
+
+  return requests;
+}
+
+const toolCall = (id, name, args) => ({
+  tool_calls: [{ id, type: "function", function: { name, arguments: JSON.stringify(args) } }]
+});
+
+function agentConfig(adapter, { limits, ...overrides } = {}) {
+  return {
     adapter,
+    prompt: "Find errors in /mnt/logs and report them.",
+    model: MODEL,
+    ...overrides,
+    limits: { minRequestIntervalMs: 0, ...limits }
+  };
+}
+
+test("agent runs commands in the VM and calls host tools", async () => {
+  const sent = [];
+  const results = [];
+  const adapter = fakeAdapter(async (vm, command) => ({ exitCode: 0, stdout: `ran: ${command}` }));
+  const output = outputEnvelope();
+  const { ctx, logs } = context(agentConfig(adapter, {
+    tools: { sendReport: reportTool(sent, { required: true }) },
+    onResult: run => results.push(run)
+  }), { output });
+
+  const requests = await withModel([
+    toolCall("c1", "run_command", { command: "grep -c ERROR /mnt/logs/app.log" }),
+    toolCall("c2", "sendReport", { title: "2 errors", markdown: "db timeouts" }),
+    { content: "Reported 2 errors." }
+  ], () => handle(ctx, output));
+
+  assert.equal(requests.length, 3);
+  assert.equal(requests[0].url, "http://model.test/v1/chat/completions");
+  assert.equal(requests[0].headers.authorization, "Bearer test-key");
+  assert.equal(requests[0].body.model, "gpt-5.6-luna");
+  assert.equal(requests[0].body.max_completion_tokens, 600);
+  assert.deepEqual(requests[0].body.tools.map(tool => tool.function.name), ["run_command", "sendReport"]);
+
+  // The command's output went back to the model as the tool result.
+  const toolMessage = requests[1].body.messages.at(-1);
+  assert.equal(toolMessage.role, "tool");
+  assert.equal(toolMessage.tool_call_id, "c1");
+  assert.match(toolMessage.content, /ran: grep -c ERROR/);
+
+  assert.deepEqual(sent.map(call => call.args), [{ title: "2 errors", markdown: "db timeouts" }]);
+  assert.equal(results[0].text, "Reported 2 errors.");
+  assert.deepEqual(results[0].usage, { requests: 3, promptTokens: 300, completionTokens: 30 });
+  assert.ok(logs.some(log => log.message === "agentos agent output"));
+});
+
+test("agent budgets: command limit, duplicate calls and truncated output", async () => {
+  const adapter = fakeAdapter(async () => ({ exitCode: 0, stdout: "y".repeat(5000) }));
+  const output = outputEnvelope();
+  const { ctx } = context(agentConfig(adapter, { limits: { maxCommands: 2, maxToolOutputChars: 100 } }), { output });
+
+  const requests = await withModel([
+    toolCall("c1", "run_command", { command: "cat big.log" }),
+    toolCall("c2", "run_command", { command: "cat big.log" }),
+    toolCall("c3", "run_command", { command: "tail big.log" }),
+    toolCall("c4", "run_command", { command: "head big.log" }),
+    { content: "done" }
+  ], () => handle(ctx, output));
+
+  const toolResults = requests.slice(1).map(request => JSON.parse(request.body.messages.at(-1).content));
+
+  assert.ok(toolResults[0].stdout.length < 200, "output is cut to maxToolOutputChars");
+  assert.match(toolResults[0].stdout, /truncated 4900 chars/);
+  assert.match(toolResults[1].error, /duplicate call/);
+  assert.equal(toolResults[2].exitCode, 0);
+  assert.match(toolResults[3].error, /command limit of 2 reached/);
+  assert.equal(adapter.vms[0].commands.length, 2, "only two commands reached the VM");
+});
+
+test("agent stops at maxTurns", async () => {
+  const output = outputEnvelope();
+  const { ctx } = context(agentConfig(fakeAdapter(), { limits: { maxTurns: 3 } }), { output });
+  let n = 0;
+
+  const requests = await withModel(
+    () => toolCall(`c${++n}`, "run_command", { command: `echo ${n}` }),
+    () => assert.rejects(() => handle(ctx, output), /no final answer within 3 turns/)
+  );
+
+  assert.equal(requests.length, 3);
+});
+
+test("agent stops before the conversation outgrows maxContextChars", async () => {
+  const adapter = fakeAdapter(async () => ({ exitCode: 0, stdout: "z".repeat(3000) }));
+  const output = outputEnvelope();
+  const { ctx } = context(agentConfig(adapter, { limits: { maxContextChars: 2500, maxToolOutputChars: 2000 } }), { output });
+
+  const requests = await withModel([
+    toolCall("c1", "run_command", { command: "cat a" })
+  ], () => assert.rejects(() => handle(ctx, output), /conversation reached \d+ characters \(limit 2500\)/));
+
+  assert.equal(requests.length, 1, "the oversized second request is never sent");
+});
+
+test("agent reminds the model once about a required tool", async () => {
+  const sent = [];
+  const output = outputEnvelope();
+  const { ctx } = context(agentConfig(fakeAdapter(), {
+    tools: { sendReport: reportTool(sent, { required: true }) }
+  }), { output });
+
+  const requests = await withModel([
+    { content: "All good." },
+    toolCall("c1", "sendReport", { title: "t", markdown: "m" }),
+    { content: "Sent." }
+  ], () => handle(ctx, output));
+
+  assert.match(requests[1].body.messages.at(-1).content, /you must call: sendReport/);
+  assert.equal(sent.length, 1);
+});
+
+test("a retried delivery does not talk to the model again", async () => {
+  const store = new MemoryPluginStateStore();
+  const output = outputEnvelope();
+  const config = agentConfig(fakeAdapter());
+
+  await withModel(
+    () => { throw new Error("rate limited"); },
+    () => assert.rejects(() => handle(context(config, { store, output }).ctx, output), /rate limited/)
+  );
+
+  const requests = await withModel([], async () => {
+    const error = await handle(context(config, { store, output, attempt: 2 }).ctx, output).catch(e => e);
+    assert.match(error.message, /already used 1 model attempt/);
+    assert.equal(error.permanent, true, "the delivery is dead-lettered instead of retried");
+  });
+
+  assert.equal(requests.length, 0);
+});
+
+test("agent fails permanently without an API key and sends nothing", async () => {
+  const output = outputEnvelope();
+  const { ctx } = context(agentConfig(fakeAdapter(), {
+    model: { baseUrl: MODEL.baseUrl, name: MODEL.name, apiKeyEnv: "BRAINSTEM_TEST_NO_SUCH_KEY" }
+  }), { output });
+
+  const requests = await withModel([], async () => {
+    const error = await handle(ctx, output).catch(e => e);
+    assert.match(error.message, /set BRAINSTEM_TEST_NO_SUCH_KEY/);
+    assert.equal(error.permanent, true);
+  });
+
+  assert.equal(requests.length, 0);
+});
+
+test("agent prompts are cut to maxPromptChars", async () => {
+  const output = outputEnvelope({ data: { title: "t".repeat(10_000) } });
+  const { ctx } = context(agentConfig(fakeAdapter(), {
     prompt: "Summarize {{observation.data.title}}",
-    agent: "pi",
-    env: { MODEL_KEY: "k" }
-  }, { output });
+    limits: { maxPromptChars: 500 }
+  }), { output });
 
-  await handle(ctx, output);
+  const requests = await withModel([{ content: "ok" }], () => handle(ctx, output));
 
-  const { session } = adapter.vms[0];
-  assert.equal(session.agent, "pi");
-  assert.match(session.prompt, /^Summarize Crash on start/);
-  assert.deepEqual(session.env, { MODEL_KEY: "k" });
+  assert.ok(requests[0].body.messages[1].content.length < 600);
 });

@@ -53,40 +53,48 @@ export function shellQuote(value) {
 }
 
 /*
- * The task prompt plus the facts every agent run needs: where
- * the envelope is, where to put a result, and which tools exist.
+ * The messages that start an agent run. The envelope itself is
+ * not inlined (observation data can be large); the model gets a
+ * compact summary and can inspect the full file with commands.
  */
 export function buildAgentPrompt(config, event) {
-  const task = renderTemplate(config.prompt, event);
-  const tools = Object.values(config.tools);
-  const lines = [
-    task.trim(),
-    "",
-    "---",
-    "Context from Brainstem:",
-    `- The full decision and observation envelope is at ${config.inboxPath}.`,
-    `- To return a structured result, write JSON to ${config.outboxPath}.`
-  ];
+  const { observation, decision } = templateScope(event);
+  const { limits } = config;
+  const required = Object.values(config.tools)
+    .filter(tool => tool.required)
+    .map(tool => tool.name);
 
-  if (tools.length === 0) {
-    lines.push("- No tools are available for this task.");
-  }
-  else {
-    lines.push(
-      `- Tools run on the host. Call them as \`agentos-${config.toolCollection} <tool> --<field> <value>\`; each prints a JSON result.`
-    );
+  const system = [
+    "You are a small, careful task agent started by Brainstem, an operations monitor.",
+    "Work in as few steps as possible and keep answers short.",
+    `Budget: at most ${limits.maxCommands} commands and ${limits.maxTurns} turns; command output is cut at ${limits.maxToolOutputChars} characters.`,
+    "Use targeted commands (grep, head, tail, wc) instead of printing whole files. Never repeat a command.",
+    `The observation summary below is usually enough; the full envelope is JSON at ${config.inboxPath} if you need a specific field (grep it rather than printing it).`,
+    `To return structured data, write JSON to ${config.outboxPath}.`,
+    required.length > 0
+      ? `You must call ${required.join(", ")} before you finish.`
+      : null,
+    "When done, reply with a brief final answer and no tool calls."
+  ].filter(Boolean).join("\n");
 
-    for (const tool of tools) {
-      const limits = [
-        tool.required ? "required: call it before you finish" : null,
-        `at most ${tool.maxCalls} call${tool.maxCalls === 1 ? "" : "s"}`
-      ].filter(Boolean).join(", ");
+  const context = [
+    "Observation:",
+    `- id: ${observation?.id ?? "unknown"}`,
+    `- source/type: ${observation?.source ?? "?"}/${observation?.type ?? "?"}`,
+    `- summary: ${clip(observation?.summary, 300)}`,
+    `- decision: ${decision?.decision ?? "?"} (route ${decision?.route ?? "?"})`,
+    decision?.reason ? `- reason: ${clip(decision.reason, 200)}` : null
+  ].filter(Boolean).join("\n");
 
-      lines.push(`  - ${toolCommandName(tool.name)}: ${tool.description} (${limits})`);
-    }
-  }
+  return {
+    system,
+    prompt: `${renderTemplate(config.prompt, event).trim()}\n\n${context}`
+  };
+}
 
-  return lines.join("\n");
+function clip(value, max) {
+  const text = value === undefined || value === null ? "" : String(value);
+  return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
 /*

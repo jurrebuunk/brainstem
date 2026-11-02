@@ -10,6 +10,23 @@ export const DEFAULT_TOOL_MAX_CALLS = 10;
 export const DEFAULT_TOOL_TIMEOUT_MS = 30 * 1000;
 
 /*
+ * Agent budgets. Deliberately small: model APIs with low limits
+ * are the expected case, and a task that needs more should say
+ * so in its config.
+ */
+export const DEFAULT_AGENT_LIMITS = {
+  maxTurns: 6,                 // model requests per run
+  maxOutputTokens: 600,        // per model response
+  maxCommands: 4,              // run_command calls per run
+  commandTimeoutMs: 20 * 1000, // per command
+  maxToolOutputChars: 2000,    // per tool result fed back to the model
+  maxPromptChars: 4000,        // rendered task prompt
+  maxContextChars: 16000,      // whole conversation, checked before each request
+  minRequestIntervalMs: 1000,  // spacing between model requests in this process
+  maxAgentAttempts: 1          // delivery attempts allowed to talk to the model
+};
+
+/*
  * Validates and normalizes one agentos-runner entry's config.
  * Throws a TypeError naming the offending field, so a bad task
  * fails loudly instead of silently doing the wrong thing.
@@ -49,7 +66,8 @@ export function normalizeConfig(config = {}) {
 
   return {
     mode: hasPrompt ? "agent" : "command",
-    agent: optionalString(config.agent, "agent") ?? "pi",
+    model: hasPrompt ? normalizeModel(config.model) : null,
+    limits: normalizeLimits(config.limits),
     prompt: config.prompt ?? null,
     command: config.command ?? null,
     allowHosts: normalizeHosts(config.allowHosts),
@@ -81,6 +99,58 @@ export function defineAgentOsTask(config) {
   normalizeConfig(config);
 
   return config;
+}
+
+/*
+ * An OpenAI-compatible chat completions endpoint. The key is
+ * read from apiKeyEnv when the run starts, so config files never
+ * need to hold it.
+ */
+function normalizeModel(model) {
+  if (!isPlainObject(model)) {
+    fail("model", "is required for prompt tasks: { baseUrl, name, apiKeyEnv }");
+  }
+
+  if (typeof model.baseUrl !== "string" || !/^https?:\/\//.test(model.baseUrl)) {
+    fail("model.baseUrl", "must be an http(s) URL such as http://127.0.0.1:8317/v1");
+  }
+
+  if (typeof model.name !== "string" || !model.name.trim()) {
+    fail("model.name", "must name the model, e.g. gpt-5.6-luna");
+  }
+
+  if (model.apiKey === undefined && model.apiKeyEnv === undefined) {
+    fail("model", "needs apiKeyEnv (preferred) or apiKey");
+  }
+
+  return {
+    baseUrl: model.baseUrl.replace(/\/$/, ""),
+    name: model.name.trim(),
+    apiKey: optionalString(model.apiKey, "model.apiKey"),
+    apiKeyEnv: optionalString(model.apiKeyEnv, "model.apiKeyEnv")
+  };
+}
+
+function normalizeLimits(limits) {
+  if (limits === undefined) return { ...DEFAULT_AGENT_LIMITS };
+
+  if (!isPlainObject(limits)) {
+    fail("limits", "must be an object");
+  }
+
+  const normalized = { ...DEFAULT_AGENT_LIMITS };
+
+  for (const [key, value] of Object.entries(limits)) {
+    if (!(key in DEFAULT_AGENT_LIMITS)) {
+      fail(`limits.${key}`, `is not a known limit (${Object.keys(DEFAULT_AGENT_LIMITS).join(", ")})`);
+    }
+
+    normalized[key] = key === "minRequestIntervalMs" && value === 0
+      ? 0
+      : positiveInteger(value, `limits.${key}`);
+  }
+
+  return normalized;
 }
 
 function normalizeTools(tools) {

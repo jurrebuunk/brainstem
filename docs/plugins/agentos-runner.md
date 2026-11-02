@@ -11,7 +11,10 @@ The plugin is generic. It knows nothing about Matrix, logs or GitHub. Each desti
 
 agentOS runs in-process: each run boots a lightweight VM (WebAssembly and V8 isolates, about 100–250 ms), and the VM is disposed when the run ends.
 
-> **Status:** `command` tasks are complete. `prompt` (agent) tasks are accepted by the config but agent sessions are not implemented yet, so a `prompt` task fails its delivery.
+There are two kinds of task:
+
+- **`command`**: a shell command runs in the VM. No model is involved.
+- **`prompt`**: a model works through the task. The agent loop runs **on the host**, against any OpenAI-compatible chat completions endpoint. The model gets a `run_command` tool (which runs inside the VM) plus the entry's tools. The API key never enters the VM, and the VM needs no network access. See [Agent tasks](#agent-tasks).
 
 ## Install
 
@@ -97,8 +100,13 @@ export default {
       sources: ["github"],
       types: ["issue"],
       config: defineAgentOsTask({
-        prompt: "Rewrite GitHub issue {{observation.data.title}} as a clear bug report for a coding agent, then send it with send-report.",
-        allowHosts: ["api.anthropic.com"],
+        prompt: "Rewrite GitHub issue {{observation.data.title}} as a clear bug report for a coding agent, then send it with sendReport.",
+        model: {
+          baseUrl: "http://127.0.0.1:8317/v1",   // any OpenAI-compatible endpoint
+          name: "gpt-5.6-luna",
+          apiKeyEnv: "AGENTOS_MODEL_API_KEY"
+        },
+        limits: { maxTurns: 4, maxCommands: 2 },
         tools: { sendReport }
       })
     }
@@ -115,7 +123,7 @@ Give every entry a stable `id`. It names the node in the Web UI and is part of e
 1. Skips the run if `minRouteConfidence` or `runOnce` says so. The skip is logged.
 2. Boots a VM with the entry's mounts, network allowlist, software and tools. The outbox directory is a fresh temporary host directory, mounted writable.
 3. Writes the full `brainstem.output` envelope to `/inbox/envelope.json`.
-4. Runs the `command`, or the agent with the `prompt`.
+4. Runs the `command`, or the agent loop with the `prompt`.
 5. Reads `/outbox/result.json`, if the task wrote one.
 6. Checks that every `required` tool was called.
 7. Calls `onResult`, logs the outcome, disposes the VM and deletes the outbox directory.
@@ -130,9 +138,10 @@ The delivery fails, and Brainstem retries it with backoff, when:
 
 ```js
 command               // shell command (string template or (event) => string); exactly one of command/prompt
-prompt                // agent task (string template or (event) => string); agent sessions not implemented yet
-agent                 // agent for prompt tasks; default "pi"
-allowHosts            // hosts the VM may reach, e.g. ["api.anthropic.com"]; default: none
+prompt                // agent task (string template or (event) => string)
+model                 // prompt tasks: { baseUrl, name, apiKeyEnv } (or apiKey); OpenAI-compatible
+limits                // prompt tasks: agent budgets, see "Agent tasks"
+allowHosts            // hosts the VM may reach, e.g. ["api.example.com"]; default: none
 mounts                // [{ path, hostPath, readOnly }]; readOnly defaults to true
 env                   // extra environment variables for the run
 software              // agentOS software, e.g. [{ registry: "ripgrep" }, { registry: "jq" }]
@@ -155,6 +164,42 @@ outputLogMaxChars     // max chars of stdout/stderr/result per log entry; defaul
 Processes in the VM run as **Brainstem's own uid and gid**. A mounted host directory therefore exposes exactly what the Brainstem process itself can read, and nothing more. Mounts are read-only unless an entry sets `readOnly: false`.
 
 If a task can't read a mounted directory (`Permission denied`), check that the user Brainstem runs as can read it. For example, logs owned by `root:adm` with mode `0640` need Brainstem's user in the `adm` group.
+
+## Agent tasks
+
+A `prompt` task runs a small agent loop in the plugin:
+
+1. The model gets a short system message (the budgets and the rules) and the rendered `prompt`, followed by a compact observation summary. The full envelope isn't sent, because observation data can be large. The model can `grep` it in the VM.
+2. Each model turn can call `run_command` (runs in the VM) or one of the entry's tools. Results go back to the model, cut to `maxToolOutputChars`.
+3. The run ends when the model answers without tool calls. Its final text goes into the logs and to `onResult` as `text`.
+
+The key is read from `model.apiKeyEnv` when a run starts. Brainstem doesn't load `.env` itself, so export the variable, for example with `set -a; . ./.env; set +a`.
+
+### Budgets
+
+Model APIs often have low limits, so every run is bounded. The defaults are deliberately small, and a task overrides them in `limits`:
+
+| Limit | Default | What happens at the limit |
+|---|---|---|
+| `maxTurns` | 6 | model requests per run; the run fails if there's no final answer by then |
+| `maxOutputTokens` | 600 | sent as `max_completion_tokens` on every request |
+| `maxCommands` | 4 | further `run_command` calls get an error result |
+| `commandTimeoutMs` | 20000 | per command |
+| `maxToolOutputChars` | 2000 | each tool result fed back to the model is cut to this |
+| `maxPromptChars` | 4000 | the rendered task prompt is cut to this |
+| `maxContextChars` | 16000 | checked before each request; the run fails instead of sending more |
+| `minRequestIntervalMs` | 1000 | minimum spacing between model requests in this process |
+| `maxAgentAttempts` | 1 | delivery attempts that may talk to the model |
+
+Loop protection:
+
+- **Duplicate calls:** an identical tool call (same name and arguments) gets an error result instead of running again.
+- **Required tools:** if the model finishes without calling a `required` tool, it gets **one** reminder, if a turn is left.
+- **One request at a time:** model requests from all agentOS tasks in a process go out one at a time, spaced by `minRequestIntervalMs`, so parallel deliveries can't burst through a rate limit.
+- **No retried conversations:** with `maxAgentAttempts: 1`, a delivery whose run already talked to the model is never retried automatically. A failure after that point (a 429, a timeout, a budget limit) fails the delivery **permanently**. It shows up under dead jobs on the Deliveries page, where you can redrive it. A failure before any model request (for example the VM not booting) is retried as usual.
+- **Revisions:** `runOnce: "revision"` (the default) keeps reminders and re-polls of an unchanged observation from starting new runs.
+
+Usage (requests and prompt/completion tokens) is logged per turn (`agentos agent turn`) and per run (`agentos agent output`).
 
 ## Templates
 
@@ -221,6 +266,7 @@ Inputs can re-emit an unchanged observation, for example a reminder for an alert
 Logs appear under the entry's destination node:
 
 - `agentos runner started` / `agentos runner skipped` / `agentos runner completed`
+- `agentos agent turn` / `agentos agent command` / `agentos agent output`: tool calls, commands, final text and token usage
 - `agentos command output`: exit code, stdout and stderr (truncated)
 - `agentos tool call` / `agentos tool call replayed` / `agentos tool call failed`
 - `agentos required tools not called`

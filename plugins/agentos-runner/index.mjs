@@ -7,6 +7,7 @@ import { normalizeConfig } from "./config.mjs";
 import { loadAgentOsAdapter } from "./adapter.mjs";
 import { buildAgentPrompt, renderCommand } from "./prompt.mjs";
 import { createToolRuntime } from "./tools.mjs";
+import { runAgentLoop } from "./agent.mjs";
 
 export { defineAgentOsTask } from "./config.mjs";
 
@@ -18,6 +19,7 @@ export { defineAgentOsTask } from "./config.mjs";
  * host tools it gets.
  */
 const RUN_KEY_PREFIX = "run:";
+const AGENT_KEY_PREFIX = "agent:";
 
 export default defineDestinationPlugin({
   apiVersion: "brainstem.destination/v2",
@@ -79,7 +81,7 @@ export default defineDestinationPlugin({
 
           const run = config.mode === "command"
             ? await runCommand(vm, config, event, signal, ctx)
-            : await runAgent(vm, config, event, signal, ctx);
+            : await runAgent(vm, config, event, signal, ctx, tools);
 
           const result = parseResult(
             await readFile(join(outboxDir, posix.basename(config.outboxPath)), "utf8")
@@ -100,6 +102,10 @@ export default defineDestinationPlugin({
 
           await markRun(config, ctx, event);
           await tools.clear();
+
+          if (config.mode === "agent" && ctx.idempotencyKey) {
+            await ctx.state.delete(AGENT_KEY_PREFIX + ctx.idempotencyKey);
+          }
 
           ctx.logger.info?.(
             "agentos runner completed",
@@ -232,17 +238,70 @@ async function runCommand(vm, config, event, signal, ctx) {
   };
 }
 
-async function runAgent(vm, config, event, signal, ctx) {
-  const prompt = buildAgentPrompt(config, event);
+/*
+ * A prompt task. The model is called from the host (agent.mjs),
+ * so the key never enters the VM.
+ *
+ * Each delivery may talk to the model at most
+ * limits.maxAgentAttempts times. A retry past that fails
+ * permanently: the delivery becomes a dead job that can be
+ * redriven from the Web UI, instead of spending more requests.
+ */
+async function runAgent(vm, config, event, signal, ctx, tools) {
+  const apiKey = config.model.apiKey ?? process.env[config.model.apiKeyEnv];
 
-  return await vm.runSession({
-    agent: config.agent,
+  if (!apiKey) {
+    throw permanentError(
+      `agentos-runner: no model API key; set ${config.model.apiKeyEnv ?? "model.apiKey"}`
+    );
+  }
+
+  const attemptKey = ctx.idempotencyKey
+    ? AGENT_KEY_PREFIX + ctx.idempotencyKey
+    : null;
+
+  if (attemptKey) {
+    const previous = await ctx.state.get(attemptKey);
+    const attempts = previous?.attempts ?? 0;
+
+    if (attempts >= config.limits.maxAgentAttempts) {
+      throw permanentError(
+        `agentos-runner: this delivery already used ${attempts} model attempt${attempts === 1 ? "" : "s"} (limits.maxAgentAttempts); not retrying`
+      );
+    }
+
+    await ctx.state.set(attemptKey, { attempts: attempts + 1 });
+  }
+
+  const { system, prompt } = buildAgentPrompt(config, event);
+
+  const outcome = await runAgentLoop({
+    model: { ...config.model, apiKey },
+    limits: config.limits,
+    system,
     prompt,
-    env: config.env,
-    timeoutMs: config.timeoutMs,
+    tools: config.tools,
+    toolRuntime: tools,
+    vm,
     signal,
-    onEvent: data => ctx.logger.debug?.("agentos agent event", { data })
-  }) ?? {};
+    logger: ctx.logger
+  });
+
+  ctx.logger.info?.(
+    "agentos agent output",
+    {
+      text: truncate(outcome.text, config.outputLogMaxChars),
+      turns: outcome.turns,
+      commands: outcome.commands,
+      usage: outcome.usage
+    }
+  );
+
+  return outcome;
+}
+
+function permanentError(message) {
+  return Object.assign(new Error(message), { permanent: true });
 }
 
 async function checkRequiredTools(config, tools, ctx, event) {
