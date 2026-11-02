@@ -11,7 +11,6 @@ import {
   Handle,
   Position,
   ReactFlow,
-  useInternalNode,
   useEdgesState,
   useNodesState
 } from "@xyflow/react";
@@ -811,8 +810,15 @@ function BrainstemNode({ data }) {
 
       {data.footnote && <div className="node-footnote">{data.footnote}</div>}
 
-      {isDestination && data.handingOff && (
-        <Handle id="handoff-out" type="source" position={Position.Right} className="node-handle handoff-handle is-handle-active" isConnectable={false} />
+      {/* Always mounted so its position is known before a handoff; only visible during one. */}
+      {isDestination && (
+        <Handle
+          id="handoff-out"
+          type="source"
+          position={Position.Right}
+          className={`node-handle handoff-handle${data.handingOff ? " is-handle-active" : " is-hidden"}`}
+          isConnectable={false}
+        />
       )}
 
       {isInput && (
@@ -824,17 +830,13 @@ function BrainstemNode({ data }) {
 
 /*
  * The transient "handing off" node right of a destination, linked
- * by an ordinary edge. It sits at the destination's y and takes
- * the destination's (already measured) height, with the pill
- * centred inside, so its connection dot is level with the
- * destination's from the first frame.
+ * by an ordinary edge. It has the destination's fixed height and
+ * y (see flow/model.js), with the pill centred, so both
+ * connection dots are level.
  */
 function HandoffPillNode({ data }) {
-  const destination = useInternalNode(`destination:${data.destinationId}`);
-  const height = destination?.measured?.height;
-
   return (
-    <div className="handoff-pill-slot" style={height ? { height } : undefined}>
+    <div className="handoff-pill-slot">
       <Handle id="in" type="target" position={Position.Left} className="node-handle handoff-handle is-handle-active" isConnectable={false} />
       <div className="handoff-pill" title={`${data.destinationId} is handing an observation back to the core`}>
         {data.label}

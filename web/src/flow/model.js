@@ -37,10 +37,12 @@ const COLORS = {
   idle: "#4b5563"
 };
 
-// Handoff pill: right of its destination node (260 wide), at the
-// same y; the pill node takes the destination's height so both
-// connection dots line up.
-const HANDOFF_PILL_X = FLOW_DESTINATION_X + 260 + 90;
+// Destination nodes and handoff pills have the same fixed size
+// in the graph, so their connection dots (at 50% height) line up
+// without measuring anything.
+const NODE_WIDTH = 260;
+export const DESTINATION_NODE_HEIGHT = 160;
+const HANDOFF_PILL_X = FLOW_DESTINATION_X + NODE_WIDTH + 90;
 
 export function buildFlowModel({ topology = null, events = [], now = Date.now() } = {}) {
   const structure = collectStructure(topology, events);
@@ -168,6 +170,7 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
         }),
         x: FLOW_DESTINATION_X,
         y: index * FLOW_ROW_GAP,
+        nodeHeight: DESTINATION_NODE_HEIGHT,
         active: isActive(nodeActivity.get(id)),
         handleActive: isActive(edgeActivity.get(destinationEdgeId(destination.id))),
         extra: {
@@ -195,6 +198,7 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
         id: `handoff:${destination.id}:${stamp}`,
         type: "handoffPill",
         position: { x: HANDOFF_PILL_X, y: index * FLOW_ROW_GAP },
+        height: DESTINATION_NODE_HEIGHT,
         draggable: false,
         selectable: false,
         data: {
@@ -474,12 +478,14 @@ function graphNode({
   inputHandles = [],
   outputHandles = [],
   handleActive = false,
+  nodeHeight = null,
   extra = {}
 }) {
   return {
     id,
     type: "brainstemNode",
     position: { x, y },
+    ...(nodeHeight ? { width: NODE_WIDTH, height: nodeHeight } : {}),
     data: { label, subtitle, status, meta, footnote, nodeType, active, height, inputHandles, outputHandles, handleActive, ...extra }
   };
 }

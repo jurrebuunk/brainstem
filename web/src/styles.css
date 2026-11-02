@@ -2661,7 +2661,13 @@ button:disabled {
   position: relative;
   display: flex;
   align-items: center;
-  min-height: 44px;
+  height: 100%;
+}
+
+/* Destination nodes have a fixed height in the graph (flow/model.js). */
+.react-flow__node .node-card.node-destination {
+  box-sizing: border-box;
+  height: 100%;
 }
 
 .handoff-pill {
@@ -2682,6 +2688,10 @@ button:disabled {
 
 .react-flow__handle.node-handle.handoff-handle {
   background: var(--brainstem-active) !important;
+}
+
+.react-flow__handle.node-handle.handoff-handle.is-hidden {
+  visibility: hidden;
 }
 
 .node-footnote {
