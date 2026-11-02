@@ -9,7 +9,7 @@ ghcr.io/jurrebuunk/brainstem
 Current stable image:
 
 ```text
-ghcr.io/jurrebuunk/brainstem:v0.1.0
+ghcr.io/jurrebuunk/brainstem:v1.3.0
 ```
 
 The image contains both:
@@ -61,7 +61,7 @@ docker run --rm \
   --env-file .env \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0 \
+  ghcr.io/jurrebuunk/brainstem:v1.3.0 \
   node brainstem.mjs --once
 ```
 
@@ -77,7 +77,7 @@ docker run -d \
   -e BRAINSTEM_API_PORT=5174 \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0
+  ghcr.io/jurrebuunk/brainstem:v1.3.0
 ```
 
 Run the Web UI container separately:
@@ -91,7 +91,7 @@ docker run -d \
   -e PORT=5173 \
   -e WEB_BACKEND_URL=http://brainstem:5174 \
   -p 127.0.0.1:5173:5173 \
-  ghcr.io/jurrebuunk/brainstem:v0.1.0 \
+  ghcr.io/jurrebuunk/brainstem:v1.3.0 \
   node web/server.mjs
 ```
 
@@ -219,13 +219,13 @@ Config saves are owned by the backend API, syntax-checked with `node --check`, w
 ## Verify published image
 
 ```sh
-docker manifest inspect ghcr.io/jurrebuunk/brainstem:v0.1.0
+docker manifest inspect ghcr.io/jurrebuunk/brainstem:v1.3.0
 ```
 
 Pull explicitly:
 
 ```sh
-docker pull ghcr.io/jurrebuunk/brainstem:v0.1.0
+docker pull ghcr.io/jurrebuunk/brainstem:v1.3.0
 ```
 
 ## Build locally
@@ -253,7 +253,7 @@ The GitHub Actions workflow publishes:
 
 - `latest` from `main`
 - branch tags such as `main`
-- git tags such as `v0.1.0`
+- git tags such as `v1.3.0`
 - SHA tags such as `sha-...`
 
 If the package is not visible in the GitHub UI immediately, verify with `docker manifest inspect`; GHCR package pages can lag behind successful pushes.
