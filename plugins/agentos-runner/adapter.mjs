@@ -10,7 +10,6 @@ import { pathToFileURL } from "node:url";
  *   createVm({ mounts, allowHosts, env, software, tools,
  *              toolCollection }) → vm
  *   vm.writeFile(path, text)
- *   vm.readFile(path) → text | null
  *   vm.exec(command, { timeoutMs, signal }) → { exitCode, stdout, stderr, ... }
  *   vm.runSession({ agent, prompt, timeoutMs, signal, onEvent })
  *   vm.dispose()
@@ -78,6 +77,12 @@ function vmOptions(agentos, z, {
   toolCollection = "tools"
 }) {
   const options = {
+    // The guest runs as Brainstem's own uid/gid, so a mounted host
+    // directory exposes exactly what Brainstem itself can read.
+    user: {
+      uid: process.getuid(),
+      gid: process.getgid()
+    },
     mounts: mounts.map(mount =>
       agentos.hostDirMount(mount.path, mount.hostPath, { readOnly: mount.readOnly })
     ),
@@ -153,11 +158,6 @@ function wrapVm(vm) {
       const dir = path.slice(0, path.lastIndexOf("/"));
       if (dir) await vm.mkdir(dir, { recursive: true });
       await vm.writeFile(path, text);
-    },
-
-    async readFile(path) {
-      if (!(await vm.exists(path))) return null;
-      return new TextDecoder().decode(await vm.readFile(path));
     },
 
     async exec(command, { timeoutMs, signal, env } = {}) {

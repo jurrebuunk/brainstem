@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 
 import agentosRunnerPlugin, { defineAgentOsTask } from "../plugins/agentos-runner/index.mjs";
@@ -31,7 +33,14 @@ function fakeAdapter(script = async () => ({ exitCode: 0 })) {
         commands: [],
         disposed: false,
         async writeFile(path, text) { files.set(path, text); },
-        async readFile(path) { return files.get(path) ?? null; },
+        // A write from inside the VM: lands in the host directory
+        // when the path is under a mount.
+        write(path, text) {
+          const mount = options.mounts.find(m => path.startsWith(`${m.path}/`));
+          if (!mount) throw new Error(`no mount for ${path}`);
+          if (mount.readOnly) throw new Error(`read-only: ${path}`);
+          writeFileSync(join(mount.hostPath, path.slice(mount.path.length + 1)), text);
+        },
         async exec(command, execOptions) {
           vm.commands.push({ command, execOptions });
           const result = await script(vm, command);
@@ -151,6 +160,8 @@ test("agentos-runner config validates tools, mounts and limits", () => {
   assert.throws(() => normalizeConfig({ command: "x", timeoutMs: 0 }), /timeoutMs/);
   assert.throws(() => normalizeConfig({ command: "x", runOnce: "always" }), /runOnce/);
   assert.throws(() => normalizeConfig({ command: "x", minRouteConfidence: 2 }), /minRouteConfidence/);
+  assert.throws(() => normalizeConfig({ command: "x", outboxPath: "/result.json" }), /outboxPath/);
+  assert.throws(() => normalizeConfig({ command: "x", mounts: [{ path: "/outbox", hostPath: "/tmp" }] }), /outbox directory/);
 
   const config = normalizeConfig({
     command: "x",
@@ -214,7 +225,7 @@ test("agentos-runner runs a command task end to end", async () => {
   const adapter = fakeAdapter(async vm => {
     const envelope = JSON.parse(vm.files.get("/inbox/envelope.json"));
     await vm.callTool("sendReport", { title: envelope.payload.observation.payload.summary, markdown: "body" });
-    vm.files.set("/outbox/result.json", JSON.stringify({ summary: "ok" }));
+    vm.write("/outbox/result.json", JSON.stringify({ summary: "ok" }));
     return { exitCode: 0, stdout: "done" };
   });
   const output = outputEnvelope();
@@ -232,7 +243,10 @@ test("agentos-runner runs a command task end to end", async () => {
 
   const [vm] = adapter.vms;
   assert.deepEqual(vm.options.allowHosts, ["api.example.com"]);
-  assert.deepEqual(vm.options.mounts, [{ path: "/mnt/logs", hostPath: "/var/log/app", readOnly: true }]);
+  assert.deepEqual(vm.options.mounts[0], { path: "/mnt/logs", hostPath: "/var/log/app", readOnly: true });
+  assert.equal(vm.options.mounts[1].path, "/outbox");
+  assert.equal(vm.options.mounts[1].readOnly, false, "the outbox is a writable host directory");
+  assert.equal(existsSync(vm.options.mounts[1].hostPath), false, "the outbox directory is removed after the run");
   assert.deepEqual(Object.keys(vm.options.tools), ["sendReport"]);
   assert.equal(vm.commands[0].command, "summarize 'Crash on start'");
   assert.deepEqual(vm.commands[0].execOptions.env, { MODE: "test" });
@@ -367,7 +381,7 @@ test("a retried delivery replays tool calls instead of repeating them", async ()
   const adapter = fakeAdapter(async vm => {
     attempt += 1;
     const reply = await vm.callTool("sendReport", { title: "Report", markdown: "m" });
-    vm.files.set("/outbox/result.json", JSON.stringify(reply));
+    vm.write("/outbox/result.json", JSON.stringify(reply));
     // The first run fails after its tool call already happened.
     return { exitCode: attempt === 1 ? 1 : 0 };
   });

@@ -1,3 +1,7 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, posix } from "node:path";
+
 import { defineDestinationPlugin } from "../../src/sdk/index.mjs";
 import { normalizeConfig } from "./config.mjs";
 import { loadAgentOsAdapter } from "./adapter.mjs";
@@ -66,16 +70,21 @@ export default defineDestinationPlugin({
         );
 
         const adapter = config.adapter ?? await loadAgentOsAdapter();
-        const vm = await bootVm(adapter, config, tools, signal);
+        const outboxDir = await mkdtemp(join(tmpdir(), "brainstem-agentos-"));
+        let vm;
 
         try {
+          vm = await bootVm(adapter, config, tools, signal, outboxDir);
           await vm.writeFile(config.inboxPath, JSON.stringify(output, null, 2));
 
           const run = config.mode === "command"
             ? await runCommand(vm, config, event, signal, ctx)
             : await runAgent(vm, config, event, signal, ctx);
 
-          const result = parseResult(await vm.readFile(config.outboxPath));
+          const result = parseResult(
+            await readFile(join(outboxDir, posix.basename(config.outboxPath)), "utf8")
+              .catch(error => error.code === "ENOENT" ? null : Promise.reject(error))
+          );
 
           await checkRequiredTools(config, tools, ctx, event);
 
@@ -105,9 +114,10 @@ export default defineDestinationPlugin({
           );
         }
         finally {
-          await vm.dispose().catch(error =>
+          await vm?.dispose().catch(error =>
             ctx.logger.warn?.("agentos vm dispose failed", { error: error.message })
           );
+          await rm(outboxDir, { recursive: true, force: true });
         }
       }
     }
@@ -140,12 +150,19 @@ async function skipReason(config, ctx, event) {
  * A broken agentOS install (for example a sidecar binary the OS
  * cannot start) makes VM creation hang instead of failing, so
  * boot gets its own deadline.
+ *
+ * The outbox is a fresh host directory mounted writable: files
+ * agentOS creates itself belong to the VM's default user, which
+ * the guest (running as Brainstem's own uid) may not be.
  */
-async function bootVm(adapter, config, tools, signal) {
+async function bootVm(adapter, config, tools, signal, outboxDir) {
   let timer;
 
   const boot = adapter.createVm({
-    mounts: config.mounts,
+    mounts: [
+      ...config.mounts,
+      { path: posix.dirname(config.outboxPath), hostPath: outboxDir, readOnly: false }
+    ],
     allowHosts: config.allowHosts,
     env: config.env,
     software: config.software,

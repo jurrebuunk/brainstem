@@ -113,12 +113,12 @@ Give every entry a stable `id`. It names the node in the Web UI and is part of e
 ## What a run does
 
 1. Skips the run if `minRouteConfidence` or `runOnce` says so. The skip is logged.
-2. Boots a VM with the entry's mounts, network allowlist, software and tools.
+2. Boots a VM with the entry's mounts, network allowlist, software and tools. The outbox directory is a fresh temporary host directory, mounted writable.
 3. Writes the full `brainstem.output` envelope to `/inbox/envelope.json`.
 4. Runs the `command`, or the agent with the `prompt`.
 5. Reads `/outbox/result.json`, if the task wrote one.
 6. Checks that every `required` tool was called.
-7. Calls `onResult`, logs the outcome and disposes the VM.
+7. Calls `onResult`, logs the outcome, disposes the VM and deletes the outbox directory.
 
 The delivery fails, and Brainstem retries it with backoff, when:
 - the VM doesn't boot within `bootTimeoutMs`
@@ -149,6 +149,12 @@ onMissingRequired     // ({ missing, event }, ctx) => void; replaces the failure
 onResult              // ({ result, exitCode, stdout, stderr, toolCalls, event }, ctx) => void
 outputLogMaxChars     // max chars of stdout/stderr/result per log entry; default 4000
 ```
+
+## Mounts and file permissions
+
+Processes in the VM run as **Brainstem's own uid and gid**. A mounted host directory therefore exposes exactly what the Brainstem process itself can read, and nothing more. Mounts are read-only unless an entry sets `readOnly: false`.
+
+If a task can't read a mounted directory (`Permission denied`), check that the user Brainstem runs as can read it. For example, logs owned by `root:adm` with mode `0640` need Brainstem's user in the `adm` group.
 
 ## Templates
 

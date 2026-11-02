@@ -1,4 +1,4 @@
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, posix, resolve } from "node:path";
 
 const RUN_ONCE_MODES = ["revision", "emission"];
 const FIELD_TYPES = ["string", "number", "integer", "boolean"];
@@ -35,19 +35,31 @@ export function normalizeConfig(config = {}) {
     fail("runOnce", `must be one of ${RUN_ONCE_MODES.join(", ")}`);
   }
 
+  const outboxPath = optionalString(config.outboxPath, "outboxPath") ?? "/outbox/result.json";
+  const mounts = normalizeMounts(config.mounts);
+  const outboxDir = posix.dirname(outboxPath);
+
+  if (!outboxPath.startsWith("/") || outboxDir === "/") {
+    fail("outboxPath", "must be a file inside its own directory, e.g. /outbox/result.json");
+  }
+
+  if (mounts.some(mount => mount.path === outboxDir)) {
+    fail("mounts", `cannot mount over the outbox directory ${outboxDir}`);
+  }
+
   return {
     mode: hasPrompt ? "agent" : "command",
     agent: optionalString(config.agent, "agent") ?? "pi",
     prompt: config.prompt ?? null,
     command: config.command ?? null,
     allowHosts: normalizeHosts(config.allowHosts),
-    mounts: normalizeMounts(config.mounts),
+    mounts,
     env: normalizeEnv(config.env),
     software: normalizeSoftware(config.software),
     tools: normalizeTools(config.tools),
     toolCollection: optionalString(config.toolCollection, "toolCollection") ?? "tools",
     inboxPath: optionalString(config.inboxPath, "inboxPath") ?? "/inbox/envelope.json",
-    outboxPath: optionalString(config.outboxPath, "outboxPath") ?? "/outbox/result.json",
+    outboxPath,
     timeoutMs: positiveInteger(config.timeoutMs, "timeoutMs") ?? DEFAULT_TIMEOUT_MS,
     bootTimeoutMs: positiveInteger(config.bootTimeoutMs, "bootTimeoutMs") ?? DEFAULT_BOOT_TIMEOUT_MS,
     failOnExitCode: optionalBoolean(config.failOnExitCode, "failOnExitCode") ?? true,
