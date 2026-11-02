@@ -143,6 +143,10 @@ retry: {
 }
 ```
 
+`config.retry` covers these quick retries within one delivery attempt. If they all fail, the delivery fails and the [delivery pipeline](delivery-pipeline.md) retries it later with its own backoff. That backoff is `runtime.queue.deliver.retry`, or `retry` on the destination entry, which is separate from `config.retry`.
+
+Every send uses the delivery's idempotency key as the Matrix transaction id (`txnId`). A send that is retried, whether inside one attempt or by a later attempt, is deduplicated by the homeserver and does not post the message twice.
+
 ## Message formatting
 
 Plain text is the default. Messages are written for humans and include a clear alert type, short explanation, decision, route, source, reason, and URL when available.

@@ -8,7 +8,8 @@ Documentation is kept in the repository so it is versioned with the code.
 - [Docker](docker.md) — run Brainstem with Docker or Docker Compose.
 - [Configuration](configuration.md) — full config file structure and common examples.
 - [Architecture](architecture.md) — how inputs, core, runtime, state, and destinations fit together.
-- [State](state.md) — SQLite records and input checkpoints.
+- [State](state.md) — the database: records, checkpoints, plugin state, jobs and deliveries.
+- [Delivery pipeline](delivery-pipeline.md) — durable decide/deliver jobs, retries, idempotency keys, dead jobs and redrive.
 - [Web UI](web-ui.md) — React Flow live view, persisted stats, first-run auth, RBAC, users, roles, and config editor.
 - [Runtime telemetry](telemetry.md) — structured events emitted by the runtime.
 

@@ -378,28 +378,32 @@ export default defineInputPlugin({
 });
 ```
 
-Destination plugins receive routed decisions:
+Destination plugins receive routed decisions as a serializable `brainstem.output` envelope, one delivery per call, with an idempotency key that stays the same across retries:
 
 ```js
 import { defineDestinationPlugin } from "./src/sdk/index.mjs";
 
 export default defineDestinationPlugin({
-  apiVersion: "brainstem.destination/v1",
+  apiVersion: "brainstem.destination/v2",
   name: "my-destination",
   destinations: {
     default: {
-      async handle(ctx, event) {
-        console.dir(event.decision, { depth: null });
+      async handle(ctx, output) {
+        console.log(ctx.idempotencyKey);
+        console.dir(output.payload.decision, { depth: null });
       }
     }
   }
 });
 ```
 
+Failed deliveries are retried with backoff and end up on the Web UI's Deliveries page when they run out of attempts. See [`docs/delivery-pipeline.md`](docs/delivery-pipeline.md).
+
 Docs:
 
 - [`docs/input-plugins.md`](docs/input-plugins.md)
 - [`docs/destination-adapters.md`](docs/destination-adapters.md)
+- [`docs/delivery-pipeline.md`](docs/delivery-pipeline.md)
 - [`docs/plugins.md`](docs/plugins.md)
 
 ## Project layout
@@ -409,6 +413,7 @@ brainstem.mjs              headless runtime CLI
 brainstem-api.mjs          standalone backend API CLI
 src/core/                  decision engine and record stores
 src/runtime/               plugin loading, routing, checkpoints, telemetry
+src/queue/                 job transport, delivery log, job runner
 src/backend/               backend HTTP API, telemetry, auth, stats, SSE, config
 src/telemetry/             shared telemetry selectors and metric derivation
 src/sdk/                   plugin author helpers

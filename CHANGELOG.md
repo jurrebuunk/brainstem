@@ -21,6 +21,29 @@ Brainstem 2.0 Phase 1 (storage abstraction):
 - CI runs every storage test against both SQLite and Postgres 17.
 - Behaviour change: with no `records`/`checkpoints` config, state now persists to the database (previously records were in memory and checkpoints in JSON). Explicit `memory`, `json`, and `sqlite` types still work.
 
+Brainstem 2.0 Phase 2 (durable pipeline), see `docs/delivery-pipeline.md`:
+
+- The runtime is split into `poll`, `decide` and `deliver` stages connected by jobs in the new `jobs` table. Each stage commits its outputs and the next stage's jobs in one transaction. Checkpoints advance in the same transaction that stores the polled observations.
+- One deliver job per (decision, destination). A failing destination is retried on its own with exponential backoff and jitter (`runtime.queue.deliver.retry`, or `retry` per destination). It no longer re-triggers other destinations, the decision or the poll, and a slow destination no longer stalls polling.
+- Jobs that run out of attempts become dead jobs. The new **Deliveries** page in the Web UI shows queue depth, the delivery log and dead jobs, with redrive and discard. API: `GET /api/pipeline`, `GET /api/jobs`, `GET /api/deliveries`, `POST /api/jobs/redrive`, `POST /api/jobs/discard`.
+- Delivery log (`deliveries` table) keyed by an idempotency key, which is checked before sending. Delivered rows are pruned after `runtime.deliveries.pruneAfterDays` (14).
+- Decide jobs are serialized per observation ID through the queue (`queue_key`), and record writes are compare-and-set on the revision.
+- Jobs hold renewable leases. Jobs from crashed processes are reclaimed, and jobs interrupted by shutdown are handed back without using up an attempt.
+- **Destination plugin SDK v2** (`brainstem.destination/v2`): `handle(ctx, output)` receives the serializable `brainstem.output` envelope, plus `ctx.idempotencyKey` and `ctx.attempt`. v1 destinations keep working through an adapter, which logs a deprecation warning, until 3.0.
+- Built-in destinations are on v2:
+  - `http-json` sends an `Idempotency-Key` header.
+  - Matrix uses the key as `txnId`, replacing the random id per attempt.
+  - opencode-runner resumes the session of a retried delivery instead of starting a new one.
+  - log-decisions is migrated.
+- Migration `0002_pipeline` adds the `jobs` and `deliveries` tables. `migrate copy` includes them.
+- New telemetry: `brainstem.core.failed`. `brainstem.destination.failed` now carries `attempt`, `dead` and `retryInMs`. New metrics: `decisions.failed`, `decisions.dead` and `destinations.dead`.
+- Behaviour changes:
+  - `runtime.destinations.blockInputOnFailure` is ignored, with a warning.
+  - A failing decision no longer holds back the input checkpoint. It stays queued and is retried.
+  - `--once` runs every due job after polling, and exits non-zero if any poll or job failed.
+  - Config callbacks of the built-in destinations (`notificationKey`, `titleForEvent`, `promptTemplate`) receive `output.payload`.
+  - Give destinations an `id`: it is part of the idempotency key.
+
 ## 0.1.0
 
 First stable release of Brainstem as a local-first headless decision runtime with a protected operations UI.

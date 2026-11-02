@@ -65,6 +65,8 @@ export default {
 
   destinations: [
     {
+      // Stable id: part of every delivery's idempotency key.
+      id: "log",
       module: "./plugins/log-decisions/index.mjs",
       destination: "default",
       decisions: [
@@ -82,8 +84,11 @@ export default {
 
     /*
     ,{
+      id: "ops-room",
       module: "./plugins/matrix/index.mjs",
       destination: "room",
+      // Optional: override runtime.queue.deliver.retry for this destination.
+      // retry: { attempts: 10, minDelayMs: 10000, maxDelayMs: 600000, factor: 2 },
       decisions: "all",
       routes: "all",
       sources: ["http", "tls", "email"],
@@ -144,6 +149,31 @@ export default {
       pruneAfterDays: 90
     },
 
+    // Durable pipeline: each poll stores its observations as decide jobs,
+    // and each (decision, destination) pair becomes its own deliver job
+    // with retries and a dead-letter queue (see docs/delivery-pipeline.md).
+    queue: {
+      // "database" (default with database checkpoints) or "memory".
+      // transport: "database",
+      pollIntervalMs: 1000,
+      leaseMs: 60000,
+      decide: {
+        concurrency: 4,
+        retry: { attempts: 5, minDelayMs: 1000, maxDelayMs: 60000, factor: 2 }
+      },
+      deliver: {
+        concurrency: 4,
+        retry: { attempts: 8, minDelayMs: 5000, maxDelayMs: 900000, factor: 3 }
+      }
+    },
+
+    // Delivered and discarded rows are pruned from the delivery log after
+    // this many days. Dead deliveries stay until redriven or discarded.
+    deliveries: {
+      pruneAfterDays: 14
+    },
+
+    // Retries of a failing input poll (not of decisions or deliveries).
     retry: {
       attempts: 3,
       minDelayMs: 1000,

@@ -55,8 +55,9 @@ See [Configuration](configuration.md).
 ## Plugin state (`ctx.state`)
 
 Input and destination contexts carry a small key/value store for plugin state
-such as suppression state, cursors or caches. It is additive to
-`brainstem.input/v1` and `brainstem.destination/v1`.
+such as suppression state, cursors or caches. It is available to
+`brainstem.input/v1` and to both `brainstem.destination/v2` and the
+deprecated `brainstem.destination/v1`.
 
 ```js
 await ctx.state.get(key);            // value, or undefined when absent

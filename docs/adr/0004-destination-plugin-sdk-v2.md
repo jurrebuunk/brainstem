@@ -46,3 +46,11 @@ Follow-ups:
 - SDK v2, migration of built-in plugins, idempotency keys, v1 shim (Phase 2).
 - Optional `ctx.lease` for inputs (Phase 3).
 - Plugin v2 migration guide (Phase 5).
+
+## Amendment (Phase 2 implementation)
+
+- Date: 2026-11-02
+
+The delivery key gained an emission id: `<destination id>:<observation id>:r<revision>:<emission id>`. Inputs re-emit unchanged observations on purpose, for example reminders for an alert that is still firing. An unchanged observation keeps its revision, so a key without the emission id would have treated those re-emissions as duplicates and dropped them. The emission id is assigned when the observation is polled and stored in the decide job, so every retry of one delivery keeps the same key. Ordering and per-revision traceability are unchanged.
+
+`handle(ctx, output)` receives the full `brainstem.output` envelope (`{ version, kind, payload }`), so a destination can forward it unchanged. `ctx.attempt` was added next to `ctx.idempotencyKey`.

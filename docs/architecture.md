@@ -33,6 +33,8 @@ The runtime owns operational behavior around the core:
 - routing decisions to destinations
 - structured telemetry for live views, stats, and operational dashboards
 
+Since 2.0 Phase 2 these steps run as a durable pipeline of jobs. A poll stores its observations as `decide` jobs together with the checkpoint, and each decision becomes one `deliver` job per matching destination, retried on its own. See [Delivery pipeline](delivery-pipeline.md).
+
 ## Core
 
 The core is the decision engine:
@@ -53,7 +55,7 @@ The core does not know about GitHub, Matrix, Hermes, webhooks, or other concrete
 
 ## Destination plugins
 
-Destination plugins react to decisions. Destination failures are isolated from input checkpoints by default, so output outages do not force inputs to reprocess old source items.
+Destination plugins react to decisions. Each (decision, destination) pair is delivered as its own job with an idempotency key, and retried with backoff on failure. Output outages never block inputs and never re-deliver to destinations that already succeeded.
 
 Examples:
 
@@ -75,10 +77,12 @@ The runtime can emit structured telemetry over HTTP. The Web UI consumes this te
 
 ## State
 
-Brainstem has two durable state types:
+Brainstem keeps its durable state in one database:
 
-1. Core records — durable SQLite cache of latest decision per observation ID.
+1. Core records — the latest decision per observation ID.
 2. Input checkpoints — adapter cursors or stability state.
+3. Plugin state — `ctx.state` values.
+4. The pipeline — queued jobs and the delivery log.
 
 See [State](state.md).
 
