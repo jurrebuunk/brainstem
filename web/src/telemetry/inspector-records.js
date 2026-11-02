@@ -1,4 +1,5 @@
 import { eventId, eventLevel, eventTimestamp } from "../events.js";
+import { eventCoreId, eventOrigin } from "../../../src/telemetry/events.mjs";
 
 
 export function inspectorMode(node) {
@@ -25,9 +26,19 @@ export function inspectorMode(node) {
   };
 }
 
-export function buildInspectorRecords(node, items) {
+/*
+ * `nodeIdsFor(event)` (from the flow model) decides which events
+ * belong to a destination node, so destinations are matched by
+ * their configured id, including events from older runtimes.
+ */
+export function buildInspectorRecords(node, items, { nodeIdsFor } = {}) {
   if (node.id === "core") return buildCoreRecords(items);
-  if (node.id.startsWith("destination:")) return buildDestinationRecords(node, items);
+  if (node.id.startsWith("destination:")) {
+    const belongs = nodeIdsFor
+      ? event => nodeIdsFor(event).includes(node.id)
+      : event => destinationMatches(event, node.id.slice("destination:".length));
+    return buildDestinationRecords(node, items, belongs);
+  }
   if (node.id.startsWith("input:")) return buildInputRecords(node, items);
   return [];
 }
@@ -42,8 +53,9 @@ function buildCoreRecords(items) {
       const related = relatedByObservationOrPoll(items, {
         observationId,
         pollId: payload.pollId,
-        includeKinds: new Set(["brainstem.input.observation", "brainstem.core.decision", "brainstem.output"])
+        includeKinds: new Set(["brainstem.input.observation", "brainstem.core.decision", "brainstem.output", "brainstem.destination.emitted"])
       });
+      const origin = eventOrigin(item.event);
 
       return {
         id: eventId(item.event, item.index),
@@ -58,8 +70,10 @@ function buildCoreRecords(items) {
         leftBlocks: [
           { type: "summary", items: compactSummaryItems([
             ["Observation", observationId],
+            ["Origin", originLabel(origin)],
             ["Poll", payload.pollId],
-            ["Input", payload.inputId]
+            ["Input", payload.inputId],
+            ["Core", eventCoreId(item.event)]
           ]) },
           { type: "json", title: "observation", value: payload.observation ?? findObservationEnvelope(items, observationId) }
         ],
@@ -79,11 +93,11 @@ function buildCoreRecords(items) {
     .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
 }
 
-function buildDestinationRecords(node, items) {
+function buildDestinationRecords(node, items, belongs) {
   const destinationKey = node.id.slice("destination:".length);
   const records = new Map();
   const relevant = items.filter(item => {
-    return destinationMatches(item.event, destinationKey) && (
+    return belongs(item.event) && (
       item.event.kind.startsWith("brainstem.destination.") ||
       item.event.kind === "brainstem.output"
     );
@@ -115,7 +129,7 @@ function buildDestinationRecords(node, items) {
   }
 
   return [...records.values()].map(record => {
-    const activity = items.filter(item => destinationMatches(item.event, record.destinationKey) && sameRun(item.event, record));
+    const activity = items.filter(item => belongs(item.event) && sameRun(item.event, record, belongs));
     const titleId = record.observationId ?? record.pollId ?? "delivery";
 
     return {
@@ -293,14 +307,25 @@ function destinationStatus(current, event) {
   return current;
 }
 
-function sameRun(event, record) {
+function sameRun(event, record, belongs) {
   const eventObservationId = observationIdForEvent(event);
   const eventPollId = pollIdForEvent(event);
   return Boolean(
     (record.observationId && eventObservationId === record.observationId) ||
     (record.pollId && eventPollId === record.pollId) ||
-    (!record.observationId && !record.pollId && destinationMatches(event, record.destinationKey))
+    (!record.observationId && !record.pollId && belongs(event))
   );
+}
+
+/*
+ * "input test-app-log" or "handoff from log-triage (depth 1)".
+ */
+function originLabel(origin) {
+  if (!origin) return null;
+  if (origin.kind === "destination") {
+    return `handoff from ${origin.id}${origin.depth ? ` (depth ${origin.depth})` : ""}`;
+  }
+  return `input ${origin.id}`;
 }
 
 function inputEventMatches(event, inputId) {
