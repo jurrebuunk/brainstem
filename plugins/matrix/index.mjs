@@ -32,18 +32,36 @@ export default defineDestinationPlugin({
           return;
         }
 
-        const result =
-          await sendRoomMessage({
-            ...matrix,
-            content: matrixMessageContent(
-              ctx,
-              {
-                ...event,
-                notification
-              }
-            ),
-            signal: ctx.signal
-          });
+        let result;
+
+        try {
+          result =
+            await sendRoomMessage({
+              ...matrix,
+              content: matrixMessageContent(
+                ctx,
+                {
+                  ...event,
+                  notification
+                }
+              ),
+              signal: ctx.signal
+            });
+        }
+        catch (error) {
+          await notification.release()
+            .catch(releaseError => {
+              ctx.logger.warn?.(
+                "matrix notification claim release failed",
+                {
+                  observationId,
+                  error: releaseError
+                }
+              );
+            });
+
+          throw error;
+        }
 
         await notification.commit({
           eventId: result.eventId

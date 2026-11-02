@@ -51,3 +51,35 @@ destinations: [
 ```
 
 See [Configuration](configuration.md).
+
+## Plugin state (`ctx.state`)
+
+Input and destination contexts carry a small key/value store for plugin state
+such as suppression state, cursors or caches. It is additive to
+`brainstem.input/v1` and `brainstem.destination/v1`.
+
+```js
+await ctx.state.get(key);            // value, or undefined when absent
+await ctx.state.set(key, value);     // store a JSON-serializable value
+await ctx.state.delete(key);         // true when a value was removed
+await ctx.state.update(key, fn);     // atomic read-modify-write, returns the new value
+```
+
+- Keys are non-empty strings; values must be JSON-serializable.
+- `update(key, current => next)` runs inside a database transaction
+  (`BEGIN IMMEDIATE` on SQLite, `SELECT ... FOR UPDATE` on Postgres), so two
+  Brainstem processes sharing a database cannot lose each other's writes.
+  `current` is `undefined` when the key is absent. Return `undefined` to leave
+  the value unchanged. `fn` may run more than once if a concurrent writer wins
+  a race, so compute only from its argument and keep it short.
+- State is namespaced per plugin entry: `destination:<plugin>:<destination>`
+  or `input:<plugin>:<input>`, followed by `:<id>` when the config entry has an
+  `id` (inputs without an `id` use their checkpoint key). Two destination
+  entries for the same plugin should get distinct `id`s if they must not share
+  state.
+- The runtime stores state in the `plugin_state` table of the Brainstem
+  database when it is given a database-backed store (`pluginState` runtime
+  option). Without one, state is kept in memory and lost on restart.
+  Contexts created directly with `createInputContext()` /
+  `createDestinationContext()` and no `stateStore` share a process-local
+  memory store.

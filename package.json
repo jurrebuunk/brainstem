@@ -40,7 +40,9 @@
     "@receptron/laya": "^0.1.1",
     "argon2": "^0.45.1",
     "imapflow": "^1.7.8",
-    "mailparser": "^3.9.28"
+    "kysely": "^0.29.6",
+    "mailparser": "^3.9.28",
+    "pg": "^8.23.1"
   },
   "bin": {
     "brainstem": "brainstem.mjs",

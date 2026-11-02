@@ -7,6 +7,7 @@ import {
   createBackendApiServer,
   normalizeBackendApiConfig
 } from "./src/backend/api-server.mjs";
+import { openRuntimeDatabase } from "./src/runtime/bootstrap.mjs";
 
 loadDotEnv();
 
@@ -31,7 +32,9 @@ const apiConfig = normalizeBackendApiConfig(
   { repoRoot: process.cwd() }
 );
 
-const api = createBackendApiServer(apiConfig);
+// Same database as the runtime (runtime.database / BRAINSTEM_DATABASE_URL).
+const database = await openRuntimeDatabase(config);
+const api = createBackendApiServer({ ...apiConfig, database });
 await api.listen();
 
 console.log(`Brainstem Backend API listening on ${api.url}`);
@@ -41,6 +44,7 @@ console.log(`Stats database: ${api.telemetryStore.path}`);
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, async () => {
     await api.close();
+    await database.close();
     process.exit(0);
   });
 }

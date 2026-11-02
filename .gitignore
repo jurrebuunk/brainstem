@@ -40,3 +40,6 @@ result-*
 
 # Local Brainstem state
 data/
+
+# Claude Code worktrees
+.claude/worktrees/

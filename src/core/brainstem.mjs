@@ -1,9 +1,19 @@
 import { createHash } from "node:crypto";
 import { Laya } from "@receptron/laya";
 
-import { MemoryRecordStore } from "./record-stores.mjs";
+import {
+  MemoryRecordStore,
+  RecordConflictError
+} from "./record-stores.mjs";
 
 const VERSION = "1";
+
+/*
+ * How often a conflicting record write is
+ * re-read and retried before the conflict is
+ * raised.
+ */
+const MAX_WRITE_ATTEMPTS = 3;
 
 const DECISIONS = [
   "ignore",
@@ -55,6 +65,13 @@ export class Brainstem {
 
 
   async start() {
+    /*
+     * Open the record store first so an
+     * unreachable database fails fast (the
+     * runtime's startup retry covers it).
+     */
+    await this.records.open?.();
+
     if (!this.laya) {
       this.laya =
         await Laya.load(
@@ -167,7 +184,7 @@ export class Brainstem {
       );
 
     const existing =
-      this.records.get(
+      await this.records.get(
         payload.id
       );
 
@@ -189,7 +206,7 @@ export class Brainstem {
       existing.cache_key ===
         this.cacheKey
     ) {
-      this.records.touch(
+      await this.records.touch(
         payload.id,
         {
           observation:
@@ -223,93 +240,134 @@ export class Brainstem {
       );
 
 
-    const revision = existing
-      ? (
-          existing.fingerprint ===
-          fingerprint
-            ? existing.revision
-            : existing.revision + 1
-        )
-      : 1;
-
-
-    const decision = {
-      version: VERSION,
-      kind: "decision",
-
-      payload: {
-        observation_id:
-          payload.id,
-
-        revision,
-
-        fingerprint,
-
-        decision:
-          evaluation.policy.decision,
-
-        route:
-          evaluation.judgement.route,
-
-        signals: {
-          attention:
-            evaluation.judgement.attention,
-
-          actionable:
-            evaluation.judgement.actionable,
-
-          severity:
-            evaluation.judgement.severity
-        },
-
-        confidence: {
-          route:
-            evaluation.judgement
-              .routeConfidence
-        },
-
-        reason:
-          evaluation.policy.reason,
-
-        timestamp:
-          new Date().toISOString()
-      }
-    };
-
-
-    /*
-     * Store private copies.
-     */
-    this.records.put({
-      id: payload.id,
-      revision,
+    return await this.#storeDecision({
+      observation,
       fingerprint,
-      cache_key: this.cacheKey,
-
-      observation:
-        structuredClone(
-          observation
-        ),
-
-      decision:
-        structuredClone(
-          decision
-        ),
-
-      first_seen_at:
-        existing?.first_seen_at ?? now,
-
-      last_seen_at:
-        now,
-
-      updated_at:
-        now
+      existing,
+      evaluation,
+      now
     });
+  }
 
 
-    return structuredClone(
-      decision
-    );
+  /*
+   * Build and store the decision record.
+   *
+   * The write is an upsert guarded by an
+   * optimistic revision check: it only lands
+   * when the stored revision is still the one
+   * this evaluation started from.
+   *
+   * Inside one process the per-ID lock means
+   * the check always passes. It is groundwork
+   * for multi-core compare-and-swap: when
+   * another core wrote the record meanwhile,
+   * re-read it and
+   *
+   * - adopt its decision when it already
+   *   covers this exact state, or
+   * - recompute the revision on top of it and
+   *   retry (without re-evaluating Laya).
+   *
+   * After MAX_WRITE_ATTEMPTS the conflict is
+   * raised to the caller.
+   */
+  async #storeDecision({
+    observation,
+    fingerprint,
+    existing,
+    evaluation,
+    now
+  }) {
+    const payload =
+      observation.payload;
+
+    let previous =
+      existing;
+
+    for (let attempt = 1; ; attempt += 1) {
+      const revision = previous
+        ? (
+            previous.fingerprint ===
+            fingerprint
+              ? previous.revision
+              : previous.revision + 1
+          )
+        : 1;
+
+      const decision =
+        decisionOf({
+          payload,
+          revision,
+          fingerprint,
+          evaluation
+        });
+
+      try {
+        /*
+         * Store private copies.
+         */
+        await this.records.put(
+          {
+            id: payload.id,
+            revision,
+            fingerprint,
+            cache_key: this.cacheKey,
+
+            observation:
+              structuredClone(
+                observation
+              ),
+
+            decision:
+              structuredClone(
+                decision
+              ),
+
+            first_seen_at:
+              previous?.first_seen_at ?? now,
+
+            last_seen_at:
+              now,
+
+            updated_at:
+              now
+          },
+          {
+            expectedRevision:
+              previous?.revision ?? null
+          }
+        );
+
+        return structuredClone(
+          decision
+        );
+      }
+      catch (error) {
+        if (
+          !(error instanceof RecordConflictError) ||
+          attempt >= MAX_WRITE_ATTEMPTS
+        ) {
+          throw error;
+        }
+
+        previous =
+          await this.records.get(
+            payload.id
+          );
+
+        if (
+          previous?.fingerprint ===
+            fingerprint &&
+          previous.cache_key ===
+            this.cacheKey
+        ) {
+          return structuredClone(
+            previous.decision
+          );
+        }
+      }
+    }
   }
 
 
@@ -664,13 +722,14 @@ export class Brainstem {
   /*
    * Store access.
    *
-   * Always return copies so external code
-   * cannot modify Brainstem's internal state.
+   * Async, like the record store. Always
+   * return copies so external code cannot
+   * modify Brainstem's internal state.
    */
 
-  getRecord(id) {
+  async getRecord(id) {
     const record =
-      this.records.get(id);
+      await this.records.get(id);
 
     return record
       ? structuredClone(
@@ -680,9 +739,9 @@ export class Brainstem {
   }
 
 
-  getObservation(id) {
+  async getObservation(id) {
     const observation =
-      this.records.get(id)
+      (await this.records.get(id))
         ?.observation;
 
     return observation
@@ -693,9 +752,9 @@ export class Brainstem {
   }
 
 
-  getDecision(id) {
+  async getDecision(id) {
     const decision =
-      this.records.get(id)
+      (await this.records.get(id))
         ?.decision;
 
     return decision
@@ -704,6 +763,61 @@ export class Brainstem {
         )
       : null;
   }
+}
+
+
+/*
+ * Decision envelope for one evaluation.
+ */
+
+function decisionOf({
+  payload,
+  revision,
+  fingerprint,
+  evaluation
+}) {
+  return {
+    version: VERSION,
+    kind: "decision",
+
+    payload: {
+      observation_id:
+        payload.id,
+
+      revision,
+
+      fingerprint,
+
+      decision:
+        evaluation.policy.decision,
+
+      route:
+        evaluation.judgement.route,
+
+      signals: {
+        attention:
+          evaluation.judgement.attention,
+
+        actionable:
+          evaluation.judgement.actionable,
+
+        severity:
+          evaluation.judgement.severity
+      },
+
+      confidence: {
+        route:
+          evaluation.judgement
+            .routeConfidence
+      },
+
+      reason:
+        evaluation.policy.reason,
+
+      timestamp:
+        new Date().toISOString()
+    }
+  };
 }
 
 

@@ -1,107 +1,76 @@
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import {
   eventSourceKey,
   metricsForEvent
 } from "../telemetry/events.mjs";
+import { describeDatabase } from "./db-utils.mjs";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/*
+ * Telemetry persistence on the shared database handle
+ * ({ db, dialect } from src/db). Writes only insert and bump
+ * counters; retention pruning runs from periodic maintenance
+ * (prune()) instead of the per-event write path.
+ */
 export function createTelemetryStore({
-  path,
+  database,
   statsPruneAfterDays,
   eventLogPruneAfterDays,
   eventLogMaxRows
 }) {
-  mkdirSync(dirname(path), { recursive: true });
-
-  const db = new DatabaseSync(path);
-  initTelemetryDb(db);
+  const { db } = database;
 
   return {
-    path,
+    path: describeDatabase(database.url),
 
-    persistEvent(event) {
-      db.exec("begin immediate");
-      try {
-        insertEvent(db, event);
-        recordStatsEvent(db, event);
-        pruneOldStats(db, event.receivedAt ?? event.payload?.timestamp ?? new Date().toISOString(), statsPruneAfterDays);
-        pruneOldEvents(db, event.receivedAt ?? event.payload?.timestamp ?? new Date().toISOString(), {
-          eventLogPruneAfterDays,
-          eventLogMaxRows
-        });
-        db.exec("commit");
-      }
-      catch (error) {
-        db.exec("rollback");
-        throw error;
-      }
+    async persistEvent(event) {
+      await db.transaction().execute(async trx => {
+        await insertEvent(trx, event);
+        await recordStatsEvent(trx, event);
+      });
     },
 
-    getEvents(options) {
-      return getEvents(db, options);
+    async prune({ now = new Date() } = {}) {
+      return await pruneTelemetry(db, {
+        now,
+        statsPruneAfterDays,
+        eventLogPruneAfterDays,
+        eventLogMaxRows
+      });
     },
 
-    getStats() {
-      return getStats(db);
+    async getEvents(options) {
+      return await getEvents(db, options);
     },
 
-    eventCount() {
-      return db.prepare("select count(*) as count from web_events").get().count;
+    async getStats() {
+      return await getStats(db);
     },
 
-    close() {
-      db.close();
+    async eventCount() {
+      const row = await db.selectFrom("web_events")
+        .select(eb => eb.fn.countAll().as("count"))
+        .executeTakeFirst();
+      return Number(row?.count ?? 0);
+    },
+
+    async close() {
+      // The database handle is owned by the caller.
     }
   };
 }
 
-function initTelemetryDb(db) {
-  db.exec(`
-    pragma journal_mode = wal;
-    pragma busy_timeout = 5000;
-    pragma foreign_keys = on;
-
-    create table if not exists web_events (
-      id integer primary key autoincrement,
-      received_at text not null,
-      kind text not null,
-      level text,
-      source text,
-      event_json text not null
-    );
-
-    create index if not exists idx_web_events_received_at on web_events (received_at);
-    create index if not exists idx_web_events_kind on web_events (kind);
-    create index if not exists idx_web_events_level on web_events (level);
-    create index if not exists idx_web_events_source on web_events (source);
-
-    create table if not exists stat_counters (
-      key text primary key,
-      value integer not null default 0
-    );
-
-    create table if not exists stat_timeseries (
-      bucket text not null,
-      metric text not null,
-      value integer not null default 0,
-      primary key (bucket, metric)
-    );
-  `);
-}
-
-function insertEvent(db, event) {
+async function insertEvent(db, event) {
   const payload = event.payload ?? {};
-  db.prepare(`
-    insert into web_events (received_at, kind, level, source, event_json)
-    values (?, ?, ?, ?, ?)
-  `).run(
-    event.receivedAt ?? payload.timestamp ?? new Date().toISOString(),
-    String(event.kind ?? "external.json"),
-    eventLevelForStorage(event),
-    eventSourceKey(event),
-    JSON.stringify(event)
-  );
+  await db.insertInto("web_events")
+    .values({
+      received_at: event.receivedAt ?? payload.timestamp ?? new Date().toISOString(),
+      kind: String(event.kind ?? "external.json"),
+      level: eventLevelForStorage(event),
+      source: eventSourceKey(event),
+      event_json: JSON.stringify(event)
+    })
+    .execute();
 }
 
 function eventLevelForStorage(event) {
@@ -114,100 +83,88 @@ function eventLevelForStorage(event) {
   return null;
 }
 
-function recordStatsEvent(db, event) {
-  const metrics = metricsForEvent(event);
+async function recordStatsEvent(db, event) {
+  // Sorted so concurrent writers lock counter rows in the same order.
+  const metrics = [...new Set(metricsForEvent(event))].sort();
   if (metrics.length === 0) return;
 
   const bucket = minuteBucket(event.receivedAt ?? event.payload?.timestamp ?? new Date().toISOString());
-  const counter = db.prepare(`
-    insert into stat_counters (key, value) values (?, ?)
-    on conflict(key) do update set value = value + excluded.value
-  `);
-  const series = db.prepare(`
-    insert into stat_timeseries (bucket, metric, value) values (?, ?, ?)
-    on conflict(bucket, metric) do update set value = value + excluded.value
-  `);
 
-  for (const metric of metrics) {
-    counter.run(metric, 1);
-    series.run(bucket, metric, 1);
+  await db.insertInto("stat_counters")
+    .values(metrics.map(metric => ({ key: metric, value: 1 })))
+    .onConflict(oc => oc.column("key").doUpdateSet({
+      value: eb => eb("stat_counters.value", "+", eb.ref("excluded.value"))
+    }))
+    .execute();
+
+  await db.insertInto("stat_timeseries")
+    .values(metrics.map(metric => ({ bucket, metric, value: 1 })))
+    .onConflict(oc => oc.columns(["bucket", "metric"]).doUpdateSet({
+      value: eb => eb("stat_timeseries.value", "+", eb.ref("excluded.value"))
+    }))
+    .execute();
+}
+
+async function pruneTelemetry(db, { now, statsPruneAfterDays, eventLogPruneAfterDays, eventLogMaxRows }) {
+  const result = { stats: 0, eventsByAge: 0, eventsByRows: 0 };
+
+  if (Number.isFinite(statsPruneAfterDays) && statsPruneAfterDays > 0) {
+    const cutoff = new Date(now.getTime() - statsPruneAfterDays * DAY_MS).toISOString();
+    const deleted = await db.deleteFrom("stat_timeseries")
+      .where("bucket", "<", cutoff)
+      .executeTakeFirst();
+    result.stats = Number(deleted.numDeletedRows ?? 0);
   }
-}
 
-function pruneOldStats(db, currentBucket, statsPruneAfterDays) {
-  if (!Number.isFinite(statsPruneAfterDays) || statsPruneAfterDays <= 0) return;
-
-  const cutoff = new Date(
-    Date.parse(currentBucket) - statsPruneAfterDays * 24 * 60 * 60 * 1000
-  ).toISOString();
-
-  db.prepare("delete from stat_timeseries where bucket < ?").run(cutoff);
-}
-
-function pruneOldEvents(db, currentTimestamp, { eventLogPruneAfterDays, eventLogMaxRows }) {
   if (Number.isFinite(eventLogPruneAfterDays) && eventLogPruneAfterDays > 0) {
-    const cutoff = new Date(
-      Date.parse(currentTimestamp) - eventLogPruneAfterDays * 24 * 60 * 60 * 1000
-    ).toISOString();
-
-    db.prepare("delete from web_events where received_at < ?").run(cutoff);
+    const cutoff = new Date(now.getTime() - eventLogPruneAfterDays * DAY_MS).toISOString();
+    const deleted = await db.deleteFrom("web_events")
+      .where("received_at", "<", cutoff)
+      .executeTakeFirst();
+    result.eventsByAge = Number(deleted.numDeletedRows ?? 0);
   }
 
   if (Number.isFinite(eventLogMaxRows) && eventLogMaxRows > 0) {
-    db.prepare(`
-      delete from web_events
-      where id in (
-        select id from web_events
-        order by id desc
-        limit -1 offset ?
-      )
-    `).run(eventLogMaxRows);
+    // Keep the newest eventLogMaxRows rows: find the id of the
+    // first row past the limit and delete it and everything older.
+    const boundary = await db.selectFrom("web_events")
+      .select("id")
+      .orderBy("id", "desc")
+      .limit(1)
+      .offset(eventLogMaxRows)
+      .executeTakeFirst();
+
+    if (boundary) {
+      const deleted = await db.deleteFrom("web_events")
+        .where("id", "<=", boundary.id)
+        .executeTakeFirst();
+      result.eventsByRows = Number(deleted.numDeletedRows ?? 0);
+    }
   }
+
+  return result;
 }
 
-function getEvents(db, { limit, before, after, kind, level, source } = {}) {
-  const clauses = [];
-  const params = [];
+async function getEvents(db, { limit, before, after, kind, level, source } = {}) {
   const beforeIso = optionalIsoDate(before);
   const afterIso = optionalIsoDate(after);
+  let query = db.selectFrom("web_events").select(["id", "event_json"]);
 
-  if (beforeIso) {
-    clauses.push("received_at < ?");
-    params.push(beforeIso);
-  }
+  if (beforeIso) query = query.where("received_at", "<", beforeIso);
+  if (afterIso) query = query.where("received_at", ">", afterIso);
+  if (kind) query = query.where("kind", "=", kind);
+  if (level) query = query.where("level", "=", level);
+  if (source) query = query.where("source", "=", source);
 
-  if (afterIso) {
-    clauses.push("received_at > ?");
-    params.push(afterIso);
-  }
-
-  if (kind) {
-    clauses.push("kind = ?");
-    params.push(kind);
-  }
-
-  if (level) {
-    clauses.push("level = ?");
-    params.push(level);
-  }
-
-  if (source) {
-    clauses.push("source = ?");
-    params.push(source);
-  }
-
-  const where = clauses.length ? `where ${clauses.join(" and ")}` : "";
-  const rows = db.prepare(`
-    select id, event_json
-    from web_events
-    ${where}
-    order by received_at desc, id desc
-    limit ?
-  `).all(...params, limit);
+  const rows = await query
+    .orderBy("received_at", "desc")
+    .orderBy("id", "desc")
+    .limit(limit ?? 2000)
+    .execute();
 
   return rows
     .reverse()
-    .map(row => parseStoredEvent(row.event_json, row.id))
+    .map(row => parseStoredEvent(row.event_json, Number(row.id)))
     .filter(Boolean);
 }
 
@@ -225,23 +182,23 @@ function parseStoredEvent(value, id) {
   return null;
 }
 
-function getStats(db) {
-  const counters = Object.fromEntries(
-    db.prepare("select key, value from stat_counters order by key").all()
-      .map(row => [row.key, row.value])
-  );
+async function getStats(db) {
+  const counterRows = await db.selectFrom("stat_counters")
+    .select(["key", "value"])
+    .orderBy("key")
+    .execute();
+  const counters = Object.fromEntries(counterRows.map(row => [row.key, Number(row.value)]));
 
   const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
-  const rows = db.prepare(`
-    select bucket, metric, value
-    from stat_timeseries
-    where bucket >= ?
-    order by bucket asc
-  `).all(cutoff);
+  const rows = await db.selectFrom("stat_timeseries")
+    .select(["bucket", "metric", "value"])
+    .where("bucket", ">=", cutoff)
+    .orderBy("bucket", "asc")
+    .execute();
 
   return {
     counters,
-    series: rows,
+    series: rows.map(row => ({ ...row, value: Number(row.value) })),
     generatedAt: new Date().toISOString()
   };
 }

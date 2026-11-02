@@ -108,7 +108,8 @@ The included `docker-compose.example.yml` defines:
 
 - `brainstem` — headless runtime plus backend API, owns telemetry/history/stats/config management
 - `brainstem-web` — presentation-only Web UI, proxies API calls to `brainstem`
-- `brainstem-data` — shared persistent data volume
+- `brainstem-data` — shared persistent data volume (holds the default SQLite database)
+- `postgres` — optional, commented out; see [Database](#database)
 
 Commands:
 
@@ -136,8 +137,44 @@ Mount these paths:
 
 ```text
 /app/brainstem.config.mjs  local config file
-/app/data                  SQLite records, checkpoints, notification state, Web UI stats
+/app/data                  SQLite database (data/brainstem.sqlite), Laya model cache
 ```
+
+## Database
+
+All state (records, checkpoints, plugin state, telemetry, stats, auth) lives in one database, selected with `BRAINSTEM_DATABASE_URL`:
+
+```text
+BRAINSTEM_DATABASE_URL     default sqlite:data/brainstem.sqlite (inside the data volume)
+                           or postgres://user:pass@host:5432/db
+```
+
+The single-node default needs nothing extra. To use Postgres, uncomment the `postgres` service, `depends_on` and `postgres-data` volume in `docker-compose.example.yml`, set `POSTGRES_PASSWORD` and `BRAINSTEM_DATABASE_URL` in `.env`, then:
+
+```sh
+docker compose up -d postgres
+docker compose run --rm brainstem node brainstem.mjs migrate
+docker compose up -d
+```
+
+Move existing SQLite state into Postgres (with Brainstem stopped):
+
+```sh
+docker compose stop brainstem
+docker compose run --rm brainstem node brainstem.mjs migrate sqlite-to-pg \
+  --from sqlite:data/brainstem.sqlite \
+  --to "postgres://brainstem:$POSTGRES_PASSWORD@postgres:5432/brainstem"
+```
+
+### Upgrading a 1.x volume
+
+1.x kept state in `data/brainstem.sqlite`, `data/web-stats.sqlite` and `data/checkpoints.json`. Back up the volume, stop the old containers, then import into the 2.0 database before starting 2.0:
+
+```sh
+docker compose run --rm brainstem node brainstem.mjs migrate import-v1 --data-dir data
+```
+
+The 1.x files are only read. See [State](state.md#upgrading-from-1x).
 
 Recommended production layout:
 
@@ -157,7 +194,7 @@ Backend API variables:
 BRAINSTEM_API              set 1/true to start the backend API with the runtime
 BRAINSTEM_API_HOST         default 127.0.0.1
 BRAINSTEM_API_PORT         default 5174
-BRAINSTEM_API_DB           telemetry/stats SQLite path; default data/web-stats.sqlite
+BRAINSTEM_DATABASE_URL     database for all state; default sqlite:data/brainstem.sqlite
 BRAINSTEM_API_TOKEN        optional bearer token for machine telemetry ingestion/proxy calls
 BRAINSTEM_CONFIG           editable config path; default brainstem.config.mjs
 MAX_EVENTS                 live in-memory SSE safety buffer; default 2000

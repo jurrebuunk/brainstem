@@ -1,29 +1,63 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+
+import { MemoryPluginStateStore } from "../../src/runtime/plugin-state.mjs";
+import { createPluginState } from "../../src/sdk/index.mjs";
 
 const DEFAULT_REPEAT_AFTER_MS =
   60 * 60 * 1000;
+
+/*
+ * How long a send claimed by one process blocks the same
+ * notification in other processes. A claim that is neither
+ * committed nor released within this window (crashed process)
+ * is ignored, so the next event sends again: a duplicate beats
+ * a missed alert.
+ */
+const DEFAULT_CLAIM_TIMEOUT_MS =
+  5 * 60 * 1000;
 
 const DEFAULT_ACTIONABLE_DECISIONS = [
   "dispatch",
   "escalate"
 ];
 
-const memoryStates =
-  new Map();
+const DEFAULT_LEGACY_STATE_PATH =
+  "data/matrix-notifications.json";
 
-const fileCache =
-  new Map();
+const NOTIFICATION_KEY_PREFIX =
+  "notification:";
 
-const loadQueues =
-  new Map();
+const LEGACY_IMPORT_KEY =
+  "legacy-import";
 
-const writeQueues =
-  new Map();
+const FALLBACK_NAMESPACE =
+  "destination:@brainstem/matrix:room";
 
+/*
+ * Used only when the destination context has no ctx.state
+ * (hand-built contexts in tests or scripts).
+ */
+let fallbackStore =
+  new MemoryPluginStateStore();
+
+/*
+ * Decide whether to send, and atomically claim the send.
+ *
+ * The decision and the claim happen in one ctx.state.update(),
+ * so two processes sharing the state store cannot both send the
+ * same alert. After sending, call commit({ eventId }); if the
+ * send fails, call release() so the next event can retry.
+ */
 export async function planNotification(ctx, event) {
   const notify =
     normalizeNotifyConfig(ctx.config.notify ?? {});
+
+  const state =
+    notificationState(ctx);
+
+  await importLegacyState(state, notify, ctx.logger);
 
   const decision =
     event.decision.payload;
@@ -31,18 +65,102 @@ export async function planNotification(ctx, event) {
   const observation =
     event.observation.payload;
 
-  const key =
-    notificationKey(ctx, event);
-
-  const state =
-    await loadState(notify);
-
-  const previous =
-    state[key];
+  const stateKey =
+    NOTIFICATION_KEY_PREFIX + notificationKey(ctx, event);
 
   const now =
     Date.now();
 
+  const claimId =
+    randomUUID();
+
+  let plan =
+    suppressed();
+
+  await state.update(stateKey, current => {
+    const previous =
+      effectiveEntry(current, now, notify.claimTimeoutMs);
+
+    plan =
+      decide({
+        notify,
+        decision,
+        observation,
+        previous,
+        now
+      });
+
+    if (!plan.send) {
+      return undefined;
+    }
+
+    return {
+      ...plan.entry,
+      pending: {
+        id: claimId,
+        at: now,
+        previous: withoutPending(previous)
+      }
+    };
+  });
+
+  if (!plan.send) {
+    return suppressed();
+  }
+
+  const { kind, previousEventId, previous, entry } =
+    plan;
+
+  return {
+    send: true,
+    kind,
+    previousEventId,
+
+    async commit({ eventId } = {}) {
+      await state.update(stateKey, current => {
+        if (current?.pending?.id !== claimId) {
+          return undefined;
+        }
+
+        return {
+          ...entry,
+          rootEventId: rootEventIdFor(kind, previous, eventId),
+          eventId: eventId ?? previous?.eventId ?? null
+        };
+      });
+    },
+
+    async release() {
+      await state.update(stateKey, current => {
+        if (current?.pending?.id !== claimId) {
+          return undefined;
+        }
+
+        return current.pending.previous ?? {
+          status: "unsent",
+          updatedAt: new Date().toISOString()
+        };
+      });
+    }
+  };
+}
+
+/*
+ * Reset the fallback in-memory state used by contexts without
+ * ctx.state. Tests call this between cases.
+ */
+export function resetNotificationState() {
+  fallbackStore =
+    new MemoryPluginStateStore();
+}
+
+function decide({
+  notify,
+  decision,
+  observation,
+  previous,
+  now
+}) {
   const actionable =
     notify.actionableDecisions.includes(
       decision.decision
@@ -73,29 +191,26 @@ export async function planNotification(ctx, event) {
 
       const previousEventId =
         kind === "repeat"
-          ? previous?.rootEventId ?? previous?.eventId
+          ? previous?.rootEventId ?? previous?.eventId ?? null
           : null;
 
       return {
         send: true,
         kind,
         previousEventId,
-        async commit({ eventId } = {}) {
-          state[key] = {
-            status: "active",
-            fingerprint: decision.fingerprint,
-            decision: decision.decision,
-            observationState: observation.state,
-            rootEventId:
-              kind === "repeat"
-                ? previous?.rootEventId ?? previous?.eventId ?? eventId ?? null
-                : eventId ?? null,
-            eventId: eventId ?? previous?.eventId ?? null,
-            lastSentAt: now,
-            updatedAt: new Date(now).toISOString()
-          };
-
-          await saveState(notify, state);
+        previous,
+        entry: {
+          status: "active",
+          fingerprint: decision.fingerprint,
+          decision: decision.decision,
+          observationState: observation.state,
+          rootEventId:
+            kind === "repeat"
+              ? previous?.rootEventId ?? previous?.eventId ?? null
+              : null,
+          eventId: previous?.eventId ?? null,
+          lastSentAt: now,
+          updatedAt: new Date(now).toISOString()
         }
       };
     }
@@ -111,20 +226,17 @@ export async function planNotification(ctx, event) {
       send: true,
       kind: "recovery",
       previousEventId:
-        previous.rootEventId ?? previous.eventId,
-      async commit({ eventId } = {}) {
-        state[key] = {
-          status: "resolved",
-          fingerprint: decision.fingerprint,
-          decision: decision.decision,
-          observationState: observation.state,
-          rootEventId: previous.rootEventId ?? previous.eventId ?? null,
-          eventId: eventId ?? previous.eventId ?? null,
-          lastSentAt: now,
-          updatedAt: new Date(now).toISOString()
-        };
-
-        await saveState(notify, state);
+        previous.rootEventId ?? previous.eventId ?? null,
+      previous,
+      entry: {
+        status: "resolved",
+        fingerprint: decision.fingerprint,
+        decision: decision.decision,
+        observationState: observation.state,
+        rootEventId: previous.rootEventId ?? previous.eventId ?? null,
+        eventId: previous.eventId ?? null,
+        lastSentAt: now,
+        updatedAt: new Date(now).toISOString()
       }
     };
   }
@@ -132,11 +244,43 @@ export async function planNotification(ctx, event) {
   return suppressed();
 }
 
-export function resetNotificationState() {
-  memoryStates.clear();
-  fileCache.clear();
-  loadQueues.clear();
-  writeQueues.clear();
+function rootEventIdFor(kind, previous, eventId) {
+  if (kind === "alert") {
+    return eventId ?? null;
+  }
+
+  if (kind === "repeat") {
+    return previous?.rootEventId ?? previous?.eventId ?? eventId ?? null;
+  }
+
+  return previous?.rootEventId ?? previous?.eventId ?? null;
+}
+
+/*
+ * A fresh claim counts as sent (another process is sending it).
+ * A stale claim is rolled back to the state before it.
+ */
+function effectiveEntry(entry, now, claimTimeoutMs) {
+  if (!entry?.pending) {
+    return entry ?? null;
+  }
+
+  if (now - entry.pending.at < claimTimeoutMs) {
+    return entry;
+  }
+
+  return entry.pending.previous ?? null;
+}
+
+function withoutPending(entry) {
+  if (!entry) {
+    return null;
+  }
+
+  const { pending: _pending, ...rest } =
+    entry;
+
+  return rest;
 }
 
 function suppressed() {
@@ -144,8 +288,89 @@ function suppressed() {
     send: false,
     kind: "suppressed",
     previousEventId: null,
-    async commit() {}
+    async commit() {},
+    async release() {}
   };
+}
+
+function notificationState(ctx) {
+  return ctx.state ??
+    createPluginState(fallbackStore, FALLBACK_NAMESPACE);
+}
+
+/*
+ * One-time import of the pre-database JSON state file. Entries are
+ * only written to keys that are still empty, and the file itself is
+ * left untouched.
+ */
+async function importLegacyState(state, notify, logger) {
+  if (!notify.legacyStatePath) {
+    return;
+  }
+
+  const marker =
+    await state.get(LEGACY_IMPORT_KEY);
+
+  if (marker) {
+    return;
+  }
+
+  const legacy =
+    await loadLegacyStateFile(notify.legacyStatePath);
+
+  let imported = 0;
+
+  for (const [key, value] of Object.entries(legacy ?? {})) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+
+    await state.update(
+      NOTIFICATION_KEY_PREFIX + key,
+      current => {
+        if (current !== undefined) {
+          return undefined;
+        }
+
+        imported += 1;
+        return value;
+      }
+    );
+  }
+
+  await state.update(LEGACY_IMPORT_KEY, current =>
+    current ?? {
+      path: notify.legacyStatePath,
+      found: legacy !== null,
+      imported,
+      importedAt: new Date().toISOString()
+    }
+  );
+
+  if (imported > 0) {
+    logger?.info?.(
+      "matrix notification state imported from legacy file",
+      {
+        path: notify.legacyStatePath,
+        imported
+      }
+    );
+  }
+}
+
+async function loadLegacyStateFile(path) {
+  try {
+    return JSON.parse(
+      await readFile(path, "utf8")
+    );
+  }
+  catch (error) {
+    if (error.code === "ENOENT") {
+      return null;
+    }
+
+    throw error;
+  }
 }
 
 function normalizeNotifyConfig(config) {
@@ -166,8 +391,21 @@ function normalizeNotifyConfig(config) {
     );
   }
 
+  const claimTimeoutMs =
+    config.claimTimeoutMs ?? DEFAULT_CLAIM_TIMEOUT_MS;
+
+  if (
+    typeof claimTimeoutMs !== "number" ||
+    claimTimeoutMs < 0
+  ) {
+    throw new Error(
+      "Matrix notify.claimTimeoutMs must be a non-negative number"
+    );
+  }
+
   return {
     repeatAfterMs,
+    claimTimeoutMs,
 
     onRecovery:
       config.onRecovery ?? true,
@@ -176,123 +414,15 @@ function normalizeNotifyConfig(config) {
       config.actionableDecisions ??
       DEFAULT_ACTIONABLE_DECISIONS,
 
-    statePath:
+    // Pre-database state file, imported once into ctx.state.
+    legacyStatePath:
       config.statePath === false
         ? null
         : resolve(
             config.statePath ??
-            "data/matrix-notifications.json"
+            DEFAULT_LEGACY_STATE_PATH
           )
   };
-}
-
-async function loadState(notify) {
-  if (!notify.statePath) {
-    return objectFromMap(memoryStates);
-  }
-
-  if (fileCache.has(notify.statePath)) {
-    return fileCache.get(notify.statePath);
-  }
-
-  if (!loadQueues.has(notify.statePath)) {
-    loadQueues.set(
-      notify.statePath,
-      loadStateFile(notify.statePath)
-    );
-  }
-
-  try {
-    const data =
-      await loadQueues.get(notify.statePath);
-
-    fileCache.set(notify.statePath, data);
-    return data;
-  }
-  finally {
-    loadQueues.delete(notify.statePath);
-  }
-}
-
-async function loadStateFile(path) {
-  try {
-    return JSON.parse(
-      await readFile(path, "utf8")
-    );
-  }
-  catch (error) {
-    if (error.code !== "ENOENT") {
-      throw error;
-    }
-
-    return {};
-  }
-}
-
-async function saveState(notify, state) {
-  if (!notify.statePath) {
-    memoryStates.clear();
-
-    for (const [key, value] of Object.entries(state)) {
-      memoryStates.set(key, value);
-    }
-
-    return;
-  }
-
-  fileCache.set(
-    notify.statePath,
-    state
-  );
-
-  const previous =
-    writeQueues.get(notify.statePath) ??
-    Promise.resolve();
-
-  const next =
-    previous
-      .catch(() => {})
-      .then(async () => {
-        await mkdir(dirname(notify.statePath), {
-          recursive: true
-        });
-
-        const temporaryPath =
-          `${notify.statePath}.${process.pid}.tmp`;
-
-        await writeFile(
-          temporaryPath,
-          JSON.stringify(state, null, 2) + "\n"
-        );
-
-        await rename(
-          temporaryPath,
-          notify.statePath
-        );
-      });
-
-  writeQueues.set(
-    notify.statePath,
-    next
-  );
-
-  try {
-    await next;
-  }
-  finally {
-    if (
-      writeQueues.get(notify.statePath) ===
-      next
-    ) {
-      writeQueues.delete(notify.statePath);
-    }
-  }
-}
-
-function objectFromMap(map) {
-  return Object.fromEntries(
-    map.entries()
-  );
 }
 
 function notificationKey(ctx, event) {

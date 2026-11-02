@@ -4,7 +4,9 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createBackendApiServer } from "../src/backend/api-server.mjs";
+import { createBackendApiServer, normalizeBackendApiConfig } from "../src/backend/api-server.mjs";
+import { openMigratedDatabase } from "../src/db/index.mjs";
+import { DIALECTS, isolatedDatabaseUrl } from "./helpers/database.mjs";
 
 test("backend api persists telemetry and exposes stats/history", async () => {
   const dir = await mkdtemp(join(tmpdir(), "brainstem-api-"));
@@ -227,3 +229,194 @@ test("backend api prevents removal of the last active administrator", async () =
     await api.close();
   }
 });
+
+for (const dialect of DIALECTS) {
+  test(`[${dialect}] backend api serves auth and telemetry from a database url`, async () => {
+    await withDatabaseApi(dialect, {}, async api => {
+      const { cookie } = await setupAdmin(api);
+
+      const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      for (const id of ["obs-1", "obs-2"]) {
+        const ingest = await fetch(`${api.url}/api/events`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: "Bearer secret" },
+          body: JSON.stringify({
+            version: "1",
+            kind: "brainstem.core.decision",
+            payload: { timestamp: new Date().toISOString(), decision: { payload: { decision: "queue" } }, observation: { payload: { id } } }
+          })
+        });
+        assert.equal(ingest.status, 204);
+      }
+      await api.telemetryStore.persistEvent({ version: "1", kind: "brainstem.core.decision", receivedAt: old, payload: {} });
+
+      const health = await fetch(`${api.url}/api/health`).then(response => response.json());
+      assert.equal(health.persistedEvents, 3);
+      assert.equal(health.setupRequired, false);
+
+      const stats = await fetch(`${api.url}/api/stats`, { headers: { cookie } }).then(response => response.json());
+      assert.equal(stats.counters["decisions.queue"], 2);
+
+      const maintenance = await api.runMaintenance({ force: true });
+      assert.equal(maintenance["telemetry.prune"].ran, true);
+      assert.equal(maintenance["telemetry.prune"].result.eventsByAge, 1);
+      assert.equal(maintenance["auth.prune"].ran, true);
+
+      // Another run inside the interval is skipped (as if another replica ran it).
+      const skipped = await api.runMaintenance();
+      assert.equal(skipped["telemetry.prune"].ran, false);
+
+      const events = await fetch(`${api.url}/api/events`, { headers: { cookie } }).then(response => response.json());
+      assert.deepEqual(events.map(event => event.payload.observation.payload.id), ["obs-1", "obs-2"]);
+    });
+  });
+
+  test(`[${dialect}] backend api allows exactly one concurrent first-admin setup`, async () => {
+    await withDatabaseApi(dialect, {}, async api => {
+      const responses = await Promise.all([0, 1, 2, 3, 4].map(index => fetch(`${api.url}/api/auth/setup`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: `admin${index}`, password: "v3ry-long-random-root-passphrase!" })
+      })));
+      const statuses = responses.map(response => response.status).sort();
+      await Promise.all(responses.map(response => response.arrayBuffer()));
+
+      assert.deepEqual(statuses, [200, 409, 409, 409, 409]);
+      assert.equal((await api.authStore.listUsers()).length, 1);
+    });
+  });
+
+  test(`[${dialect}] backend api rate limits logins per client ip in the database`, async () => {
+    await withDatabaseApi(dialect, {}, async api => {
+      await setupAdmin(api);
+      const login = forwardedFor => fetch(`${api.url}/api/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-for": forwardedFor },
+        body: JSON.stringify({ username: "admin", password: "wrong-password-123" })
+      }).then(async response => {
+        await response.arrayBuffer();
+        return response.status;
+      });
+
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        assert.equal(await login("198.51.100.1"), 401);
+      }
+      assert.equal(await login("198.51.100.1"), 429);
+      // Behind the trusted loopback proxy, another client is unaffected.
+      assert.equal(await login("198.51.100.2"), 401);
+
+      const rows = await api.database.db.selectFrom("auth_login_attempts").selectAll()
+        .where("key", "like", "ip:198.51.100.%").orderBy("key").execute();
+      assert.deepEqual(rows.map(row => [row.key, Number(row.count)]), [["ip:198.51.100.1", 9], ["ip:198.51.100.2", 1]]);
+    });
+
+    await withDatabaseApi(dialect, { trustedProxies: [] }, async api => {
+      await setupAdmin(api);
+      const statuses = [];
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const response = await fetch(`${api.url}/api/auth/login`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-forwarded-for": `198.51.100.${attempt}` },
+          body: JSON.stringify({ username: "admin", password: "wrong-password-123" })
+        });
+        await response.arrayBuffer();
+        statuses.push(response.status);
+      }
+      // Untrusted X-Forwarded-For is ignored: setup + 8 logins share the socket ip.
+      assert.deepEqual(statuses, [401, 401, 401, 401, 401, 401, 401, 429]);
+    });
+  });
+}
+
+test("backend api uses a provided database handle without closing it", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "brainstem-api-handle-"));
+  const configPath = join(dir, "brainstem.config.mjs");
+  await writeFile(configPath, "export default {}\n");
+  const database = await openMigratedDatabase({ url: `sqlite:${join(dir, "shared.sqlite")}` });
+
+  try {
+    const api = createBackendApiServer({ host: "127.0.0.1", port: 0, configPath, database, maintenanceIntervalMs: 0 });
+    await api.listen();
+    try {
+      assert.equal(api.database, database);
+      await setupAdmin(api);
+    }
+    finally {
+      await api.close();
+    }
+
+    const users = await database.db.selectFrom("auth_users").select("username").execute();
+    assert.deepEqual(users.map(user => user.username), ["admin"]);
+  }
+  finally {
+    await database.close();
+  }
+});
+
+test("backend api config exposes database url, trusted proxies and maintenance interval", () => {
+  const keys = ["BRAINSTEM_DATABASE_URL", "BRAINSTEM_TRUSTED_PROXIES", "BRAINSTEM_MAINTENANCE_INTERVAL_MS"];
+  const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  for (const key of keys) delete process.env[key];
+
+  try {
+    const defaults = normalizeBackendApiConfig({ telemetryDbPath: "data/x.sqlite" }, { repoRoot: "/srv" });
+    assert.equal(defaults.databaseUrl, "sqlite:/srv/data/x.sqlite");
+    assert.deepEqual(defaults.trustedProxies, ["loopback"]);
+    assert.equal(defaults.maintenanceIntervalMs, 10 * 60 * 1000);
+
+    process.env.BRAINSTEM_DATABASE_URL = "postgres://u@h/db";
+    process.env.BRAINSTEM_TRUSTED_PROXIES = "10.0.0.0/8";
+    process.env.BRAINSTEM_MAINTENANCE_INTERVAL_MS = "60000";
+    const fromEnv = normalizeBackendApiConfig({}, { repoRoot: "/srv" });
+    assert.equal(fromEnv.databaseUrl, "postgres://u@h/db");
+    assert.equal(fromEnv.trustedProxies, "10.0.0.0/8");
+    assert.equal(fromEnv.maintenanceIntervalMs, 60_000);
+
+    const explicit = normalizeBackendApiConfig({ databaseUrl: "sqlite::memory:", trustedProxies: ["::1"] });
+    assert.equal(explicit.databaseUrl, "sqlite::memory:");
+    assert.deepEqual(explicit.trustedProxies, ["::1"]);
+  }
+  finally {
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  }
+});
+
+async function withDatabaseApi(dialect, options, run) {
+  const dir = await mkdtemp(join(tmpdir(), `brainstem-api-${dialect}-`));
+  const configPath = join(dir, "brainstem.config.mjs");
+  await writeFile(configPath, "export default {}\n");
+  const isolated = await isolatedDatabaseUrl(dialect);
+
+  const api = createBackendApiServer({
+    host: "127.0.0.1",
+    port: 0,
+    configPath,
+    databaseUrl: isolated.url,
+    token: "secret",
+    ...options
+  });
+
+  try {
+    await api.listen();
+    await run(api);
+  }
+  finally {
+    await api.close();
+    await isolated.drop();
+  }
+}
+
+async function setupAdmin(api) {
+  const setup = await fetch(`${api.url}/api/auth/setup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: "admin", password: "v3ry-long-random-root-passphrase!" })
+  });
+  assert.equal(setup.status, 200);
+  const body = await setup.json();
+  const cookie = setup.headers.getSetCookie().map(value => value.split(";")[0]).join("; ");
+  return { cookie, csrfToken: body.csrfToken, user: body.user };
+}

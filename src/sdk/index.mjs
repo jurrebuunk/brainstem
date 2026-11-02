@@ -1,4 +1,14 @@
 import { createObservation } from "../core/brainstem.mjs";
+import {
+  MemoryPluginStateStore,
+  createPluginState,
+  pluginStateNamespace
+} from "../runtime/plugin-state.mjs";
+
+export {
+  createPluginState,
+  pluginStateNamespace
+};
 
 export const INPUT_PLUGIN_API_VERSION =
   "brainstem.input/v1";
@@ -112,17 +122,34 @@ function validatePluginBase(plugin, apiVersion, label) {
   }
 }
 
+/*
+ * Used when a context is created without a state store
+ * (tests, ad-hoc scripts). Process-local and not durable.
+ */
+const fallbackStateStore =
+  new MemoryPluginStateStore();
+
 export function createInputContext({
   config = {},
   signal,
   logger = console,
-  checkpoint
+  checkpoint,
+  stateStore,
+  plugin,
+  input,
+  id
 } = {}) {
   return {
     config,
     signal,
     logger,
     checkpoint,
+    state: contextState(stateStore, {
+      kind: "input",
+      plugin,
+      name: input,
+      id
+    }),
 
     observation(input) {
       return createObservation(input);
@@ -133,13 +160,39 @@ export function createInputContext({
 export function createDestinationContext({
   config = {},
   signal,
-  logger = console
+  logger = console,
+  stateStore,
+  plugin,
+  destination,
+  id
 } = {}) {
   return {
     config,
     signal,
-    logger
+    logger,
+    state: contextState(stateStore, {
+      kind: "destination",
+      plugin,
+      name: destination,
+      id
+    })
   };
+}
+
+/*
+ * ctx.state: { get(key), set(key, value), update(key, fn), delete(key) }
+ * namespaced per plugin + input/destination name (+ entry id).
+ */
+function contextState(stateStore, { kind, plugin, name, id }) {
+  return createPluginState(
+    stateStore ?? fallbackStateStore,
+    pluginStateNamespace({
+      kind,
+      plugin: plugin ?? "unknown",
+      name: name ?? "default",
+      id
+    })
+  );
 }
 
 export function assertObservation(observation) {
