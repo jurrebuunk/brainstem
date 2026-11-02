@@ -131,6 +131,22 @@ runtime: {
     pruneAfterDays: 14
   },
 
+  // Optional: this process's id in telemetry, the job queue and the
+  // core registry. Default: BRAINSTEM_CORE_ID, else <hostname>:<pid>:<random>.
+  // coreId: "core-1",
+
+  cores: {
+    // Registry heartbeat (see docs/web-ui.md#topology). Active whenever the
+    // runtime uses a database; enabled: false turns it off.
+    heartbeatMs: 10000
+  },
+
+  handoff: {
+    // destinations handing observations back to the core (ctx.emit)
+    maxDepth: 2,
+    maxPerDelivery: 5
+  },
+
   api: {
     // optional: backend-owned telemetry history, stats, SSE, and config API
     enabled: true,

@@ -38,6 +38,7 @@ The schema is versioned. A single node applies pending migrations on start; clus
 | `maintenance_runs` | Bookkeeping for singleton tasks (pruning, imports) |
 | `jobs` | Pipeline job queue: decide and deliver jobs, including dead jobs ([Delivery pipeline](delivery-pipeline.md)) |
 | `deliveries` | Delivery log, one row per decision and destination, keyed by idempotency key |
+| `cores` | Core registry: one row per runtime process with its heartbeat (`last_seen_at`, epoch ms), status and loaded topology ([Web UI topology](web-ui.md#topology)) |
 | `brainstem_migrations`, `brainstem_migrations_lock` | Applied schema migrations |
 
 Timestamps are ISO-8601 text and JSON is stored as text, so the same rows work on SQLite and Postgres. The job queue's `run_at` and `locked_until` columns are epoch milliseconds.

@@ -29,6 +29,7 @@ import {
   telemetryEvent,
   telemetryValue
 } from "./telemetry.mjs";
+import { DEFAULT_CORE_HEARTBEAT_MS, createCoreRegistry } from "./cores.mjs";
 import { Brainstem } from "../core/brainstem.mjs";
 export { loadDestinationPlugin, loadInputPlugin } from "./plugin-loader.mjs";
 import {
@@ -201,6 +202,7 @@ export class BrainstemRuntime {
       maxPerDelivery: this.config.runtime?.handoff?.maxPerDelivery ?? 5
     };
 
+
     const checkpointsInDatabase =
       this.checkpointStore instanceof DatabaseCheckpointStore;
 
@@ -217,6 +219,22 @@ export class BrainstemRuntime {
     this.deliveries = this.pipeline.deliveries;
     this.pipelineAdmin =
       createPipelineAdmin(this.pipeline);
+
+    /*
+     * Core registry: this process registers in the `cores` table
+     * and heartbeats, so the API knows which cores exist. Only
+     * when the runtime already uses a database (an injected
+     * handle or the database transport); runtimes on memory/JSON
+     * state never open one just for this.
+     */
+    this.coreHeartbeatMs =
+      this.config.runtime?.cores?.heartbeatMs ?? DEFAULT_CORE_HEARTBEAT_MS;
+    this.coreRegistry =
+      this.config.runtime?.cores?.enabled !== false &&
+      (!this.database.owned || this.transport.type === "database")
+        ? createCoreRegistry({ database: () => this.database.get() })
+        : null;
+    this.coreHeartbeatTimer = null;
 
     /*
      * Checkpoints commit in the same transaction
@@ -295,6 +313,7 @@ export class BrainstemRuntime {
     this.#emitSnapshot();
     this.#startTelemetrySnapshots();
     this.#startDeliveryPruning();
+    await this.#startCoreHeartbeat();
 
     this.runner =
       this.#createRunner();
@@ -378,6 +397,7 @@ export class BrainstemRuntime {
       await this.#loadDestinationEntries();
 
       this.#emitSnapshot();
+      await this.#startCoreHeartbeat();
 
       const polls =
         await Promise.allSettled(
@@ -544,6 +564,8 @@ export class BrainstemRuntime {
     await Promise.allSettled(
       this.tasks
     );
+
+    await this.#stopCoreHeartbeat();
 
     await this.brainstem.close();
     await this.checkpointStore.close?.();
@@ -735,7 +757,24 @@ export class BrainstemRuntime {
   }
 
   #emitSnapshot() {
+    const topology = this.#topology();
+
     this.#emitTelemetry("brainstem.snapshot", {
+      inputs: topology.inputs,
+      core: {
+        id: this.coreId,
+        status: this.brainstem?.laya ? "running" : "starting"
+      },
+      destinations: topology.destinations
+    });
+  }
+
+  /*
+   * What this core loaded: inputs and destinations with resolved
+   * ids. Sent in snapshots and stored in the core registry.
+   */
+  #topology() {
+    return {
       inputs: this.plugins.map((entry, index) => {
         const id =
           entry.id ??
@@ -749,10 +788,6 @@ export class BrainstemRuntime {
           ...(this.loadedInputs.get(id) ?? {})
         };
       }),
-      core: {
-        id: this.coreId,
-        status: this.brainstem?.laya ? "running" : "starting"
-      },
       destinations: this.destinationEntries.map(item => ({
         id: item.id,
         plugin: item.plugin.name,
@@ -763,8 +798,52 @@ export class BrainstemRuntime {
         sources: item.entry.sources ?? "all",
         types: item.entry.types ?? "all"
       }))
+    };
+  }
+
+  /*
+   * Registry failures are logged, never fatal: a core keeps
+   * working when it can't report itself.
+   */
+  async #startCoreHeartbeat() {
+    if (!this.coreRegistry || this.coreHeartbeatTimer) return;
+
+    try {
+      await this.coreRegistry.register({
+        id: this.coreId,
+        role: "all",
+        queues: ["poll", "decide", "deliver"],
+        heartbeatMs: this.coreHeartbeatMs,
+        topology: this.#topology()
+      });
+    }
+    catch (error) {
+      this.logger.warn?.("core registration failed", { coreId: this.coreId, error });
+    }
+
+    this.coreHeartbeatTimer = setInterval(() => {
+      this.coreHeartbeat = this.coreRegistry
+        .heartbeat(this.coreId, { topology: this.#topology() })
+        .catch(error => {
+          this.logger.warn?.("core heartbeat failed", { coreId: this.coreId, error });
+        });
+    }, this.coreHeartbeatMs);
+
+    this.coreHeartbeatTimer.unref?.();
+  }
+
+  async #stopCoreHeartbeat() {
+    if (!this.coreHeartbeatTimer) return;
+
+    clearInterval(this.coreHeartbeatTimer);
+    this.coreHeartbeatTimer = null;
+    await this.coreHeartbeat;
+
+    await this.coreRegistry.stop(this.coreId).catch(error => {
+      this.logger.warn?.("core stop registration failed", { coreId: this.coreId, error });
     });
   }
+
 
   #startTelemetrySnapshots() {
     if (

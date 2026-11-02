@@ -19,6 +19,10 @@ import { DELIVERY_STATUSES, JOB_STATES, createPipelineAdmin, createPipelineStora
 import { PERMISSIONS } from "./permissions.mjs";
 import { createSseHub } from "./sse.mjs";
 import { createTelemetryStore } from "./telemetry-store.mjs";
+import { createCoreRegistry, topologyFromCores } from "../runtime/cores.mjs";
+
+// Cores not seen for this long are removed from the registry.
+const CORE_PRUNE_AFTER_MS = 24 * 60 * 60 * 1000;
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 8;
@@ -63,6 +67,7 @@ export function createBackendApiServer({
   let maintenance = null;
   let pipeline = null;
   let pipelineAdmin = null;
+  let coreRegistry = null;
   let started = null;
 
   async function start() {
@@ -96,9 +101,13 @@ export function createBackendApiServer({
         "auth.prune": async ({ now }) => ({
           sessions: await authStore.pruneExpiredSessions({ now }),
           loginAttempts: await authStore.pruneLoginAttempts({ now, windowMs: LOGIN_WINDOW_MS })
+        }),
+        "cores.prune": async ({ now }) => ({
+          cores: await coreRegistry.prune({ olderThanMs: CORE_PRUNE_AFTER_MS, now: new Date(now).getTime() })
         })
       }
     });
+    coreRegistry = createCoreRegistry({ database: async () => handle });
     // The runtime's job queue and delivery log, in the same database.
     pipeline = createPipelineStorage({ type: "database", database: handle });
     pipelineAdmin = createPipelineAdmin(pipeline);
@@ -289,6 +298,22 @@ export function createBackendApiServer({
         requirePermission(session.user, "roles:manage");
         await authStore.deleteRole(roleMatch[1]);
         sendJson(response, { ok: true });
+        return;
+      }
+
+      /*
+       * Structure for the Web UI: the registered cores (running,
+       * lost or stopped) and the inputs/destinations they loaded.
+       * Independent of which core sent the latest telemetry.
+       */
+      if (url.pathname === "/api/topology" && request.method === "GET") {
+        requirePermission(session.user, "runtime:read");
+        const cores = await coreRegistry.list();
+        sendJson(response, {
+          generatedAt: new Date().toISOString(),
+          cores: cores.map(({ topology, ...core }) => core),
+          ...topologyFromCores(cores)
+        });
         return;
       }
 

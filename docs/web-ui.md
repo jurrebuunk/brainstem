@@ -104,6 +104,7 @@ GET  /api/roles        role and permission list
 POST /api/roles        create role
 PUT  /api/roles/:id    update role
 DELETE /api/roles/:id  delete custom role
+GET  /api/topology     registered cores (running/lost/stopped) and the inputs/destinations they loaded
 GET  /api/pipeline     job queue and delivery log counts
 GET  /api/jobs         pipeline jobs (?state=ready|running|dead&queue=decide|deliver)
 GET  /api/deliveries   delivery log (?status=pending|failed|delivered|dead|discarded)
@@ -113,6 +114,26 @@ GET  /api/health       health check
 ```
 
 The backend persists raw telemetry/output events and derived stats in the same database as the runtime (`runtime.database`, or `BRAINSTEM_DATABASE_URL`; see [State](state.md)). The 1.x settings `runtime.api.telemetryDbPath` and `BRAINSTEM_API_DB` are no longer used; an old `data/web-stats.sqlite` is imported once on first start. On Web UI restart, the Flow page reloads recent events from the backend and continues with live updates from `/api/stream`.
+
+### Topology
+
+`GET /api/topology` (permission `runtime:read`) describes the structure independently of which core sent the latest telemetry:
+
+```js
+{
+  generatedAt: "2026-...",
+  cores: [
+    { id, role, queues, version, hostname, pid, status: "running" | "lost" | "stopped",
+      heartbeatMs, startedAt, lastSeenAt, stoppedAt, topologyHash }
+  ],
+  source: { coreId, status, topologyHash },  // the core the topology below comes from
+  consistent: true,                          // false when running cores loaded different configs
+  inputs: [{ id, plugin, input, module, intervalMs }],
+  destinations: [{ id, plugin, destination, module, decisions, routes, sources, types }]
+}
+```
+
+The topology comes from the most recently seen running core, or the last core seen if none is running. Each runtime registers in the `cores` table when it starts, heartbeats every `runtime.cores.heartbeatMs` (default 10 s) and marks itself stopped on shutdown. A running core that misses 3 heartbeats is reported as `lost`. Cores not seen for 24 h are pruned by the API's maintenance task. With one runtime there is one core; with several (roadmap Phase 3) each adds a row.
 
 Event log retention is controlled by `WEB_EVENTS_PRUNE_AFTER_DAYS` and `WEB_EVENTS_MAX_ROWS` (defaults: 14 days and 50,000 rows). Set either to `0` to disable that pruning mode. Old time-series rows are pruned after 14 days by default; override with `STATS_PRUNE_AFTER_DAYS` or set it to `0` to disable time-series pruning.
 
