@@ -33,8 +33,13 @@ export const HANDOFF_VISIBLE_MS = 8_000;
 const COLORS = {
   input: "#3b82f6",
   destination: "#22c55e",
+  handoff: "#ec4899",
   idle: "#4b5563"
 };
+
+// Handoff pill: placed right of its destination node (260 wide).
+const HANDOFF_PILL_X = FLOW_DESTINATION_X + 260 + 90;
+const HANDOFF_PILL_Y_OFFSET = 38;
 
 export function buildFlowModel({ topology = null, events = [], now = Date.now() } = {}) {
   const structure = collectStructure(topology, events);
@@ -164,18 +169,54 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
         y: index * FLOW_ROW_GAP,
         active: isActive(nodeActivity.get(id)),
         handleActive: isActive(edgeActivity.get(destinationEdgeId(destination.id))),
-        // While handing off, the node shows a "handing off" tag on
-        // its right side; the core lights up on its own when it
-        // decides on the handed-off observation.
         extra: {
           destinationId: destination.id,
-          handingOff: liveHandoffs.has(destination.id),
-          handoffStartedAt: liveHandoffs.get(destination.id)?.lastAt ?? null,
-          handoffVisibleMs: HANDOFF_VISIBLE_MS
+          handingOff: liveHandoffs.has(destination.id)
         }
       });
     })
   ];
+
+  /*
+   * While a destination hands off, a "handing off" pill node sits
+   * to its right, linked by an ordinary edge. Both disappear after
+   * HANDOFF_VISIBLE_MS. The core needs no marker: it lights up as
+   * for any decision. Ids include the handoff time, so each
+   * handoff replays its fade-in.
+   */
+  const handoffPills = destinations.flatMap((destination, index) => {
+    const handoff = liveHandoffs.get(destination.id);
+    if (!handoff) return [];
+
+    const stamp = Date.parse(handoff.lastAt);
+
+    return [{
+      node: {
+        id: `handoff:${destination.id}:${stamp}`,
+        type: "handoffPill",
+        position: { x: HANDOFF_PILL_X, y: index * FLOW_ROW_GAP + HANDOFF_PILL_Y_OFFSET },
+        draggable: false,
+        selectable: false,
+        data: {
+          label: "↩ handing off",
+          destinationId: destination.id,
+          startedAt: handoff.lastAt,
+          visibleMs: HANDOFF_VISIBLE_MS
+        }
+      },
+      edge: graphEdge({
+        id: `edge-handoff-${destination.id}-${stamp}`,
+        source: `destination:${destination.id}`,
+        sourceHandle: "handoff-out",
+        target: `handoff:${destination.id}:${stamp}`,
+        targetHandle: "in",
+        active: true,
+        color: COLORS.handoff
+      })
+    }];
+  });
+
+  nodes.push(...handoffPills.map(pill => pill.node));
 
   const edges = [
     ...inputs.map(input => graphEdge({
@@ -195,7 +236,8 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
       targetHandle: "in",
       active: isActive(edgeActivity.get(destinationEdgeId(destination.id))),
       color: COLORS.destination
-    }))
+    })),
+    ...handoffPills.map(pill => pill.edge)
   ];
 
   return {

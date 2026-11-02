@@ -39,7 +39,6 @@ const handoffRun = [
 
 const node = (model, id) => model.nodes.find(candidate => candidate.id === id);
 const edge = (model, id) => model.edges.find(candidate => candidate.id === id);
-const handoffEdges = model => model.edges.filter(candidate => candidate.type === "handoff");
 
 test("the flow is built from the topology, one node per configured id", () => {
   const model = buildFlowModel({ topology, events: [], now: NOW });
@@ -72,25 +71,36 @@ test("the core pool node summarises the registered cores", () => {
   assert.equal(node(drift, "core").data.footnote, "cores loaded different configs");
 });
 
-test("a handoff shows briefly as a tag on the destination, then disappears", () => {
+test("a handoff shows briefly as a pill node linked to the destination, then disappears", () => {
   // The report was decided at 21 s; 4 s later the handoff is live.
   const live = buildFlowModel({ topology, events: handoffRun, now: Date.parse(at(25)) });
-  const triage = node(live, "destination:log-triage").data;
+  const stamp = Date.parse(at(21));
 
   assert.ok(!live.nodes.some(candidate => candidate.id.startsWith("input:destination")), "no fake input node");
-  assert.deepEqual(handoffEdges(live), [], "no extra edge: the tag sits on the destination");
-  assert.equal(live.edges.length, 1 + 3, "one input edge and one edge per destination");
 
-  assert.equal(triage.handingOff, true);
-  assert.equal(triage.handoffStartedAt, at(21));
-  assert.equal(triage.handoffVisibleMs, HANDOFF_VISIBLE_MS);
+  const pill = node(live, `handoff:log-triage:${stamp}`);
+  assert.equal(pill.type, "handoffPill");
+  assert.equal(pill.selectable, false);
+  assert.deepEqual(pill.data, { label: "↩ handing off", destinationId: "log-triage", startedAt: at(21), visibleMs: HANDOFF_VISIBLE_MS });
+  assert.ok(pill.position.x > node(live, "destination:log-triage").position.x, "right of its destination");
+
+  const link = edge(live, `edge-handoff-log-triage-${stamp}`);
+  assert.equal(link.source, "destination:log-triage");
+  assert.equal(link.sourceHandle, "handoff-out");
+  assert.equal(link.target, pill.id);
+  assert.equal(link.targetHandle, "in");
+  assert.equal(link.type, "default", "an ordinary edge");
+  assert.equal(link.animated, true);
+
+  assert.equal(node(live, "destination:log-triage").data.handingOff, true);
   assert.equal(node(live, "destination:issue-summary").data.handingOff, false);
   assert.equal(node(live, "core").data.active, true, "the core lights up as for any decision");
 
   // Once HANDOFF_VISIBLE_MS has passed, only the count remains.
-  const later = buildFlowModel({ topology, events: handoffRun, now: Date.parse(at(21)) + HANDOFF_VISIBLE_MS + 1 });
+  const later = buildFlowModel({ topology, events: handoffRun, now: stamp + HANDOFF_VISIBLE_MS + 1 });
+  assert.ok(!later.nodes.some(candidate => candidate.type === "handoffPill"));
+  assert.ok(!later.edges.some(candidate => candidate.id.startsWith("edge-handoff-")));
   assert.equal(node(later, "destination:log-triage").data.handingOff, false);
-  assert.equal(node(later, "destination:log-triage").data.handoffStartedAt, null);
   assert.ok(node(later, "destination:log-triage").data.meta.some(item => item.label === "handoffs" && item.value === 1));
   assert.equal(node(later, "destination:ops-room").data.status, "retrying");
 });

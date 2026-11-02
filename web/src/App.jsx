@@ -18,7 +18,8 @@ import { buildFlowModel } from "./flow/model.js";
 import NodeInspector from "./components/NodeInspector.jsx";
 
 const nodeTypes = {
-  brainstemNode: BrainstemNode
+  brainstemNode: BrainstemNode,
+  handoffPill: HandoffPillNode
 };
 
 const pages = [
@@ -209,6 +210,8 @@ export default function App() {
   }, [auth.user?.id]);
 
   const onNodeClick = useCallback((_event, node) => {
+    // The transient handoff pill has nothing to inspect.
+    if (node.type === "handoffPill") return;
     setSelectedNode(node);
   }, []);
 
@@ -808,7 +811,7 @@ function BrainstemNode({ data }) {
       {data.footnote && <div className="node-footnote">{data.footnote}</div>}
 
       {isDestination && data.handingOff && (
-        <HandoffTag startedAt={data.handoffStartedAt} visibleMs={data.handoffVisibleMs} />
+        <Handle id="handoff-out" type="source" position={Position.Right} className="node-handle handoff-handle is-handle-active" isConnectable={false} />
       )}
 
       {isInput && (
@@ -819,22 +822,21 @@ function BrainstemNode({ data }) {
 }
 
 /*
- * Shown while a destination hands an observation back to the
- * core: a short line out of the node's right side into a pill.
- * The fade is synced to the handoff time, so a page loaded
- * mid-handoff fades out on time instead of replaying it.
+ * The transient "handing off" node right of a destination, linked
+ * by an ordinary edge. Its fade is synced to the handoff time, so
+ * a page loaded mid-handoff fades out on time.
  */
-function HandoffTag({ startedAt, visibleMs }) {
+function HandoffPillNode({ data }) {
   const timing = useMemo(() => {
-    const elapsed = startedAt ? Date.now() - Date.parse(startedAt) : 0;
-    const delay = -Math.min(Math.max(elapsed, 0), visibleMs);
-    return { animationDuration: `${visibleMs}ms`, animationDelay: `${delay}ms` };
-  }, [startedAt, visibleMs]);
+    const elapsed = data.startedAt ? Date.now() - Date.parse(data.startedAt) : 0;
+    const delay = -Math.min(Math.max(elapsed, 0), data.visibleMs);
+    return { animationDuration: `${data.visibleMs}ms`, animationDelay: `${delay}ms` };
+  }, [data.startedAt, data.visibleMs]);
 
   return (
-    <div className="handoff-tag" style={timing} aria-label="Handing off to the core">
-      <span className="handoff-tag-line" aria-hidden="true" />
-      <span className="handoff-tag-pill">↩ handing off</span>
+    <div className="handoff-pill" style={timing} title={`${data.destinationId} is handing an observation back to the core`}>
+      <Handle id="in" type="target" position={Position.Left} className="node-handle handoff-handle is-handle-active" isConnectable={false} />
+      {data.label}
     </div>
   );
 }
