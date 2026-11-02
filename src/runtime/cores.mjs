@@ -22,7 +22,7 @@ export function createCoreRegistry({ database }) {
   }
 
   return {
-    async register({ id, role = "all", queues = [], heartbeatMs, topology, now = Date.now() }) {
+    async register({ id, role = "all", queues = [], heartbeatMs, topology, configVersion = null, now = Date.now() }) {
       const row = {
         id,
         role,
@@ -35,6 +35,7 @@ export function createCoreRegistry({ database }) {
         started_at: new Date(now).toISOString(),
         last_seen_at: now,
         stopped_at: null,
+        config_version: configVersion,
         ...topologyColumns(topology)
       };
 
@@ -45,13 +46,14 @@ export function createCoreRegistry({ database }) {
         .execute();
     },
 
-    async heartbeat(id, { topology, now = Date.now() } = {}) {
+    async heartbeat(id, { topology, configVersion, now = Date.now() } = {}) {
       await (await db())
         .updateTable("cores")
         .set({
           status: "running",
           last_seen_at: now,
           stopped_at: null,
+          ...(configVersion === undefined ? {} : { config_version: configVersion }),
           ...(topology ? topologyColumns(topology) : {})
         })
         .where("id", "=", id)
@@ -95,22 +97,47 @@ export function createCoreRegistry({ database }) {
 }
 
 /*
- * The topology to serve: from the most recently seen running
- * core (any core when none is running), plus whether all running
- * cores agree on it.
+ * The topology to serve. Cores may run different queues
+ * (--queues), so inputs and destinations are merged across running
+ * cores (any core when none is running), the most recently seen
+ * core winning per id.
+ *
+ * `consistent` is false when running cores run different config
+ * versions, or loaded different definitions for the same part of
+ * the pipeline.
  */
 export function topologyFromCores(cores) {
   const running = cores.filter(core => core.status === "running");
-  const source = running[0] ?? cores[0] ?? null;
-  const hashes = new Set(running.map(core => core.topologyHash));
+  const sources = running.length > 0 ? running : cores.slice(0, 1);
+  const source = sources[0] ?? null;
+  const inputs = new Map();
+  const destinations = new Map();
+
+  for (const core of sources) {
+    for (const input of core.topology.inputs ?? []) {
+      if (!inputs.has(input.id)) inputs.set(input.id, input);
+    }
+    for (const destination of core.topology.destinations ?? []) {
+      if (!destinations.has(destination.id)) destinations.set(destination.id, destination);
+    }
+  }
+
+  const versions = new Set(running.map(core => core.configVersion ?? null));
+  const inputHashes = new Set(running.map(core => topologyHash(core.topology.inputs ?? [])));
+  const destinationHashes = new Set(
+    running
+      .filter(core => (core.topology.destinations ?? []).length > 0)
+      .map(core => topologyHash(core.topology.destinations))
+  );
 
   return {
     source: source
       ? { coreId: source.id, status: source.status, topologyHash: source.topologyHash }
       : null,
-    consistent: hashes.size <= 1,
-    inputs: source?.topology.inputs ?? [],
-    destinations: source?.topology.destinations ?? []
+    configVersion: versions.size === 1 ? [...versions][0] : null,
+    consistent: versions.size <= 1 && inputHashes.size <= 1 && destinationHashes.size <= 1,
+    inputs: [...inputs.values()],
+    destinations: [...destinations.values()]
   };
 }
 
@@ -148,6 +175,9 @@ function toCore(row, now) {
     lastSeenAt: new Date(lastSeenAt).toISOString(),
     stoppedAt: row.stopped_at,
     topologyHash: row.topology_hash,
+    configVersion: row.config_version === null || row.config_version === undefined
+      ? null
+      : Number(row.config_version),
     topology: JSON.parse(row.topology_json)
   };
 }

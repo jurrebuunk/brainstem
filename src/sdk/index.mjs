@@ -155,13 +155,22 @@ export function createInputContext({
   stateStore,
   plugin,
   input,
-  id
+  id,
+  lease = null
 } = {}) {
   return {
     config,
     signal,
     logger,
     checkpoint,
+    /*
+     * The input lease this poll runs under, or null with timer
+     * scheduling: { id, owner, epoch, until, extend(leaseMs) }.
+     * Long-lived inputs (IMAP IDLE, streams) renew it with
+     * extend(); the runtime also renews it while poll() runs. When
+     * it is lost, `signal` aborts.
+     */
+    lease,
     state: contextState(stateStore, {
       kind: "input",
       plugin,

@@ -65,7 +65,21 @@ test("topologyFromCores serves the freshest running core and flags disagreement"
   const allStopped = topologyFromCores([core("c", "stopped", ["old"])]);
   assert.equal(allStopped.source.coreId, "c", "falls back to the last core seen");
 
-  assert.deepEqual(topologyFromCores([]), { source: null, consistent: true, inputs: [], destinations: [] });
+  assert.deepEqual(topologyFromCores([]), { source: null, configVersion: null, consistent: true, inputs: [], destinations: [] });
+
+  // Cores running different queues: merged, still consistent.
+  const deliverOnly = { ...core("d", "running", ["x"]), topology: { inputs: [], destinations: topology(["x"]).destinations } };
+  const pollOnly = { ...core("p", "running", []), topology: { inputs: topology(["x"]).inputs, destinations: [] } };
+  const split = topologyFromCores([pollOnly, deliverOnly]);
+  assert.deepEqual(split.destinations.map(destination => destination.id), ["x"]);
+  assert.equal(split.inputs.length, topology(["x"]).inputs.length);
+
+  const versions = topologyFromCores([
+    { ...core("a", "running", ["x"]), configVersion: 3 },
+    { ...core("b", "running", ["x"]), configVersion: 4 }
+  ]);
+  assert.equal(versions.consistent, false, "running cores on different config versions");
+  assert.equal(versions.configVersion, null);
 });
 
 dialectTest("a runtime registers itself with its topology and marks itself stopped", async ({ handle }) => {

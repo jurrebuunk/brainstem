@@ -20,8 +20,16 @@ export const SCHEMA_TABLES = [
   { name: "auth_login_attempts", key: ["key"] },
   { name: "maintenance_runs", key: ["task"] },
   { name: "jobs", key: ["id"], identity: "id" },
-  { name: "deliveries", key: ["key"] }
+  { name: "deliveries", key: ["key"] },
+  { name: "stat_nodes", key: ["node_id"] },
+  { name: "config_versions", key: ["id"], identity: "id" },
+  { name: "active_config", key: ["id"] }
 ];
+
+/*
+ * Runtime state that is rebuilt by running cores and never copied:
+ * `cores` (heartbeats) and `inputs` (schedule and leases).
+ */
 
 export async function countRows(db, table) {
   const row = await db.selectFrom(table)

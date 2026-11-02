@@ -1,6 +1,7 @@
 import { Kysely, PostgresDialect } from "kysely";
 
 import { createNodeSqliteDialect } from "./node-sqlite-dialect.mjs";
+import { createNotifier } from "./notifier.mjs";
 
 export const DEFAULT_DATABASE_URL = "sqlite:data/brainstem.sqlite";
 
@@ -39,9 +40,10 @@ export function resolveDatabaseUrl(config = {}) {
 /*
  * Open a database handle.
  *
- * Returns { db, dialect, schema, close() } where db is a Kysely instance.
- * All Brainstem stores take this handle instead of opening
- * their own connections.
+ * Returns { db, dialect, schema, notifier, close() } where db is a
+ * Kysely instance. All Brainstem stores take this handle instead of
+ * opening their own connections. `notifier` (src/db/notifier.mjs)
+ * is created on first use and connects only when something listens.
  */
 export async function openDatabase({ url, pool = {} } = {}) {
   const parsed = parseDatabaseUrl(url ?? resolveDatabaseUrl());
@@ -77,14 +79,22 @@ export async function openDatabase({ url, pool = {} } = {}) {
     schema = result.rows[0]?.schema ?? "public";
   }
 
+  const resolvedUrl = url ?? resolveDatabaseUrl();
+  let notifier = null;
+
   return {
     db,
     dialect: parsed.dialect,
     schema,
-    url: url ?? resolveDatabaseUrl(),
+    url: resolvedUrl,
+    get notifier() {
+      notifier ??= createNotifier({ dialect: parsed.dialect, url: resolvedUrl, schema });
+      return notifier;
+    },
     async close() {
       if (closed) return;
       closed = true;
+      await notifier?.close();
       await db.destroy();
     }
   };

@@ -30,9 +30,11 @@ export const DEFAULT_POLL_INTERVAL_MS = 1_000;
  * While a job runs its lease is extended every leaseMs / 3. A
  * lost lease aborts the handler's signal.
  *
- * start(signal) keeps claiming until the signal aborts, then
- * waits for running jobs. Jobs interrupted by shutdown are
- * released without counting the attempt.
+ * start(signal, { stop }) keeps claiming until `stop` or `signal`
+ * aborts, then waits for running jobs. `stop` only ends claiming
+ * (graceful drain: in-flight jobs finish); `signal` also aborts
+ * the running handlers. Jobs interrupted that way are released
+ * without counting the attempt.
  *
  * drain() runs every due job (including jobs those jobs enqueue)
  * until none is left, then returns { processed, failures }.
@@ -64,12 +66,13 @@ export class JobRunner {
     return Object.keys(this.queues);
   }
 
-  async start(signal) {
+  async start(signal, { stop } = {}) {
     const unsubscribe = this.transport.subscribe(() => this.#wakeAll());
+    const claiming = stop ? AbortSignal.any([stop, signal]) : signal;
 
     try {
       await Promise.all(
-        this.queueNames.map(queue => this.#loop(queue, signal))
+        this.queueNames.map(queue => this.#loop(queue, signal, claiming))
       );
     }
     finally {
@@ -111,12 +114,12 @@ export class JobRunner {
     return Math.max(1, Math.floor(Number(this.queues[queue].concurrency ?? 1)));
   }
 
-  async #loop(queue, signal) {
+  async #loop(queue, signal, claiming = signal) {
     const wake = createWakeSignal();
     this.wakeups.add(wake);
 
     try {
-      while (!signal.aborted) {
+      while (!claiming.aborted) {
         await this.#reclaimMaybe();
 
         const running = [...this.inflight.values()]
@@ -134,7 +137,7 @@ export class JobRunner {
             });
           }
           catch (error) {
-            if (signal.aborted) break;
+            if (claiming.aborted) break;
             this.logger?.error?.("job claim failed", { queue, error });
           }
 
@@ -153,7 +156,7 @@ export class JobRunner {
         // A full batch may mean more work is waiting.
         if (capacity > 0 && claimed.length === capacity) continue;
 
-        await wake.wait(signal, await this.#idleDelay(queue));
+        await wake.wait(claiming, await this.#idleDelay(queue));
       }
     }
     finally {

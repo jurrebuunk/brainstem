@@ -109,6 +109,7 @@ export function metricsForEvent(event) {
 
   if (kind === "brainstem.input.poll.started") metrics.add("polls.started");
   if (kind === "brainstem.input.poll.completed") metrics.add("polls.completed");
+  if (kind === "brainstem.input.poll.failed") metrics.add("polls.failed");
   if (kind === "brainstem.input.observation") metrics.add("observations.emitted");
   if (kind === "brainstem.core.decision") {
     metrics.add("decisions.total");
@@ -157,6 +158,7 @@ export function nodeStatsForEvent(event) {
 
   if (kind === "brainstem.input.poll.started") add(`input:${payload.id}`, "polls");
   if (kind === "brainstem.input.poll.completed") add(`input:${payload.id}`, null);
+  if (kind === "brainstem.input.poll.failed") add(`input:${payload.id}`, "errors");
   if (kind === "brainstem.input.observation") add(`input:${payload.id}`, "observations");
 
   if (kind === "brainstem.core.decision") {
