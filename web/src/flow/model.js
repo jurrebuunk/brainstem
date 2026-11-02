@@ -142,10 +142,7 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
       height: coreHeight,
       inputHandles,
       outputHandles,
-      extra: {
-        cores,
-        receivingFrom: [...liveHandoffs.keys()]
-      }
+      extra: { cores }
     }),
     ...destinations.map((destination, index) => {
       const id = `destination:${destination.id}`;
@@ -167,9 +164,14 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
         y: index * FLOW_ROW_GAP,
         active: isActive(nodeActivity.get(id)),
         handleActive: isActive(edgeActivity.get(destinationEdgeId(destination.id))),
+        // While handing off, the node shows a "handing off" tag on
+        // its right side; the core lights up on its own when it
+        // decides on the handed-off observation.
         extra: {
           destinationId: destination.id,
-          handingOff: liveHandoffs.has(destination.id)
+          handingOff: liveHandoffs.has(destination.id),
+          handoffStartedAt: liveHandoffs.get(destination.id)?.lastAt ?? null,
+          handoffVisibleMs: HANDOFF_VISIBLE_MS
         }
       });
     })
@@ -193,25 +195,6 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
       targetHandle: "in",
       active: isActive(edgeActivity.get(destinationEdgeId(destination.id))),
       color: COLORS.destination
-    })),
-    // A handoff in progress: a short-lived arc from the destination
-    // back into the core, drawn above the nodes. The id includes
-    // the handoff time so every handoff replays its animation.
-    ...[...liveHandoffs].map(([destinationId, handoff]) => ({
-      id: `${handoffEdgeId(destinationId)}-${Date.parse(handoff.lastAt)}`,
-      source: `destination:${destinationId}`,
-      sourceHandle: "handoff-out",
-      target: "core",
-      targetHandle: "handoff-in",
-      type: "handoff",
-      zIndex: 1000,
-      selectable: false,
-      focusable: false,
-      data: {
-        label: `report from ${destinationId}`,
-        startedAt: handoff.lastAt,
-        visibleMs: HANDOFF_VISIBLE_MS
-      }
     }))
   ];
 
@@ -486,10 +469,6 @@ function inputEdgeId(id) {
 
 function destinationEdgeId(id) {
   return `edge-destination-${id}`;
-}
-
-function handoffEdgeId(id) {
-  return `edge-handoff-${id}`;
 }
 
 function coreHeightForHandles(count) {

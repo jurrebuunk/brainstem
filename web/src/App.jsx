@@ -8,7 +8,6 @@ import { basicSetup, EditorView } from "codemirror";
 import {
   Background,
   Controls,
-  EdgeLabelRenderer,
   Handle,
   Position,
   ReactFlow,
@@ -20,10 +19,6 @@ import NodeInspector from "./components/NodeInspector.jsx";
 
 const nodeTypes = {
   brainstemNode: BrainstemNode
-};
-
-const edgeTypes = {
-  handoff: HandoffEdge
 };
 
 const pages = [
@@ -690,7 +685,6 @@ function FlowPage({ nodes, edges, cores = [], structure, graphError, onNodesChan
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
@@ -793,13 +787,6 @@ function BrainstemNode({ data }) {
       {isDestination && (
         <Handle id="in" type="target" position={Position.Left} className={`node-handle${data.handleActive || data.active ? " is-handle-active" : ""}`} />
       )}
-      {/* Invisible anchors for the short-lived handoff arc. */}
-      {isDestination && (
-        <Handle id="handoff-out" type="source" position={Position.Top} className="handoff-anchor" isConnectable={false} />
-      )}
-      {isCore && (
-        <Handle id="handoff-in" type="target" position={Position.Top} className="handoff-anchor" isConnectable={false} />
-      )}
 
       <div className="node-header">
         <span>{data.nodeType}</span>
@@ -821,10 +808,7 @@ function BrainstemNode({ data }) {
       {data.footnote && <div className="node-footnote">{data.footnote}</div>}
 
       {isDestination && data.handingOff && (
-        <div className="node-pulse">↩ handing off</div>
-      )}
-      {isCore && data.receivingFrom?.length > 0 && (
-        <div className="node-pulse">↩ report from {data.receivingFrom.join(", ")}</div>
+        <HandoffTag startedAt={data.handoffStartedAt} visibleMs={data.handoffVisibleMs} />
       )}
 
       {isInput && (
@@ -835,44 +819,23 @@ function BrainstemNode({ data }) {
 }
 
 /*
- * A handoff in progress: an arc from the destination over the
- * graph back into the core, drawn above the nodes, with a dot
- * travelling along it. It fades out once the handoff is
- * HANDOFF_VISIBLE_MS old, and the flow model then removes it.
+ * Shown while a destination hands an observation back to the
+ * core: a short line out of the node's right side into a pill.
+ * The fade is synced to the handoff time, so a page loaded
+ * mid-handoff fades out on time instead of replaying it.
  */
-function HandoffEdge({ sourceX, sourceY, targetX, targetY, data }) {
-  const lift = 90 + Math.abs(sourceX - targetX) * 0.15;
-  const peakY = Math.min(sourceY, targetY) - lift;
-  const path = `M ${sourceX},${sourceY} C ${sourceX},${peakY} ${targetX},${peakY} ${targetX},${targetY}`;
-  const labelX = (sourceX + targetX) / 2;
-  const labelY = 0.125 * (sourceY + targetY) + 0.75 * peakY;
-
-  // Start the fade where this handoff already is, so a page that
-  // loads mid-handoff fades out on time instead of replaying it.
+function HandoffTag({ startedAt, visibleMs }) {
   const timing = useMemo(() => {
-    const elapsed = Date.now() - Date.parse(data.startedAt);
-    const delay = -Math.min(Math.max(elapsed, 0), data.visibleMs);
-    return { animationDuration: `${data.visibleMs}ms`, animationDelay: `${delay}ms` };
-  }, [data.startedAt, data.visibleMs]);
+    const elapsed = startedAt ? Date.now() - Date.parse(startedAt) : 0;
+    const delay = -Math.min(Math.max(elapsed, 0), visibleMs);
+    return { animationDuration: `${visibleMs}ms`, animationDelay: `${delay}ms` };
+  }, [startedAt, visibleMs]);
 
   return (
-    <>
-      <g className="handoff-edge" style={timing}>
-        <path d={path} className="handoff-edge-glow" />
-        <path d={path} className="handoff-edge-path" />
-        <circle r="5" className="handoff-edge-dot">
-          <animateMotion dur="1.4s" repeatCount="indefinite" path={path} />
-        </circle>
-      </g>
-      <EdgeLabelRenderer>
-        <div
-          className="handoff-edge-label"
-          style={{ ...timing, transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
-        >
-          ↩ {data.label}
-        </div>
-      </EdgeLabelRenderer>
-    </>
+    <div className="handoff-tag" style={timing} aria-label="Handing off to the core">
+      <span className="handoff-tag-line" aria-hidden="true" />
+      <span className="handoff-tag-pill">↩ handing off</span>
+    </div>
   );
 }
 
