@@ -587,6 +587,156 @@ export class BrainstemRuntime {
     }
   }
 
+  /*
+   * Hot reload (roadmap 4.6): switch to a new config without
+   * restarting. Claiming stops, in-flight polls and jobs finish
+   * (up to runtime.shutdown.timeoutMs), then inputs and
+   * destinations reload and work resumes. When the new config
+   * fails to load, the previous one keeps running and the error is
+   * thrown.
+   *
+   * Takes effect: inputs, destinations, policy, laya questions and
+   * load options, runtime.queue (except transport), inputs (except
+   * scheduling), handoff, shutdown. Needs a restart: database,
+   * records, checkpoints, queue.transport, inputs.scheduling,
+   * cores, role and queues.
+   */
+  async reconfigure({
+    config,
+    plugins = config.inputs ?? [],
+    destinations = config.destinations ?? [],
+    configVersion = null
+  }) {
+    const previous = this.reconfiguring ?? Promise.resolve();
+    const run = previous
+      .catch(() => {})
+      .then(() => this.#reconfigure({ config, plugins, destinations, configVersion }));
+
+    this.reconfiguring = run;
+
+    try {
+      return await run;
+    }
+    finally {
+      if (this.reconfiguring === run) this.reconfiguring = null;
+    }
+  }
+
+  async #reconfigure({ config, plugins, destinations, configVersion }) {
+    const previous = {
+      config: this.config,
+      plugins: this.plugins,
+      destinations: this.destinations,
+      configVersion: this.configVersion
+    };
+
+    if (!this.started || this.draining || !this.abortController) {
+      this.#applyConfig({ config, plugins, destinations, configVersion });
+      return;
+    }
+
+    this.logger.info?.(
+      "config changed; reloading",
+      { from: previous.configVersion, to: configVersion }
+    );
+
+    await this.#stopWork({ timeoutMs: this.shutdownConfig.timeoutMs });
+
+    if (this.abortController.signal.aborted || this.draining) return;
+
+    try {
+      this.#applyConfig({ config, plugins, destinations, configVersion });
+      await this.#prepareReload();
+    }
+    catch (error) {
+      this.logger.error?.(
+        "config reload failed; keeping the previous config",
+        { version: configVersion, error }
+      );
+
+      this.#applyConfig(previous);
+      await this.#prepareReload().catch(restoreError => {
+        this.logger.error?.("restoring the previous config failed", { error: restoreError });
+      });
+      this.#startWork();
+      this.#emitSnapshot();
+
+      throw error;
+    }
+
+    this.#startWork();
+    this.#emitSnapshot();
+    this.#heartbeatNow();
+
+    this.logger.info?.(
+      "config reloaded",
+      {
+        version: configVersion,
+        inputs: this.plugins.length,
+        destinations: this.destinationEntries.length
+      }
+    );
+    this.#emitTelemetry("brainstem.config.reloaded", {
+      from: previous.configVersion,
+      to: configVersion,
+      inputs: this.plugins.length,
+      destinations: this.destinationEntries.length
+    });
+  }
+
+  #applyConfig({ config, plugins, destinations, configVersion }) {
+    this.config = config;
+    this.plugins = plugins;
+    this.destinations = destinations;
+    this.configVersion = configVersion;
+
+    this.queueConfig = {
+      ...normalizeQueueConfig(config.runtime?.queue),
+      transport: this.queueConfig.transport
+    };
+    this.handoffConfig = {
+      maxDepth: config.runtime?.handoff?.maxDepth ?? 2,
+      maxPerDelivery: config.runtime?.handoff?.maxPerDelivery ?? 5
+    };
+    this.inputConfig = {
+      ...normalizeInputConfig(config.runtime?.inputs),
+      scheduling: this.inputConfig.scheduling
+    };
+    this.shutdownConfig = {
+      ...DEFAULT_SHUTDOWN_CONFIG,
+      ...(config.runtime?.shutdown ?? {})
+    };
+  }
+
+  async #prepareReload() {
+    this.loadedInputs.clear();
+    this.inputsById.clear();
+
+    if (this.queues.includes("decide")) {
+      await this.brainstem.reconfigure?.(this.config);
+    }
+
+    if (
+      this.queues.includes("decide") ||
+      this.queues.includes("deliver")
+    ) {
+      await this.#loadDestinationEntries();
+    }
+  }
+
+  #heartbeatNow() {
+    if (!this.coreRegistry || !this.coreHeartbeatTimer) return;
+
+    this.coreHeartbeat = this.coreRegistry
+      .heartbeat(this.coreId, {
+        topology: this.#topology(),
+        configVersion: this.configVersion
+      })
+      .catch(error => {
+        this.logger.warn?.("core heartbeat failed", { coreId: this.coreId, error });
+      });
+  }
+
   #createAbortController(signal) {
     this.abortController =
       new AbortController();

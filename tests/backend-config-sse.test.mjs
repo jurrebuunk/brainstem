@@ -6,70 +6,156 @@ import { join } from "node:path";
 import { createBackendApiServer } from "../src/backend/api-server.mjs";
 import { createConfigStore } from "../src/backend/config-store.mjs";
 import { tempDir } from "./helpers/fixtures.mjs";
+import { dialectTest } from "./helpers/database.mjs";
+import exampleConfig from "../brainstem.config.example.mjs";
 
 const ADMIN_PASSWORD = "v3ry-long-random-root-passphrase!";
 
-test("config store saves valid modules atomically and keeps a backup", async () => {
-  const dir = await tempDir("config-save");
+test("config store reads the config file and cannot write it", async () => {
+  const dir = await tempDir("config-read");
   const configPath = join(dir, "brainstem.config.mjs");
   await writeFile(configPath, "export default { version: 1 };\n");
 
   const store = createConfigStore(configPath);
-  const result = await store.save("export default { version: 2 };\n");
-
-  assert.equal(result.ok, true);
-  assert.equal(await readFile(configPath, "utf8"), "export default { version: 2 };\n");
-
-  const files = await readdir(dir);
-  const backups = files.filter(name => name.endsWith(".bak"));
-  assert.equal(backups.length, 1);
-  assert.equal(await readFile(join(dir, backups[0]), "utf8"), "export default { version: 1 };\n");
-  assert.equal(files.filter(name => name.endsWith(".tmp")).length, 0);
+  assert.deepEqual(await store.read(), { path: configPath, content: "export default { version: 1 };\n" });
+  assert.equal(store.save, undefined, "the API never writes or executes config files");
 });
 
-test("config store rejects syntax errors and leaves the file untouched", async () => {
-  const dir = await tempDir("config-invalid");
-  const configPath = join(dir, "brainstem.config.mjs");
-  await writeFile(configPath, "export default { version: 1 };\n");
-
-  const store = createConfigStore(configPath);
-
-  await assert.rejects(
-    () => store.save("export default { version: ;\n"),
-    /syntax check failed/i
-  );
-  assert.equal(await readFile(configPath, "utf8"), "export default { version: 1 };\n");
-  assert.deepEqual(await readdir(dir), ["brainstem.config.mjs"]);
-});
-
-test("config api requires csrf and persists through the store", async () => {
+test("with configSource file the config api is read-only", async () => {
   await withApi(async ({ api, session, configPath }) => {
-    const content = "export default { saved: true };\n";
+    const read = await fetch(`${api.url}/api/config`, { headers: { cookie: session.cookie } }).then(response => response.json());
+    assert.equal(read.source, "file");
+    assert.equal(read.readOnly, true);
+    assert.equal(read.content, "export default {};\n");
 
     const noCsrf = await fetch(`${api.url}/api/config`, {
       method: "PUT",
       headers: { "content-type": "application/json", cookie: session.cookie },
-      body: JSON.stringify({ content })
+      body: JSON.stringify({ content: "{}" })
     });
     assert.equal(noCsrf.status, 403);
 
-    const saved = await fetch(`${api.url}/api/config`, {
+    const write = await fetch(`${api.url}/api/config`, {
       method: "PUT",
-      headers: {
-        "content-type": "application/json",
-        cookie: session.cookie,
-        "x-csrf-token": session.csrfToken
-      },
-      body: JSON.stringify({ content })
+      headers: { "content-type": "application/json", cookie: session.cookie, "x-csrf-token": session.csrfToken },
+      body: JSON.stringify({ content: "export default { evil: process.exit() };" })
     });
-    assert.equal(saved.status, 200);
-    assert.equal(await readFile(configPath, "utf8"), content);
-
-    const read = await fetch(`${api.url}/api/config`, {
-      headers: { cookie: session.cookie }
-    }).then(response => response.json());
-    assert.equal(read.content, content);
+    assert.equal(write.status, 409);
+    assert.match((await write.json()).error, /managed as a file/);
+    assert.equal(await readFile(configPath, "utf8"), "export default {};\n");
   });
+});
+
+test("with configSource database saves are validated versions guarded by If-Match", async () => {
+  await withApi(async ({ api, session }) => {
+    const headers = { "content-type": "application/json", cookie: session.cookie, "x-csrf-token": session.csrfToken };
+    const put = (body, extra = {}) => fetch(`${api.url}/api/config`, { method: "PUT", headers: { ...headers, ...extra }, body: JSON.stringify(body) });
+    const spec = validSpec();
+
+    const empty = await fetch(`${api.url}/api/config`, { headers: { cookie: session.cookie } }).then(response => response.json());
+    assert.equal(empty.source, "database");
+    assert.equal(empty.version, null);
+
+    const missingPrecondition = await put({ content: JSON.stringify(spec) });
+    assert.equal(missingPrecondition.status, 428);
+
+    const invalid = await put({ content: JSON.stringify({ ...spec, policy: { dispatch: {} } }), expectedVersion: null });
+    assert.equal(invalid.status, 400);
+    assert.match((await invalid.json()).error, /\/policy\/dispatch: must have property 'attention'/);
+
+    const notJson = await put({ content: "export default {}", expectedVersion: null });
+    assert.equal(notJson.status, 400);
+
+    const first = await put({ content: JSON.stringify(spec), comment: "initial", expectedVersion: null });
+    assert.equal(first.status, 200);
+    assert.equal(first.headers.get("etag"), '"1"');
+    assert.equal((await first.json()).version.author, "admin");
+
+    const read = await fetch(`${api.url}/api/config`, { headers: { cookie: session.cookie } });
+    assert.equal(read.headers.get("etag"), '"1"');
+    assert.deepEqual(JSON.parse((await read.json()).content), spec);
+
+    const second = await put({ spec: { ...spec, inputs: [] } }, { "if-match": '"1"' });
+    assert.equal(second.status, 200);
+    assert.equal((await second.json()).version.id, 2);
+
+    const stale = await put({ spec: { ...spec, destinations: [] } }, { "if-match": '"1"' });
+    assert.equal(stale.status, 409, "someone else saved version 2 meanwhile");
+
+    const unchanged = await put({ spec: { ...spec, inputs: [] } }, { "if-match": '"2"' });
+    assert.equal((await unchanged.json()).unchanged, true);
+
+    const versions = await fetch(`${api.url}/api/config/versions`, { headers: { cookie: session.cookie } }).then(response => response.json());
+    assert.deepEqual(versions.map(version => [version.id, version.active]), [[2, true], [1, false]]);
+
+    const rollback = await fetch(`${api.url}/api/config/versions/1/activate`, { method: "POST", headers, body: "{}" });
+    assert.equal(rollback.status, 200);
+    assert.equal((await rollback.json()).version.id, 1);
+
+    const missing = await fetch(`${api.url}/api/config/versions/99/activate`, { method: "POST", headers, body: "{}" });
+    assert.equal(missing.status, 404);
+
+    const schema = await fetch(`${api.url}/api/config/schema`, { headers: { cookie: session.cookie } }).then(response => response.json());
+    assert.equal(schema.title, "Brainstem config");
+  }, { configSource: "database" });
+});
+
+dialectTest("sse fans out across api replicas and resumes from Last-Event-ID", async ({ handle }) => {
+  const dir = await tempDir("api-sse-fanout");
+  const configPath = join(dir, "brainstem.config.mjs");
+  await writeFile(configPath, "export default {};\n");
+
+  const options = { host: "127.0.0.1", port: 0, configPath, database: handle, token: "secret", maintenanceIntervalMs: 0 };
+  const replicaA = createBackendApiServer(options);
+  const replicaB = createBackendApiServer(options);
+  await replicaA.listen();
+  await replicaB.listen();
+  await handle.notifier.ready?.();
+
+  try {
+    const session = await setupAdmin(replicaA);
+    const ingest = (api, id) => fetch(`${api.url}/api/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer secret" },
+      body: JSON.stringify({ version: "1", kind: "brainstem.core.decision", payload: { observation: { payload: { id } } } })
+    });
+
+    const controller = new AbortController();
+    const stream = await fetch(`${replicaB.url}/api/stream`, { headers: { cookie: session.cookie }, signal: controller.signal });
+    const reader = stream.body.getReader();
+    const events = readSseEvents(reader, { withIds: true });
+    assert.equal((await events.next()).value.event.kind, "web.connected");
+
+    // Ingested on replica A, streamed by replica B.
+    assert.equal((await ingest(replicaA, "fan-1")).status, 204);
+    const first = (await events.next()).value;
+    assert.equal(first.event.payload.observation.payload.id, "fan-1");
+    assert.ok(Number(first.id) > 0, "persisted events carry their row id");
+
+    assert.equal((await ingest(replicaA, "fan-2")).status, 204);
+    assert.equal((await events.next()).value.event.payload.observation.payload.id, "fan-2");
+    controller.abort();
+    await reader.cancel().catch(() => {});
+
+    await ingest(replicaB, "fan-3");
+
+    // Reconnect to the other replica with the last id seen.
+    const resumed = await fetch(`${replicaA.url}/api/stream`, {
+      headers: { cookie: session.cookie, "last-event-id": first.id }
+    });
+    const resumedReader = resumed.body.getReader();
+    const replay = readSseEvents(resumedReader, { withIds: true });
+    assert.equal((await replay.next()).value.event.payload.resumedFrom, Number(first.id));
+    assert.deepEqual(
+      [(await replay.next()).value, (await replay.next()).value].map(item => item.event.payload.observation.payload.id),
+      ["fan-2", "fan-3"]
+    );
+    await resumedReader.cancel().catch(() => {});
+  }
+  finally {
+    await replicaA.close();
+    await replicaB.close();
+  }
 });
 
 test("sse stream requires a session and receives ingested telemetry", async () => {
@@ -115,7 +201,28 @@ test("sse stream requires a session and receives ingested telemetry", async () =
   });
 });
 
-async function withApi(run) {
+function validSpec() {
+  return {
+    inputs: [{ id: "a", module: "./plugins/http-health/index.mjs", input: "check", config: { url: "https://example.com" } }],
+    destinations: [{ id: "log", module: "./plugins/log-decisions/index.mjs" }],
+    policy: exampleConfig.policy,
+    laya: exampleConfig.laya
+  };
+}
+
+async function setupAdmin(api) {
+  const setup = await fetch(`${api.url}/api/auth/setup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: "admin", password: ADMIN_PASSWORD })
+  });
+  assert.equal(setup.status, 200);
+  const body = await setup.json();
+  const cookie = setup.headers.getSetCookie().map(value => value.split(";")[0]).join("; ");
+  return { cookie, csrfToken: body.csrfToken };
+}
+
+async function withApi(run, options = {}) {
   const dir = await tempDir("api-config-sse");
   const configPath = join(dir, "brainstem.config.mjs");
   await writeFile(configPath, "export default {};\n");
@@ -125,7 +232,9 @@ async function withApi(run) {
     port: 0,
     configPath,
     telemetryDbPath: join(dir, "telemetry.sqlite"),
-    token: "secret"
+    token: "secret",
+    configSource: "file",
+    ...options
   });
   await api.listen();
 
@@ -146,7 +255,7 @@ async function withApi(run) {
   }
 }
 
-async function* readSseEvents(reader) {
+async function* readSseEvents(reader, { withIds = false } = {}) {
   const decoder = new TextDecoder();
   let buffer = "";
 
@@ -159,12 +268,13 @@ async function* readSseEvents(reader) {
     while ((boundary = buffer.indexOf("\n\n")) !== -1) {
       const chunk = buffer.slice(0, boundary);
       buffer = buffer.slice(boundary + 2);
-      const data = chunk
-        .split("\n")
+      const lines = chunk.split("\n");
+      const data = lines
         .filter(line => line.startsWith("data: "))
         .map(line => line.slice(6))
         .join("\n");
-      if (data) yield JSON.parse(data);
+      const id = lines.find(line => line.startsWith("id: "))?.slice(4) ?? null;
+      if (data) yield withIds ? { id, event: JSON.parse(data) } : JSON.parse(data);
     }
   }
 }

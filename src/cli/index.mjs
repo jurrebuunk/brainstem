@@ -5,24 +5,37 @@ import { parseArgs } from "node:util";
 
 import { resolveDatabaseUrl } from "../db/database.mjs";
 import { MIGRATE_USAGE, runMigrate } from "./migrate.mjs";
+import { CONFIG_USAGE, runConfig } from "./config.mjs";
 
 /*
  * Subcommands handled before the runtime starts:
  *
  *   brainstem migrate [status|import-v1|copy|sqlite-to-pg] ...
+ *   brainstem config [import|export|list|show|activate|validate] ...
  *
  * Everything else (no subcommand, or flags only) falls through
  * to the runtime in brainstem.mjs.
  */
 export const COMMANDS = {
-  migrate: runMigrate
+  migrate: runMigrate,
+  config: runConfig
+};
+
+const USAGE = {
+  migrate: MIGRATE_USAGE,
+  config: CONFIG_USAGE
 };
 
 export const COMMANDS_USAGE = `Commands:
   migrate               Apply database migrations (see: brainstem migrate --help)
   migrate status        Show applied and pending migrations
   migrate import-v1     Import 1.x state (data/*.sqlite, checkpoints.json)
-  migrate copy          Copy all tables between databases (alias: sqlite-to-pg)`;
+  migrate copy          Copy all tables between databases (alias: sqlite-to-pg)
+  config import         Store a config module as a new version (see: brainstem config --help)
+  config export         Write a stored version as a config module
+  config list|show      List versions / show one
+  config activate <id>  Activate a version (rollback)
+  config validate       Check a config module against the schema`;
 
 const OPTIONS = {
   config: { type: "string" },
@@ -35,6 +48,13 @@ const OPTIONS = {
   to: { type: "string" },
   force: { type: "boolean" },
   "batch-size": { type: "string" },
+  file: { type: "string" },
+  out: { type: "string" },
+  format: { type: "string" },
+  comment: { type: "string" },
+  author: { type: "string" },
+  version: { type: "string" },
+  "no-activate": { type: "boolean" },
   help: { type: "boolean", short: "h" }
 };
 
@@ -59,7 +79,7 @@ export async function runCli(argv, io = consoleIo()) {
     parsed = parseArgs({ args: rest, options: OPTIONS, allowPositionals: true, strict: true });
   }
   catch (error) {
-    io.err(`${error.message}\n\n${MIGRATE_USAGE}`);
+    io.err(`${error.message}\n\n${USAGE[command]}`);
     return 2;
   }
 

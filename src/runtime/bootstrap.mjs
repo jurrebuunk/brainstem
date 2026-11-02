@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 
-import { openMigratedDatabase } from "../db/index.mjs";
+import { openDatabase, openMigratedDatabase } from "../db/index.mjs";
+import { migrationStatus } from "../db/migrate.mjs";
 import { importV1, legacyPaths } from "../cli/import-v1.mjs";
 import { runtimeDatabaseUrl } from "./stores.mjs";
 
@@ -14,14 +15,36 @@ const AUTO_IMPORT_TASK = "auto-import-v1";
  * files in the data directory (web-stats.sqlite,
  * checkpoints.json, a separate records file) are imported
  * once. Set runtime.database.importLegacy: false to skip.
+ *
+ * With `migrate: false` (cluster roles: migrations run once, from
+ * `brainstem migrate` or a deploy hook, never from every pod) the
+ * schema is only checked, and opening fails while migrations are
+ * pending.
  */
 export async function openRuntimeDatabase(config = {}, {
   baseDir = process.cwd(),
-  logger = null
+  logger = null,
+  migrate = true
 } = {}) {
   const options = config.runtime?.database ?? {};
+  const url = runtimeDatabaseUrl(options, baseDir);
+
+  if (!migrate) {
+    const handle = await openDatabase({ url, pool: options.pool ?? {} });
+
+    try {
+      await assertSchemaCurrent(handle);
+    }
+    catch (error) {
+      await handle.close();
+      throw error;
+    }
+
+    return handle;
+  }
+
   const handle = await openMigratedDatabase({
-    url: runtimeDatabaseUrl(options, baseDir),
+    url,
     pool: options.pool ?? {}
   });
 
@@ -36,6 +59,23 @@ export async function openRuntimeDatabase(config = {}, {
   }
 
   return handle;
+}
+
+export async function assertSchemaCurrent(handle) {
+  let status;
+
+  try {
+    status = await migrationStatus(handle);
+  }
+  catch (error) {
+    throw new Error(`Could not read the database schema version: ${error.message}. Run \`brainstem migrate\` first.`, { cause: error });
+  }
+
+  const pending = status.filter(migration => !migration.executedAt).map(migration => migration.name);
+
+  if (pending.length > 0) {
+    throw new Error(`The database schema is not up to date (pending: ${pending.join(", ")}). Run \`brainstem migrate\` first, or set BRAINSTEM_MIGRATE=true.`);
+  }
 }
 
 async function importLegacyStateOnce(handle, options, logger) {

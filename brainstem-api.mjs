@@ -1,13 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
-import {
-  createBackendApiServer,
-  normalizeBackendApiConfig
-} from "./src/backend/api-server.mjs";
-import { openRuntimeDatabase } from "./src/runtime/bootstrap.mjs";
+import { runApiProcess } from "./src/cli/serve.mjs";
 
 loadDotEnv();
 
@@ -15,46 +9,17 @@ const argv = process.argv.slice(2);
 const args = new Set(argv);
 
 if (args.has("--help") || args.has("-h")) {
-  console.log(`Usage: node brainstem-api.mjs [--config path] [--host host] [--port port]\n\nStarts the Brainstem backend API for telemetry ingestion, event history, stats, SSE, and config management.\n`);
+  console.log(`Usage: node brainstem-api.mjs [--config path] [--host host] [--port port]\n\nStarts the Brainstem backend API for telemetry ingestion, event history, stats, SSE, and config management.\nSame as: node brainstem.mjs --role api (but migrates the database on start unless BRAINSTEM_MIGRATE=false).\n`);
   process.exit(0);
 }
 
-const configPath = valueFromArgs(argv, "--config") ?? process.env.BRAINSTEM_CONFIG ?? "brainstem.config.mjs";
-const config = await loadOptionalConfig(configPath);
-const apiConfig = normalizeBackendApiConfig(
-  {
-    ...(config.runtime?.api ?? {}),
-    enabled: true,
-    ...(valueFromArgs(argv, "--host") ? { host: valueFromArgs(argv, "--host") } : {}),
-    ...(valueFromArgs(argv, "--port") ? { port: Number(valueFromArgs(argv, "--port")) } : {}),
-    configPath
-  },
-  { repoRoot: process.cwd() }
-);
-
-// Same database as the runtime (runtime.database / BRAINSTEM_DATABASE_URL).
-const database = await openRuntimeDatabase(config);
-const api = createBackendApiServer({ ...apiConfig, database });
-await api.listen();
-
-console.log(`Brainstem Backend API listening on ${api.url}`);
-console.log(`Telemetry ingest endpoint: ${api.telemetryUrl}`);
-console.log(`Stats database: ${api.telemetryStore.path}`);
-
-for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.once(signal, async () => {
-    await api.close();
-    await database.close();
-    process.exit(0);
-  });
-}
-
-async function loadOptionalConfig(path) {
-  const absolutePath = resolve(path);
-  if (!existsSync(absolutePath)) return {};
-  const module = await import(pathToFileURL(absolutePath).href);
-  return module.default ?? {};
-}
+await runApiProcess({
+  configPath: valueFromArgs(argv, "--config") ?? process.env.BRAINSTEM_CONFIG ?? "brainstem.config.mjs",
+  host: valueFromArgs(argv, "--host"),
+  port: valueFromArgs(argv, "--port"),
+  // The standalone API keeps migrating on start, as in 1.x.
+  migrate: process.env.BRAINSTEM_MIGRATE === "false" || process.env.BRAINSTEM_MIGRATE === "0" ? false : true
+});
 
 function valueFromArgs(args, name) {
   for (let index = 0; index < args.length; index += 1) {
