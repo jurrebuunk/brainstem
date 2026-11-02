@@ -19,7 +19,8 @@ import NodeInspector from "./components/NodeInspector.jsx";
 
 const nodeTypes = {
   brainstemNode: BrainstemNode,
-  handoffPill: HandoffPillNode
+  handoffPill: HandoffPillNode,
+  poolNode: PoolNode
 };
 
 const pages = [
@@ -805,32 +806,18 @@ function BrainstemNode({ data }) {
   const isInput = data.nodeType === "input";
   const isCore = data.nodeType === "core";
   const isDestination = data.nodeType === "destination";
+  const statusClass = data.coreStatus ? ` core-${data.coreStatus}` : "";
 
   return (
     <div
-      className={`node-card node-${data.nodeType}${data.active ? " is-active" : ""}`}
-      style={{ minHeight: data.height }}
+      className={`node-card node-${data.nodeType}${statusClass}${data.active ? " is-active" : ""}`}
     >
-      {isCore && data.inputHandles.map(handle => (
-        <Handle
-          key={handle.id}
-          id={handle.id}
-          type="target"
-          position={Position.Left}
-          className={`node-handle stacked-handle${handle.active ? " is-handle-active" : ""}`}
-          style={{ top: `${handle.top}%` }}
-        />
-      ))}
-      {isCore && data.outputHandles.map(handle => (
-        <Handle
-          key={handle.id}
-          id={handle.id}
-          type="source"
-          position={Position.Right}
-          className={`node-handle stacked-handle${handle.active ? " is-handle-active" : ""}`}
-          style={{ top: `${handle.top}%` }}
-        />
-      ))}
+      {isCore && (
+        <Handle id="in" type="target" position={Position.Left} className={`node-handle${data.decideActive ? " is-handle-active" : ""}`} isConnectable={false} />
+      )}
+      {isCore && (
+        <Handle id="out" type="source" position={Position.Right} className={`node-handle${data.deliverActive ? " is-handle-active" : ""}`} isConnectable={false} />
+      )}
       {isDestination && (
         <Handle id="in" type="target" position={Position.Left} className={`node-handle${data.handleActive || data.active ? " is-handle-active" : ""}`} />
       )}
@@ -868,6 +855,51 @@ function BrainstemNode({ data }) {
       {isInput && (
         <Handle id="out" type="source" position={Position.Right} className={`node-handle${data.handleActive || data.active ? " is-handle-active" : ""}`} />
       )}
+    </div>
+  );
+}
+
+/*
+ * Pool in / pool out: a tall, thin node between the inputs and the
+ * cores, and between the cores and the destinations. Its handles
+ * are placed by flow/model.js level with the nodes they join.
+ */
+function PoolNode({ data }) {
+  const title = [
+    `${data.label} (${data.side})`,
+    data.summary,
+    data.side === "in" && data.decisions !== undefined ? `${data.decisions} decisions · ${data.errors} errors` : null,
+    data.warning
+  ].filter(Boolean).join("\n");
+
+  return (
+    <div className={`pool-node pool-${data.side}${data.active ? " is-active" : ""}${data.warning ? " has-warning" : ""}`} title={title}>
+      {data.left.map(handle => (
+        <Handle
+          key={handle.id}
+          id={handle.id}
+          type="target"
+          position={Position.Left}
+          className={`node-handle pool-handle${handle.active ? " is-handle-active" : ""}`}
+          style={{ top: `${handle.top}%` }}
+          isConnectable={false}
+        />
+      ))}
+      <div className="pool-label">
+        <span>{data.label}</span>
+        <span className="pool-side">{data.side === "in" ? "in" : "out"}</span>
+      </div>
+      {data.right.map(handle => (
+        <Handle
+          key={handle.id}
+          id={handle.id}
+          type="source"
+          position={Position.Right}
+          className={`node-handle pool-handle${handle.active ? " is-handle-active" : ""}`}
+          style={{ top: `${handle.top}%` }}
+          isConnectable={false}
+        />
+      ))}
     </div>
   );
 }

@@ -47,6 +47,9 @@ test("the flow is built from the topology, one node per configured id", () => {
   assert.deepEqual(model.nodes.map(candidate => candidate.id), [
     "input:test-app-log",
     "core",
+    "core-node:core-a",
+    "core-node:core-b",
+    "pool:out",
     "destination:log-triage",
     "destination:issue-summary",
     "destination:ops-room"
@@ -55,20 +58,74 @@ test("the flow is built from the topology, one node per configured id", () => {
   assert.equal(node(model, "destination:issue-summary").data.subtitle, "@brainstem/agentos-runner.default");
 });
 
-test("the core pool node summarises the registered cores", () => {
+test("the core pool fans out to one node per core and back in", () => {
   const model = buildFlowModel({ topology, events: [], now: NOW });
-  const core = node(model, "core");
+  const pool = node(model, "core");
 
-  assert.equal(core.data.label, "Core pool");
-  assert.equal(core.data.subtitle, "2 cores · 1 running · 1 lost");
-  assert.equal(core.data.status, "degraded");
+  assert.equal(pool.type, "poolNode");
+  assert.equal(pool.data.label, "Core pool");
+  assert.equal(pool.data.summary, "2 cores · 1 running · 1 lost");
+  assert.equal(pool.data.status, "degraded");
   assert.equal(model.cores.length, 2);
 
-  const offline = buildFlowModel({ topology: { ...topology, cores: [{ id: "c", status: "stopped" }] }, events: [], now: NOW });
+  assert.equal(node(model, "core-node:core-a").data.subtitle, "poll · decide · deliver");
+  assert.equal(node(model, "core-node:core-b").data.coreStatus, "lost");
+  assert.deepEqual(
+    model.edges.filter(candidate => candidate.id.startsWith("edge-pool")).map(candidate => `${candidate.source}->${candidate.target}`),
+    ["core->core-node:core-a", "core-node:core-a->pool:out", "core->core-node:core-b", "core-node:core-b->pool:out"]
+  );
+  assert.ok(model.edges.every(candidate => !candidate.id.startsWith("edge-destination") || candidate.source === "pool:out"));
+
+  // A long-stopped core is hidden; recently stopped ones stay visible.
+  const offline = buildFlowModel({ topology: { ...topology, cores: [{ id: "c", status: "stopped", lastSeenAt: at(-600) }] }, events: [], now: NOW });
   assert.equal(node(offline, "core").data.status, "offline");
+  assert.ok(!node(offline, "core-node:c"));
+  const justStopped = buildFlowModel({ topology: { ...topology, cores: [{ id: "c", status: "stopped", lastSeenAt: at(20) }] }, events: [], now: NOW });
+  assert.equal(node(justStopped, "core-node:c").data.coreStatus, "stopped");
 
   const drift = buildFlowModel({ topology: { ...topology, consistent: false }, events: [], now: NOW });
-  assert.equal(node(drift, "core").data.footnote, "cores loaded different configs");
+  assert.equal(node(drift, "core").data.warning, "cores loaded different configs");
+});
+
+test("pool handles are level with the nodes they connect, so lines are straight", () => {
+  const many = {
+    ...topology,
+    inputs: [1, 2, 3].map(n => ({ id: `in-${n}`, plugin: "p", input: "x" })),
+    cores: [1, 2, 3, 4].map(n => ({ id: `core-${n}`, status: "running", queues: ["decide"], lastSeenAt: at(25) }))
+  };
+  const model = buildFlowModel({ topology: many, events: [], now: NOW });
+  const centre = id => { const item = node(model, id); return item.position.y + item.height / 2; };
+  const handleY = (poolId, side, handleId) => {
+    const pool = node(model, poolId);
+    const handle = pool.data[side].find(candidate => candidate.id === handleId);
+    return pool.position.y + (handle.top / 100) * pool.height;
+  };
+  const close = (a, b) => assert.ok(Math.abs(a - b) < 0.001, `${a} != ${b}`);
+
+  for (const n of [1, 2, 3]) close(handleY("core", "left", `in-in-${n}`), centre(`input:in-${n}`));
+  for (const n of [1, 2, 3, 4]) {
+    close(handleY("core", "right", `to-core-${n}`), centre(`core-node:core-${n}`));
+    close(handleY("pool:out", "left", `from-core-${n}`), centre(`core-node:core-${n}`));
+  }
+  close(handleY("pool:out", "right", "out-ops-room"), centre("destination:ops-room"));
+
+  const pool = node(model, "core");
+  assert.ok(pool.height > pool.width * 5, "tall and thin");
+});
+
+test("a core lights up while it decides or delivers", () => {
+  const events = [
+    event("brainstem.core.decision", { observationId: "o1", coreId: "core-a" }, 28),
+    event("brainstem.destination.completed", { destinationId: "ops-room", observationId: "o1", coreId: "core-b" }, 29)
+  ];
+  const model = buildFlowModel({ topology, events, now: NOW });
+
+  assert.equal(node(model, "core-node:core-a").data.status, "deciding");
+  assert.equal(node(model, "core-node:core-b").data.status, "delivering");
+  assert.equal(edge(model, "edge-pool-in-core-a").animated, true);
+  assert.equal(edge(model, "edge-pool-out-core-b").animated, true);
+  assert.equal(edge(model, "edge-pool-in-core-b").animated, false);
+  assert.deepEqual(model.nodeIdsFor(events[0]), ["core-node:core-a", "core"]);
 });
 
 test("a handoff shows briefly as a pill node linked to the destination, then disappears", () => {
@@ -113,8 +170,8 @@ test("events are attributed to nodes by id", () => {
 
   assert.deepEqual(model.nodeIdsFor(handoffRun[2]), ["input:test-app-log", "core"]);
   assert.deepEqual(model.nodeIdsFor(handoffRun[5]), ["core"], "a handed-off decision belongs to no input");
-  assert.deepEqual(model.nodeIdsFor(handoffRun[4]), ["destination:log-triage"]);
-  assert.deepEqual(model.nodeIdsFor(handoffRun[3]), ["destination:log-triage"], "not merged with issue-summary");
+  assert.deepEqual(model.nodeIdsFor(handoffRun[4]), ["pool:out", "destination:log-triage"]);
+  assert.deepEqual(model.nodeIdsFor(handoffRun[3]), ["pool:out", "destination:log-triage"], "not merged with issue-summary");
 });
 
 test("events from older runtimes map onto configured ids", () => {
@@ -128,11 +185,11 @@ test("events from older runtimes map onto configured ids", () => {
   ];
   const model = buildFlowModel({ topology, events: legacy, now: Date.parse(at(18)) });
 
-  assert.deepEqual(model.nodeIdsFor(legacy[0]), ["destination:ops-room"]);
+  assert.deepEqual(model.nodeIdsFor(legacy[0]), ["pool:out", "destination:ops-room"]);
   assert.deepEqual(model.nodeIdsFor(legacy[1]), ["core"]);
   assert.equal(node(model, "destination:log-triage").data.handingOff, true, "a legacy handoff shows the same tag");
   assert.ok(!model.nodes.some(candidate => candidate.id === "input:destination:log-triage"));
-  assert.deepEqual(model.nodeIdsFor(legacy[2]), ["destination:@brainstem/agentos-runner:default"]);
+  assert.deepEqual(model.nodeIdsFor(legacy[2]), ["pool:out", "destination:@brainstem/agentos-runner:default"]);
 });
 
 test("without a topology the flow falls back to snapshot and events", () => {
@@ -146,7 +203,7 @@ test("without a topology the flow falls back to snapshot and events", () => {
   const model = buildFlowModel({ topology: null, events: [snapshot, ...handoffRun], now: Date.parse(at(25)) });
 
   assert.equal(model.structure, "events");
-  assert.equal(node(model, "core").data.label, "Brainstem Core");
+  assert.equal(node(model, "core-node:local").data.label, "Brainstem Core");
   assert.ok(node(model, "destination:log-triage"));
   assert.ok(node(model, "destination:@brainstem/http-json:default"), "a snapshot destination without id keeps its plugin key");
   assert.ok(node(model, "destination:ops-room"), "destinations seen only in events are added");
@@ -164,7 +221,7 @@ test("the polling core is shown on inputs once there are several cores", () => {
 
 test("a malformed event does not break the model", () => {
   const model = buildFlowModel({ topology, events: [null, { kind: 42 }, ...handoffRun], now: NOW });
-  assert.equal(model.nodes.length, 5);
+  assert.equal(model.nodes.length, 8);
 });
 
 test("node counters prefer database totals over the event window", () => {
@@ -177,12 +234,12 @@ test("node counters prefer database totals over the event window", () => {
   const meta = id => Object.fromEntries(node(model, id).data.meta.map(item => [item.label, item.value]));
 
   assert.deepEqual(meta("input:test-app-log"), { polls: 812, outputs: 9, last: "now" });
-  assert.deepEqual(meta("core"), { decisions: 31, errors: 1, last: "9s" });
+  assert.deepEqual([node(model, "core").data.decisions, node(model, "core").data.errors], [31, 1]);
   assert.deepEqual(meta("destination:log-triage"), { delivered: 9, errors: 0, handoffs: 9 });
 
   // Without totals the window is counted with the same fields.
   const windowOnly = buildFlowModel({ topology, events: handoffRun, now: NOW });
   const windowMeta = id => Object.fromEntries(node(windowOnly, id).data.meta.map(item => [item.label, item.value]));
-  assert.equal(windowMeta("core").decisions, 2);
+  assert.equal(node(windowOnly, "core").data.decisions, 2);
   assert.equal(windowMeta("destination:ops-room").errors, 1);
 });
