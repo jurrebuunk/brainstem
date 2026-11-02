@@ -196,11 +196,16 @@ export class DatabaseCheckpointStore {
       : undefined;
   }
 
-  async set(key, value) {
+  /*
+   * `executor` is a transaction on the same database (the poll
+   * stage commits checkpoints together with its decide jobs).
+   */
+  async set(key, value, { executor } = {}) {
     assertJsonValue(value);
 
-    const { db } =
-      await this.open();
+    const db =
+      executor ??
+      (await this.open()).db;
 
     if (value === null) {
       await db
@@ -345,14 +350,19 @@ export function createDeferredCheckpoint({
       }
     },
 
-    async commit() {
+    get pending() {
+      return pending;
+    },
+
+    async commit({ executor } = {}) {
       if (!pending) {
         return;
       }
 
       await store.set(
         key,
-        pendingValue
+        pendingValue,
+        executor ? { executor } : undefined
       );
     }
   };

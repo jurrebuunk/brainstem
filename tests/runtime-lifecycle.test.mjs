@@ -126,15 +126,12 @@ test("start() cannot be called twice", async () => {
 });
 
 /*
- * Characterization test for 1.x behaviour.
- *
- * With blockInputOnFailure, a failing destination makes the
- * whole poll retry, so destinations that already succeeded
- * receive the same decision again. Phase 2 (per-destination
- * delivery jobs, roadmap §4.2) changes this: update the
- * expectation to a single delivery then.
+ * 1.x retried the whole poll when a destination failed (with
+ * blockInputOnFailure), so destinations that had already
+ * succeeded received the decision again. Since Phase 2 each
+ * (decision, destination) pair is its own deliver job.
  */
-test("1.x: poll retries re-deliver to destinations that already succeeded", async () => {
+test("a failing destination does not re-deliver to destinations that succeeded", async () => {
   const dir = await tempDir("retry-redelivery");
   const outputPath = join(dir, "deliveries.log");
   const checkpointPath = join(dir, "checkpoints.json");
@@ -146,22 +143,29 @@ test("1.x: poll retries re-deliver to destinations that already succeeded", asyn
     brainstem: fakeBrainstem(),
     config: runtimeConfig(checkpointPath, {
       retry: { attempts: 3 },
-      runtime: { destinations: { blockInputOnFailure: true } }
+      runtime: {
+        destinations: { blockInputOnFailure: true },
+        queue: { deliver: { retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0 } } }
+      }
     }),
     logger: silentLogger,
     plugins: [{ id: "counter", module: inputPath }],
     destinations: [
-      { module: okPath, decisions: ["queue"], config: { name: "ok" } },
-      { module: failingPath, decisions: ["queue"] }
+      { id: "ok", module: okPath, decisions: ["queue"], config: { name: "ok" } },
+      { id: "failing", module: failingPath, decisions: ["queue"] }
     ]
   });
 
-  await assert.rejects(() => runtime.runOnce(), /destinations failed/i);
+  await assert.rejects(() => runtime.runOnce(), /destination exploded/);
 
-  assert.deepEqual(
-    await readLines(outputPath),
-    ["ok counter:0", "ok counter:0", "ok counter:0"]
+  assert.deepEqual(await readLines(outputPath), ["ok counter:0"]);
+
+  const deliveries = Object.fromEntries(
+    (await runtime.deliveries.list({})).map(row => [row.destination, row])
   );
+  assert.equal(deliveries.ok.status, "delivered");
+  assert.equal(deliveries.failing.status, "dead");
+  assert.equal(deliveries.failing.attempts, 3);
 });
 
 test("core serializes updates for the same observation id in arrival order", async () => {

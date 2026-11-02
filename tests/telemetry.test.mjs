@@ -60,4 +60,19 @@ test("metrics are derived consistently from telemetry events", () => {
     metricsForEvent({ kind: "brainstem.plugin.log", payload: { level: "error" } }).sort(),
     ["errors.total", "events.total", "plugin.errors"].sort()
   );
+
+  assert.deepEqual(
+    metricsForEvent({ kind: "brainstem.destination.failed", payload: { dead: false } }).sort(),
+    ["destinations.failed", "errors.total", "events.total"].sort()
+  );
+
+  assert.deepEqual(
+    metricsForEvent({ kind: "brainstem.destination.failed", payload: { dead: true } }).sort(),
+    ["destinations.dead", "destinations.failed", "errors.total", "events.total"].sort()
+  );
+
+  assert.deepEqual(
+    metricsForEvent({ kind: "brainstem.core.failed", payload: { dead: true } }).sort(),
+    ["decisions.dead", "decisions.failed", "errors.total", "events.total"].sort()
+  );
 });
