@@ -117,7 +117,7 @@ A v2 destination can hand an observation back to the core with `ctx.emit(observa
 - **Committed with the delivery.** Emitted observations are enqueued in the same transaction that marks the delivery delivered. A delivery that fails or is retried emits nothing twice.
 - **Never back to the chain.** Each emitted observation carries a lineage, the destinations it passed through. It is never delivered to a destination already in that lineage, so a destination can't trigger itself.
 - **Bounded depth.** `runtime.handoff.maxDepth` (default `2`) limits how many hops a chain can take. `ctx.emit` throws past it. `runtime.handoff.maxPerDelivery` (default `5`) limits emits per delivery.
-- Emitted observations show `input.id` as `destination:<destination id>` in the output envelope.
+- **Origin.** An emitted observation has no input. Its decision and output envelope carry `origin: { kind: "destination", id, plugin, name, depth, lineage }` instead, and `input` fields are `null`. Observations from inputs carry `origin: { kind: "input", id }`. Telemetry adds a `brainstem.destination.emitted` event per handoff (see [Telemetry](telemetry.md#identity-fields)).
 
 ```js
 runtime: {

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Telemetry identity fields for multi-core and handoffs: every event carries `coreId` (`runtime.coreId` / `BRAINSTEM_CORE_ID`, also the job worker id); decisions and output envelopes carry `origin` (`{ kind: "input", id }` or `{ kind: "destination", id, depth, lineage }`); the snapshot and destination plugin logs carry destination `id`s; a new `brainstem.destination.emitted` event marks each handoff. A handed-off observation no longer pretends to come from an input named `destination:<id>`. Its `input` is empty and `origin` names the destination. Jobs queued by the previous version are still understood.
+
 - Destinations can hand observations back to the core with `ctx.emit(observation)`. They are enqueued in the same transaction that marks the delivery delivered, never routed back to a destination already in their chain, and limited by `runtime.handoff.maxDepth` (default 2) and `maxPerDelivery` (default 5).
 - `agentos-runner` gains `handoff`: a successful run's report becomes an `agent_report` observation (with `facts.minimum_decision`) that Matrix or a bigger agent can pick up.
 - New `log-file` input: watches a log file and emits new matching lines (default `ERROR|FATAL|CRITICAL|PANIC`) as one bounded observation per poll, with offset checkpoints and truncation/rotation handling.

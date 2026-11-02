@@ -35,10 +35,27 @@ runtime: {
   kind: "brainstem.input.poll.started",
   payload: {
     timestamp: "2026-...",
+    coreId: "host:1234:9f2c1a7b",
     ...
   }
 }
 ```
+
+Every event carries `coreId`, the runtime process that produced it. It's set from `runtime.coreId`, then `BRAINSTEM_CORE_ID`, otherwise `<hostname>:<pid>:<random>`, and stays the same for the process lifetime. The job runner uses the same id as its worker id. With several cores, a consumer can tell which core did what. With one core, every event shows the same id.
+
+## Identity fields
+
+Consumers should key on these fields, which stay stable across cores and restarts:
+
+| Field | Meaning |
+|---|---|
+| `coreId` | the runtime process that emitted the event |
+| `destinationId` | the configured destination entry (`id` in the config). Unlike plugin + destination name, it is unique per entry, so two tasks of one plugin are told apart |
+| `inputId` | the configured input that produced the observation. `null` for an observation a destination handed back |
+| `origin` | where the observation came from: `{ kind: "input", id }`, or `{ kind: "destination", id, plugin, name, depth, lineage }` for a handoff (`ctx.emit`), where `lineage` lists the destinations it passed through |
+| `observationId`, `deliveryKey` | the observation and the delivery (idempotency key) |
+
+`brainstem.core.decision` carries `origin`, and so does the `brainstem.output` envelope. The shared helpers in `src/telemetry/events.mjs` (`eventOrigin`, `eventDestinationId`, `eventCoreId`) read them, and they map events recorded before these fields existed. Those runtimes recorded a handoff as input id `destination:<id>`.
 
 ## Event kinds
 
@@ -67,6 +84,7 @@ Destinations:
 - `brainstem.destination.running`
 - `brainstem.destination.completed`
 - `brainstem.destination.failed`: a delivery attempt failed, with `attempt`, `attempts`, `dead` and `retryInMs`
+- `brainstem.destination.emitted`: a delivery handed observations back to the core (`ctx.emit`), with `destinationId`, `observationId` (the delivered observation), `observations` (the emitted ids) and `depth`. Emitted only once the delivery has committed.
 
 Destination events carry `deliveryKey` (the idempotency key) and `destinationId`. Each delivery attempt emits its own `running` event, so a retried delivery shows up more than once.
 
@@ -88,10 +106,11 @@ Destination output envelopes sent by the HTTP JSON destination use:
     { id, plugin, input, module, intervalMs }
   ],
   core: {
+    id: "host:1234:9f2c1a7b",
     status: "running"
   },
   destinations: [
-    { plugin, destination, module, decisions, routes, sources, types }
+    { id, plugin, destination, module, decisions, routes, sources, types }
   ]
 }
 ```
@@ -109,4 +128,4 @@ ctx.logger.debug("http health check result", {
 });
 ```
 
-Plugin log events are useful for node-level drilldown in the Web UI.
+Plugin log events are useful for node-level drilldown in the Web UI. Destination plugin logs carry `destinationId`; input plugin logs carry the input `id`.

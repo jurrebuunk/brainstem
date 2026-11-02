@@ -422,7 +422,7 @@ export default {
           }
         }
 
-        await appendFile(${JSON.stringify(join(dir, "handoff.log"))}, \`${name} \${observation.id} \${output.payload.input.id}\${note}\\n\`);
+        await appendFile(${JSON.stringify(join(dir, "handoff.log"))}, \`${name} \${observation.id} \${output.payload.origin.kind}:\${output.payload.origin.id}:\${output.payload.origin.depth ?? 0} input=\${output.payload.input.id}\${note}\\n\`);
         if (${fail}) throw new Error("${name} failed after emitting");
       }
     }
@@ -452,10 +452,10 @@ dialectTest("a destination hands an observation back to the core, and it never r
   await runtime.runOnce();
 
   assert.deepEqual((await readLines(join(dir, "handoff.log"))).sort(), [
-    "agent counter:0 counter",
-    "big counter:0 counter",
-    "big report:counter:0 destination:agent"
-  ], "the report reaches 'big' but not the agent that wrote it");
+    "agent counter:0 input:counter:0 input=counter",
+    "big counter:0 input:counter:0 input=counter",
+    "big report:counter:0 destination:agent:1 input=null"
+  ], "the report reaches 'big' but not the agent that wrote it; its origin names the agent, not an input");
 
   assert.deepEqual(await handle.db.selectFrom("jobs").selectAll().execute(), []);
 });
@@ -487,11 +487,70 @@ dialectTest("handoff stops at runtime.handoff.maxDepth and emits nothing from a 
 
   const lines = await readLines(join(dir, "handoff.log"));
 
-  assert.ok(lines.includes("first counter:0 counter"));
+  assert.ok(lines.includes("first counter:0 input:counter:0 input=counter"));
   assert.ok(
-    lines.includes("second a:counter:0 destination:first emit-error:ctx.emit: handoff depth 1 reached (runtime.handoff.maxDepth)"),
+    lines.includes("second a:counter:0 destination:first:1 input=null emit-error:ctx.emit: handoff depth 1 reached (runtime.handoff.maxDepth)"),
     "a depth-1 delivery cannot emit when maxDepth is 1"
   );
-  assert.ok(lines.includes("broken counter:0 counter"));
+  assert.ok(lines.includes("broken counter:0 input:counter:0 input=counter"));
   assert.ok(!lines.some(line => line.includes("c:counter:0")), "the failed delivery's emit was discarded");
+});
+
+dialectTest("telemetry carries the core id, destination ids and observation origins", async ({ handle }) => {
+  const dir = await tempDir("pipeline-telemetry");
+  const inputPath = await writePlugin(dir, "input.mjs", countingInputSource());
+  const agentPath = await writePlugin(dir, "agent.mjs", handoffDestinationSource(dir, "agent", { emitAs: "report" }));
+  const bigPath = await writePlugin(dir, "big.mjs", handoffDestinationSource(dir, "big"));
+  const events = [];
+
+  const runtime = new BrainstemRuntime({
+    brainstem: fakeBrainstem(),
+    config: databaseConfig({ coreId: "core-a" }),
+    logger: silentLogger,
+    database: handle,
+    plugins: [{ id: "counter", module: inputPath }],
+    destinations: [
+      { id: "agent", module: agentPath, decisions: ["queue"] },
+      { id: "big", module: bigPath, decisions: ["queue"] }
+    ]
+  });
+  runtime.telemetry = { send: event => events.push(event) };
+
+  await runtime.runOnce();
+
+  assert.equal(runtime.coreId, "core-a");
+  assert.ok(events.length > 0);
+  assert.ok(events.every(event => event.payload.coreId === "core-a"), "every event names its core");
+
+  const snapshot = events.find(event => event.kind === "brainstem.snapshot");
+  assert.equal(snapshot.payload.core.id, "core-a");
+  assert.deepEqual(snapshot.payload.destinations.map(destination => destination.id), ["agent", "big"]);
+
+  const decisions = events.filter(event => event.kind === "brainstem.core.decision");
+  const original = decisions.find(event => event.payload.observationId === "counter:0");
+  const report = decisions.find(event => event.payload.observationId === "report:counter:0");
+
+  assert.deepEqual(original.payload.origin, { kind: "input", id: "counter" });
+  assert.equal(original.payload.inputId, "counter");
+  assert.deepEqual(report.payload.origin, {
+    kind: "destination",
+    id: "agent",
+    plugin: "agent",
+    name: "default",
+    depth: 1,
+    lineage: ["agent"]
+  });
+  assert.equal(report.payload.inputId, null, "a handoff is not attributed to an input");
+
+  const emitted = events.filter(event => event.kind === "brainstem.destination.emitted");
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0].payload.destinationId, "agent");
+  assert.deepEqual(emitted[0].payload.observations, ["report:counter:0"]);
+  assert.equal(emitted[0].payload.depth, 1);
+
+  const destinationEvents = events.filter(event =>
+    ["brainstem.destination.running", "brainstem.destination.completed"].includes(event.kind)
+  );
+  assert.ok(destinationEvents.length >= 3);
+  assert.ok(destinationEvents.every(event => ["agent", "big"].includes(event.payload.destinationId)));
 });

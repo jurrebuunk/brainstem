@@ -76,3 +76,20 @@ test("metrics are derived consistently from telemetry events", () => {
     ["decisions.dead", "decisions.failed", "errors.total", "events.total"].sort()
   );
 });
+
+test("telemetry helpers read origins, destination ids and core ids, including older events", async () => {
+  const { eventCoreId, eventDestinationId, eventOrigin, metricsForEvent } = await import("../src/telemetry/events.mjs");
+
+  const handoff = { kind: "brainstem.core.decision", payload: { coreId: "core-a", origin: { kind: "destination", id: "log-triage", depth: 1 } } };
+  assert.deepEqual(eventOrigin(handoff), { kind: "destination", id: "log-triage", depth: 1 });
+  assert.equal(eventCoreId(handoff), "core-a");
+
+  // Recorded before origins existed.
+  assert.deepEqual(eventOrigin({ kind: "brainstem.core.decision", payload: { inputId: "destination:log-triage" } }), { kind: "destination", id: "log-triage" });
+  assert.deepEqual(eventOrigin({ kind: "brainstem.core.decision", payload: { inputId: "api-health" } }), { kind: "input", id: "api-health" });
+  assert.equal(eventOrigin({ kind: "brainstem.snapshot", payload: {} }), null);
+
+  assert.equal(eventDestinationId({ kind: "brainstem.output", payload: { destination: { id: "ops-room" } } }), "ops-room");
+  assert.equal(eventDestinationId({ kind: "brainstem.destination.failed", payload: { destinationId: "ops-room" } }), "ops-room");
+  assert.ok([...metricsForEvent({ kind: "brainstem.destination.emitted", payload: {} })].includes("handoffs.emitted"));
+});
