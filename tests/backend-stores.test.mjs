@@ -236,3 +236,39 @@ test("client ip honours X-Forwarded-For only from trusted proxies", () => {
 
   assert.throws(() => createTrustedProxies("nope"), /Invalid trusted proxy/);
 });
+
+dialectTest("telemetry store keeps per-node totals beyond the event window", async ({ handle }) => {
+  const store = createTelemetryStore({ database: handle, eventLogMaxRows: 2 });
+  const at = seconds => new Date(Date.parse("2026-11-02T12:00:00.000Z") + seconds * 1000).toISOString();
+  const event = (kind, payload, seconds) => ({ version: "1", kind, receivedAt: at(seconds), payload: { timestamp: at(seconds), ...payload } });
+
+  for (const [index, item] of [
+    event("brainstem.input.poll.started", { id: "app-log" }, 1),
+    event("brainstem.input.poll.started", { id: "app-log" }, 2),
+    event("brainstem.input.observation", { id: "app-log" }, 2),
+    event("brainstem.core.decision", { origin: { kind: "input", id: "app-log" } }, 3),
+    event("brainstem.destination.completed", { destinationId: "log-triage" }, 4),
+    event("brainstem.destination.emitted", { destinationId: "log-triage", observations: ["r1"] }, 5),
+    event("brainstem.core.decision", { origin: { kind: "destination", id: "log-triage" } }, 6),
+    event("brainstem.destination.failed", { destinationId: "ops-room" }, 7),
+    event("brainstem.plugin.log", { scope: "destination", destinationId: "ops-room", level: "error" }, 8),
+    // Older runtime: no destinationId, so no destination totals.
+    event("brainstem.destination.completed", { plugin: "p", destination: "default" }, 9)
+  ].entries()) {
+    await store.persistEvent(item);
+    assert.ok(index >= 0);
+  }
+
+  await store.prune({ now: new Date(at(10)) });
+  assert.equal(await store.eventCount(), 2, "the event log keeps only its window");
+
+  const { nodes } = await store.getStats();
+
+  assert.deepEqual(nodes["input:app-log"], { polls: 2, observations: 1, decisions: 0, delivered: 0, handoffs: 0, errors: 0, lastAt: at(3) });
+  assert.deepEqual(nodes.core, { polls: 0, observations: 0, decisions: 2, delivered: 0, handoffs: 0, errors: 0, lastAt: at(6) });
+  assert.equal(nodes["destination:log-triage"].delivered, 1);
+  assert.equal(nodes["destination:log-triage"].handoffs, 1);
+  assert.equal(nodes["destination:ops-room"].errors, 2);
+  assert.equal(nodes["destination:ops-room"].lastAt, at(8));
+  assert.deepEqual(Object.keys(nodes).sort(), ["core", "destination:log-triage", "destination:ops-room", "input:app-log"]);
+});

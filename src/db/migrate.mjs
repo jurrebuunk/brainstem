@@ -3,6 +3,7 @@ import { Migrator } from "kysely/migration";
 import { createMigration as m0001 } from "./migrations/0001_initial.mjs";
 import { createMigration as m0002 } from "./migrations/0002_pipeline.mjs";
 import { createMigration as m0003 } from "./migrations/0003_cores.mjs";
+import { createMigration as m0004 } from "./migrations/0004_node_stats.mjs";
 
 /*
  * Ordered list of migrations. Append new entries; never edit
@@ -12,7 +13,8 @@ import { createMigration as m0003 } from "./migrations/0003_cores.mjs";
 const MIGRATIONS = [
   ["0001_initial", m0001],
   ["0002_pipeline", m0002],
-  ["0003_cores", m0003]
+  ["0003_cores", m0003],
+  ["0004_node_stats", m0004]
 ];
 
 export const LATEST_MIGRATION = MIGRATIONS.at(-1)[0];

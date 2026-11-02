@@ -166,3 +166,23 @@ test("a malformed event does not break the model", () => {
   const model = buildFlowModel({ topology, events: [null, { kind: 42 }, ...handoffRun], now: NOW });
   assert.equal(model.nodes.length, 5);
 });
+
+test("node counters prefer database totals over the event window", () => {
+  const nodeTotals = {
+    "input:test-app-log": { polls: 812, observations: 9, decisions: 0, delivered: 0, handoffs: 0, errors: 0, lastAt: at(29) },
+    core: { polls: 0, observations: 0, decisions: 31, delivered: 0, handoffs: 0, errors: 1, lastAt: at(21) },
+    "destination:log-triage": { polls: 0, observations: 0, decisions: 0, delivered: 9, handoffs: 9, errors: 0, lastAt: at(20) }
+  };
+  const model = buildFlowModel({ topology, events: handoffRun, nodeTotals, now: NOW });
+  const meta = id => Object.fromEntries(node(model, id).data.meta.map(item => [item.label, item.value]));
+
+  assert.deepEqual(meta("input:test-app-log"), { polls: 812, outputs: 9, last: "now" });
+  assert.deepEqual(meta("core"), { decisions: 31, errors: 1, last: "9s" });
+  assert.deepEqual(meta("destination:log-triage"), { delivered: 9, errors: 0, handoffs: 9 });
+
+  // Without totals the window is counted with the same fields.
+  const windowOnly = buildFlowModel({ topology, events: handoffRun, now: NOW });
+  const windowMeta = id => Object.fromEntries(node(windowOnly, id).data.meta.map(item => [item.label, item.value]));
+  assert.equal(windowMeta("core").decisions, 2);
+  assert.equal(windowMeta("destination:ops-room").errors, 1);
+});

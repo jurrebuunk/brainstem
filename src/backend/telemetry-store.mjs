@@ -1,6 +1,8 @@
 import {
+  NODE_STAT_FIELDS,
   eventSourceKey,
-  metricsForEvent
+  metricsForEvent,
+  nodeStatsForEvent
 } from "../telemetry/events.mjs";
 import { describeDatabase } from "./db-utils.mjs";
 
@@ -84,6 +86,8 @@ function eventLevelForStorage(event) {
 }
 
 async function recordStatsEvent(db, event) {
+  await recordNodeStats(db, event);
+
   // Sorted so concurrent writers lock counter rows in the same order.
   const metrics = [...new Set(metricsForEvent(event))].sort();
   if (metrics.length === 0) return;
@@ -103,6 +107,43 @@ async function recordStatsEvent(db, event) {
       value: eb => eb("stat_timeseries.value", "+", eb.ref("excluded.value"))
     }))
     .execute();
+}
+
+/*
+ * Per-node totals (stat_nodes): counters plus the newest event
+ * time per flow node, so the Web UI shows totals beyond the event
+ * window it holds.
+ */
+async function recordNodeStats(db, event) {
+  const byNode = new Map();
+
+  for (const { nodeId, field } of nodeStatsForEvent(event)) {
+    const row = byNode.get(nodeId) ?? Object.fromEntries(NODE_STAT_FIELDS.map(name => [name, 0]));
+    if (field) row[field] += 1;
+    byNode.set(nodeId, row);
+  }
+
+  if (byNode.size === 0) return;
+
+  const at = Date.parse(event.receivedAt ?? event.payload?.timestamp ?? "") || Date.now();
+
+  // Sorted so concurrent writers lock rows in the same order.
+  for (const [nodeId, row] of [...byNode].sort(([a], [b]) => a.localeCompare(b))) {
+    await db.insertInto("stat_nodes")
+      .values({ node_id: nodeId, ...row, last_at: at })
+      .onConflict(oc => oc.column("node_id").doUpdateSet(eb => ({
+        ...Object.fromEntries(NODE_STAT_FIELDS.map(name => [
+          name,
+          eb(`stat_nodes.${name}`, "+", eb.ref(`excluded.${name}`))
+        ])),
+        last_at: eb.case()
+          .when(eb.ref("excluded.last_at"), ">", eb.ref("stat_nodes.last_at"))
+          .then(eb.ref("excluded.last_at"))
+          .else(eb.ref("stat_nodes.last_at"))
+          .end()
+      })))
+      .execute();
+  }
 }
 
 async function pruneTelemetry(db, { now, statsPruneAfterDays, eventLogPruneAfterDays, eventLogMaxRows }) {
@@ -196,9 +237,16 @@ async function getStats(db) {
     .orderBy("bucket", "asc")
     .execute();
 
+  const nodeRows = await db.selectFrom("stat_nodes").selectAll().execute();
+  const nodes = Object.fromEntries(nodeRows.map(row => [row.node_id, {
+    ...Object.fromEntries(NODE_STAT_FIELDS.map(name => [name, Number(row[name])])),
+    lastAt: new Date(Number(row.last_at)).toISOString()
+  }]));
+
   return {
     counters,
     series: rows.map(row => ({ ...row, value: Number(row.value) })),
+    nodes,
     generatedAt: new Date().toISOString()
   };
 }

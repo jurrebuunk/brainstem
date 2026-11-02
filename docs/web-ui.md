@@ -58,7 +58,7 @@ The sidebar has these pages:
   - **Core pool**: the core node summarises the registered cores ("2 cores · 1 running · 1 lost") and turns `degraded` or `offline` when cores are lost or none run. The **Cores** panel (top right) lists each core with its status, last heartbeat, version, role and queues. Once there are several cores, input nodes show which core polled them last.
   - **Handoffs** are shown only while they happen. When a destination hands an observation back to the core (`ctx.emit`, for example an agent's report), a small "↩ handing off" pill node appears to the right of that destination, linked by an ordinary edge. The core lights up as usual when it decides on the handed-off observation. After about 8 s the pill and its edge disappear; the destination keeps a `handoffs` count. Handed-off observations are never drawn as inputs, and events from older runtimes (a handoff recorded as input `destination:<id>`) show the same way.
   - **Inspector**: destinations match their events by id. Core decisions show the observation's origin (an input, or "handoff from log-triage (depth 1)") and the core that decided it.
-  - Activity, animation and per-node counts come from the event window the Web UI holds (the most recent 2000 events).
+  - **Node counters** (polls, outputs, decisions, delivered, errors, handoffs, last seen) are totals counted in the database (`GET /api/stats` → `nodes`), so they cover more than the event window. Without `stats:read`, or against an older backend, they count the events the Web UI holds. Live activity and animation always come from the event stream.
 - **Stats** — persisted counters, KPI cards, filterable metric tables, and interactive uPlot time-series charts with range controls, live pause, hover values, and drag-to-zoom.
 - **Deliveries** — the [delivery pipeline](delivery-pipeline.md): decide and deliver queue depth, the delivery log filtered by status, and dead jobs. Users with `runtime:control` can redrive or discard dead jobs. Needs `runtime:read`.
 - **Settings** — subtabs for:
@@ -93,7 +93,7 @@ The backend API exposes:
 POST /api/events       ingest telemetry and output events
 GET  /api/events       persisted recent event log, newest-limited and returned oldest-first
 GET  /api/stream       live Server-Sent Events stream for browsers
-GET  /api/stats        persistent derived stats counters and time series
+GET  /api/stats        persistent derived stats: counters, time series and per-node totals (nodes)
 GET  /api/config       read brainstem.config.mjs
 PUT  /api/config       syntax-check and write brainstem.config.mjs
 GET  /api/auth/status  setup/auth status

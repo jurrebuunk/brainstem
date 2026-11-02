@@ -132,3 +132,52 @@ export function metricsForEvent(event) {
 
   return [...metrics];
 }
+
+export const NODE_STAT_FIELDS = ["polls", "observations", "decisions", "delivered", "handoffs", "errors"];
+
+/*
+ * Per-node counter increments for one event, keyed by flow node
+ * id ("input:<id>", "core", "destination:<id>"). Destinations are
+ * counted by configured id, so events from runtimes that did not
+ * report destinationId yet are not attributed to a destination.
+ *
+ *   -> [{ nodeId, field }]   field: one of NODE_STAT_FIELDS, or
+ *                            null to only mark the node as seen
+ */
+export function nodeStatsForEvent(event) {
+  const kind = String(event?.kind ?? "");
+  const payload = event?.payload ?? {};
+  const origin = eventOrigin(event);
+  const destinationId = eventDestinationId(event);
+  const failed = kind.includes("failed");
+  const stats = [];
+  const add = (nodeId, field) => {
+    if (nodeId) stats.push({ nodeId, field });
+  };
+
+  if (kind === "brainstem.input.poll.started") add(`input:${payload.id}`, "polls");
+  if (kind === "brainstem.input.poll.completed") add(`input:${payload.id}`, null);
+  if (kind === "brainstem.input.observation") add(`input:${payload.id}`, "observations");
+
+  if (kind === "brainstem.core.decision") {
+    add("core", "decisions");
+    if (origin?.kind === "input") add(`input:${origin.id}`, null);
+  }
+  if (kind === "brainstem.core.failed") add("core", "errors");
+
+  if (kind.startsWith("brainstem.destination.") && kind !== "brainstem.destination.loaded" && destinationId) {
+    const nodeId = `destination:${destinationId}`;
+
+    if (kind === "brainstem.destination.completed") add(nodeId, "delivered");
+    else if (kind === "brainstem.destination.emitted") add(nodeId, "handoffs");
+    else if (failed) add(nodeId, "errors");
+    else add(nodeId, null);
+  }
+
+  if (kind === "brainstem.plugin.log" && payload.level === "error") {
+    if (payload.scope === "input" && payload.id) add(`input:${payload.id}`, "errors");
+    if (payload.scope === "destination" && destinationId) add(`destination:${destinationId}`, "errors");
+  }
+
+  return stats;
+}
