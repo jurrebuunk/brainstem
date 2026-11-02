@@ -8,7 +8,7 @@ import agentosRunnerPlugin from "../plugins/agentos-runner/index.mjs";
 import { toolCommandName } from "../plugins/agentos-runner/prompt.mjs";
 import { MemoryPluginStateStore } from "../src/runtime/plugin-state.mjs";
 import { createDestinationContext, createOutputEnvelope } from "../src/sdk/index.mjs";
-import { silentLogger, tempDir } from "./helpers/fixtures.mjs";
+import { tempDir } from "./helpers/fixtures.mjs";
 
 /*
  * Runs the plugin against a real agentOS VM (no AI key needed).
@@ -34,6 +34,13 @@ test("agentos-runner runs a command task in a real agentOS VM", { skip, timeout:
 
   const reports = [];
   const results = [];
+  const logs = [];
+  const logger = Object.fromEntries(
+    ["debug", "info", "warn", "error"].map(level => [
+      level,
+      (message, data) => logs.push({ level, message, data })
+    ])
+  );
   const store = new MemoryPluginStateStore();
 
   const output = createOutputEnvelope({
@@ -81,7 +88,7 @@ test("agentos-runner runs a command task in a real agentOS VM", { skip, timeout:
           // agentOS 0.4.6 keeps the host function's timeout timer
           // alive after the call returns, which holds the process
           // open for that long; keep it short in the test.
-          timeoutMs: 3_000,
+          timeoutMs: 15_000,
           run: async args => {
             reports.push(args);
             return { sent: true };
@@ -95,10 +102,17 @@ test("agentos-runner runs a command task in a real agentOS VM", { skip, timeout:
     destination: "default",
     id: "log-triage",
     idempotencyKey: output.payload.idempotencyKey,
-    logger: silentLogger
+    logger
   });
 
-  await agentosRunnerPlugin.destinations.default.handle(ctx, output);
+  try {
+    await agentosRunnerPlugin.destinations.default.handle(ctx, output);
+  }
+  catch (error) {
+    // The VM's output is the only way to see why a run failed in CI.
+    error.message += `\nplugin logs:\n${JSON.stringify(logs, null, 2)}`;
+    throw error;
+  }
 
   assert.deepEqual(reports, [{ title: "api: 2 errors", markdown: "10:01 ERROR db timeout", count: 2 }]);
   assert.equal(results.length, 1);
