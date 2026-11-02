@@ -57,7 +57,7 @@ jobs:
       - name: Unit and integration tests
         run: npm test
 
-      # Multi-core 2.0 acceptance tests. Tests still marked `todo`
-      # report their status without failing the build.
+      # Multi-core acceptance tests: several core processes on the
+      # Postgres service above.
       - name: Acceptance tests
         run: npm run test:acceptance
