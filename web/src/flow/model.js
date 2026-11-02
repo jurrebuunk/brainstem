@@ -27,11 +27,12 @@ const FLOW_ROW_GAP = 205;
 const FLOW_CORE_X = FLOW_COLUMN_GAP;
 const FLOW_DESTINATION_X = FLOW_COLUMN_GAP * 2;
 const ACTIVE_FOR_MS = 30_000;
+// A handoff is shown briefly while it happens, then disappears.
+export const HANDOFF_VISIBLE_MS = 8_000;
 
 const COLORS = {
   input: "#3b82f6",
   destination: "#22c55e",
-  handoff: "#ec4899",
   idle: "#4b5563"
 };
 
@@ -71,6 +72,13 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
     }
   }
 
+  // Handoffs happening right now: shown for HANDOFF_VISIBLE_MS.
+  const liveHandoffs = new Map(
+    [...handoffs].filter(([, handoff]) =>
+      handoff.lastAt && now - Date.parse(handoff.lastAt) < HANDOFF_VISIBLE_MS
+    )
+  );
+
   const inputs = [...structure.inputs.values()];
   const destinations = [...structure.destinations.values()];
   const cores = topology?.cores ?? [];
@@ -80,7 +88,6 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
   const rows = Math.max(inputs.length, destinations.length, 1);
   const coreHeight = coreHeightForHandles(Math.max(inputs.length, destinations.length));
   const coreY = ((rows - 1) * FLOW_ROW_GAP) / 2 - coreHeight / 2 + 65;
-  const handoffSources = destinations.filter(destination => handoffs.has(destination.id));
 
   const inputHandles = inputs.map((input, index) => ({
     id: `in-${safeHandleId(input.id)}`,
@@ -137,8 +144,7 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
       outputHandles,
       extra: {
         cores,
-        handoffIn: handoffSources.length > 0,
-        handoffActive: handoffSources.some(destination => isActive(edgeActivity.get(handoffEdgeId(destination.id))))
+        receivingFrom: [...liveHandoffs.keys()]
       }
     }),
     ...destinations.map((destination, index) => {
@@ -154,8 +160,8 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
         meta: compactMeta({
           outputs: stats.get(id)?.outputs ?? 0,
           errors: stats.get(id)?.errors ?? 0,
-          ...(handoff ? { handoffs: handoff.count } : {}),
-          last: handoff ? null : relativeTime(stats.get(id)?.lastAt, now)
+          ...(handoff?.count ? { handoffs: handoff.count } : {}),
+          last: handoff?.count ? null : relativeTime(stats.get(id)?.lastAt, now)
         }),
         x: FLOW_DESTINATION_X,
         y: index * FLOW_ROW_GAP,
@@ -163,8 +169,7 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
         handleActive: isActive(edgeActivity.get(destinationEdgeId(destination.id))),
         extra: {
           destinationId: destination.id,
-          handoffOut: Boolean(handoff),
-          handoffActive: isActive(edgeActivity.get(handoffEdgeId(destination.id)))
+          handingOff: liveHandoffs.has(destination.id)
         }
       });
     })
@@ -189,17 +194,24 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
       active: isActive(edgeActivity.get(destinationEdgeId(destination.id))),
       color: COLORS.destination
     })),
-    // A destination handing observations back to the core.
-    ...handoffSources.map(destination => graphEdge({
-      id: handoffEdgeId(destination.id),
-      source: `destination:${destination.id}`,
+    // A handoff in progress: a short-lived arc from the destination
+    // back into the core, drawn above the nodes. The id includes
+    // the handoff time so every handoff replays its animation.
+    ...[...liveHandoffs].map(([destinationId, handoff]) => ({
+      id: `${handoffEdgeId(destinationId)}-${Date.parse(handoff.lastAt)}`,
+      source: `destination:${destinationId}`,
       sourceHandle: "handoff-out",
       target: "core",
       targetHandle: "handoff-in",
-      active: isActive(edgeActivity.get(handoffEdgeId(destination.id))),
-      color: COLORS.handoff,
-      kind: "handoff",
-      label: `${handoffs.get(destination.id).count} handed off`
+      type: "handoff",
+      zIndex: 1000,
+      selectable: false,
+      focusable: false,
+      data: {
+        label: `report from ${destinationId}`,
+        startedAt: handoff.lastAt,
+        visibleMs: HANDOFF_VISIBLE_MS
+      }
     }))
   ];
 
@@ -369,18 +381,20 @@ function collectActivity(event, timestamp, { resolve, edgeActivity, nodeStatus, 
     nodeStatus.set("core", "deciding");
     if (inputId) edgeActivity.set(inputEdgeId(inputId), timestamp);
 
-    // A decision on a handed-off observation lights the handoff edge.
+    // A decision on a handed-off observation (also how older
+    // runtimes, without the emitted event, show a handoff).
     if (origin?.kind === "destination" && origin.id) {
-      edgeActivity.set(handoffEdgeId(origin.id), timestamp);
-      if (!handoffs.has(origin.id)) handoffs.set(origin.id, { count: 0 });
+      const current = handoffs.get(origin.id) ?? { count: 0, lastAt: null };
+      current.lastAt = latest(current.lastAt, timestamp);
+      handoffs.set(origin.id, current);
     }
   }
 
   if (kind === "brainstem.destination.emitted" && destinationId) {
-    const current = handoffs.get(destinationId) ?? { count: 0 };
+    const current = handoffs.get(destinationId) ?? { count: 0, lastAt: null };
     current.count += Array.isArray(p.observations) ? p.observations.length : 1;
+    current.lastAt = latest(current.lastAt, timestamp);
     handoffs.set(destinationId, current);
-    edgeActivity.set(handoffEdgeId(destinationId), timestamp);
   }
 
   if (kind === "brainstem.destination.running" && destinationId) {
@@ -447,9 +461,7 @@ function graphNode({
   };
 }
 
-function graphEdge({ id, source, sourceHandle, target, targetHandle, active, color, kind = "flow", label = null }) {
-  const handoff = kind === "handoff";
-
+function graphEdge({ id, source, sourceHandle, target, targetHandle, active, color }) {
   return {
     id,
     source,
@@ -457,15 +469,15 @@ function graphEdge({ id, source, sourceHandle, target, targetHandle, active, col
     target,
     targetHandle,
     animated: active,
-    type: handoff ? "smoothstep" : "default",
-    label: handoff ? label : undefined,
-    className: [handoff ? "edge-handoff" : "", active ? "edge-active" : ""].filter(Boolean).join(" "),
-    style: {
-      stroke: active || handoff ? color : COLORS.idle,
-      strokeWidth: active ? 2.5 : 1.5,
-      ...(handoff ? { strokeDasharray: "6 5" } : {})
-    }
+    type: "default",
+    className: active ? "edge-active" : "",
+    style: { stroke: active ? color : COLORS.idle, strokeWidth: active ? 2.5 : 1.5 }
   };
+}
+
+function latest(a, b) {
+  if (!a) return b;
+  return Date.parse(b) > Date.parse(a) ? b : a;
 }
 
 function inputEdgeId(id) {

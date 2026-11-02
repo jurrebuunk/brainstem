@@ -2652,20 +2652,91 @@ button:disabled {
   font-size: var(--font-size-xs);
 }
 
-/* Handoffs: a destination handing observations back to the core. */
-.react-flow__handle.node-handle.handoff-handle {
-  background: var(--brainstem-active) !important;
-  border-radius: 50% !important;
+/* Handoffs: shown only while a destination hands an observation back. */
+.react-flow__handle.handoff-anchor {
+  width: 1px !important;
+  height: 1px !important;
+  min-width: 0;
+  min-height: 0;
+  border: 0 !important;
+  background: transparent !important;
+  opacity: 0;
+  pointer-events: none;
 }
 
-.react-flow__edge.edge-handoff .react-flow__edge-text {
-  fill: var(--muted);
+.handoff-edge,
+.handoff-edge-label {
+  animation-name: handoff-fade;
+  animation-timing-function: ease-out;
+  animation-fill-mode: forwards;
+}
+
+.handoff-edge-path {
+  fill: none;
+  stroke: var(--brainstem-active);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.handoff-edge-glow {
+  fill: none;
+  stroke: var(--brainstem-active);
+  stroke-width: 10;
+  stroke-linecap: round;
+  opacity: 0.18;
+}
+
+.handoff-edge-dot {
+  fill: var(--brainstem-active);
+  filter: drop-shadow(0 0 4px var(--brainstem-active));
+}
+
+.handoff-edge-label {
+  position: absolute;
+  z-index: 1001;
+  border: 1px solid color-mix(in srgb, var(--brainstem-active) 55%, var(--border));
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text-strong);
+  padding: 3px 10px;
   font-size: var(--font-size-2xs);
   font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 6px 16px var(--shadow);
 }
 
-.react-flow__edge.edge-handoff .react-flow__edge-textbg {
-  fill: var(--panel);
+.node-pulse {
+  position: absolute;
+  bottom: -30px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 1px solid color-mix(in srgb, var(--brainstem-active) 55%, var(--border));
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text-strong);
+  padding: 3px 10px;
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+  animation: handoff-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes handoff-fade {
+  0% { opacity: 0; }
+  8% { opacity: 1; }
+  75% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes handoff-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--brainstem-active) 45%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--brainstem-active) 0%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .handoff-edge-dot { display: none; }
+  .node-pulse { animation: none; }
 }
 
 .node-footnote {

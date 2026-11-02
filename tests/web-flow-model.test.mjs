@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildFlowModel } from "../web/src/flow/model.js";
+import { HANDOFF_VISIBLE_MS, buildFlowModel } from "../web/src/flow/model.js";
 
 const NOW = Date.parse("2026-11-02T12:00:30.000Z");
 const at = seconds => new Date(Date.parse("2026-11-02T12:00:00.000Z") + seconds * 1000).toISOString();
@@ -39,6 +39,7 @@ const handoffRun = [
 
 const node = (model, id) => model.nodes.find(candidate => candidate.id === id);
 const edge = (model, id) => model.edges.find(candidate => candidate.id === id);
+const handoffEdges = model => model.edges.filter(candidate => candidate.type === "handoff");
 
 test("the flow is built from the topology, one node per configured id", () => {
   const model = buildFlowModel({ topology, events: [], now: NOW });
@@ -71,25 +72,33 @@ test("the core pool node summarises the registered cores", () => {
   assert.equal(node(drift, "core").data.footnote, "cores loaded different configs");
 });
 
-test("a handoff is drawn as a return edge, not as an input", () => {
-  const model = buildFlowModel({ topology, events: handoffRun, now: NOW });
+test("a handoff shows briefly while it happens, then disappears", () => {
+  // The report was decided at 21 s; 4 s later the handoff is live.
+  const live = buildFlowModel({ topology, events: handoffRun, now: Date.parse(at(25)) });
 
-  assert.ok(!model.nodes.some(candidate => candidate.id.startsWith("input:destination")), "no fake input node");
+  assert.ok(!live.nodes.some(candidate => candidate.id.startsWith("input:destination")), "no fake input node");
 
-  const handoff = edge(model, "edge-handoff-log-triage");
-  assert.equal(handoff.source, "destination:log-triage");
-  assert.equal(handoff.sourceHandle, "handoff-out");
-  assert.equal(handoff.target, "core");
-  assert.equal(handoff.targetHandle, "handoff-in");
-  assert.equal(handoff.label, "1 handed off");
-  assert.match(handoff.className, /edge-handoff/);
-  assert.equal(handoff.animated, true, "active: the report was decided 9 s ago");
+  const [arc, extra] = handoffEdges(live);
+  assert.equal(extra, undefined);
+  assert.equal(arc.id, `edge-handoff-log-triage-${Date.parse(at(21))}`, "unique per handoff, so the animation replays");
+  assert.equal(arc.source, "destination:log-triage");
+  assert.equal(arc.sourceHandle, "handoff-out");
+  assert.equal(arc.target, "core");
+  assert.equal(arc.targetHandle, "handoff-in");
+  assert.equal(arc.zIndex, 1000, "drawn above the nodes");
+  assert.deepEqual(arc.data, { label: "report from log-triage", startedAt: at(21), visibleMs: HANDOFF_VISIBLE_MS });
 
-  assert.equal(node(model, "destination:log-triage").data.handoffOut, true);
-  assert.equal(node(model, "core").data.handoffIn, true);
-  assert.ok(node(model, "destination:log-triage").data.meta.some(item => item.label === "handoffs" && item.value === 1));
-  assert.equal(edge(model, "edge-handoff-issue-summary"), undefined, "only destinations that handed off");
-  assert.equal(node(model, "destination:ops-room").data.status, "retrying");
+  assert.equal(node(live, "destination:log-triage").data.handingOff, true);
+  assert.deepEqual(node(live, "core").data.receivingFrom, ["log-triage"]);
+  assert.equal(node(live, "destination:issue-summary").data.handingOff, false);
+
+  // Once HANDOFF_VISIBLE_MS has passed, nothing is left but the count.
+  const later = buildFlowModel({ topology, events: handoffRun, now: Date.parse(at(21)) + HANDOFF_VISIBLE_MS + 1 });
+  assert.deepEqual(handoffEdges(later), []);
+  assert.equal(node(later, "destination:log-triage").data.handingOff, false);
+  assert.deepEqual(node(later, "core").data.receivingFrom, []);
+  assert.ok(node(later, "destination:log-triage").data.meta.some(item => item.label === "handoffs" && item.value === 1));
+  assert.equal(node(later, "destination:ops-room").data.status, "retrying");
 });
 
 test("events are attributed to nodes by id", () => {
@@ -110,11 +119,11 @@ test("events from older runtimes map onto configured ids", () => {
     // Ambiguous pair (two agentos-runner entries): kept apart under its plugin key.
     event("brainstem.destination.running", { plugin: "@brainstem/agentos-runner", destination: "default" }, 17)
   ];
-  const model = buildFlowModel({ topology, events: legacy, now: NOW });
+  const model = buildFlowModel({ topology, events: legacy, now: Date.parse(at(18)) });
 
   assert.deepEqual(model.nodeIdsFor(legacy[0]), ["destination:ops-room"]);
   assert.deepEqual(model.nodeIdsFor(legacy[1]), ["core"]);
-  assert.ok(edge(model, "edge-handoff-log-triage"), "the legacy handoff is a return edge");
+  assert.deepEqual(handoffEdges(model).map(arc => arc.source), ["destination:log-triage"], "the legacy handoff shows the same arc");
   assert.ok(!model.nodes.some(candidate => candidate.id === "input:destination:log-triage"));
   assert.deepEqual(model.nodeIdsFor(legacy[2]), ["destination:@brainstem/agentos-runner:default"]);
 });
@@ -127,14 +136,14 @@ test("without a topology the flow falls back to snapshot and events", () => {
       { plugin: "@brainstem/http-json", destination: "default" }
     ]
   }, 1);
-  const model = buildFlowModel({ topology: null, events: [snapshot, ...handoffRun], now: NOW });
+  const model = buildFlowModel({ topology: null, events: [snapshot, ...handoffRun], now: Date.parse(at(25)) });
 
   assert.equal(model.structure, "events");
   assert.equal(node(model, "core").data.label, "Brainstem Core");
   assert.ok(node(model, "destination:log-triage"));
   assert.ok(node(model, "destination:@brainstem/http-json:default"), "a snapshot destination without id keeps its plugin key");
   assert.ok(node(model, "destination:ops-room"), "destinations seen only in events are added");
-  assert.ok(edge(model, "edge-handoff-log-triage"));
+  assert.equal(handoffEdges(model).length, 1);
   assert.ok(!model.nodes.some(candidate => candidate.id.startsWith("input:destination")));
 });
 
