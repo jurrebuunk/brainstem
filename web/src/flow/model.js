@@ -37,9 +37,10 @@ const COLORS = {
   idle: "#4b5563"
 };
 
-// Handoff pill: placed right of its destination node (260 wide).
+// Handoff pill: right of its destination node (260 wide), at the
+// same y; the pill node takes the destination's height so both
+// connection dots line up.
 const HANDOFF_PILL_X = FLOW_DESTINATION_X + 260 + 90;
-const HANDOFF_PILL_Y_OFFSET = 38;
 
 export function buildFlowModel({ topology = null, events = [], now = Date.now() } = {}) {
   const structure = collectStructure(topology, events);
@@ -181,8 +182,7 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
    * While a destination hands off, a "handing off" pill node sits
    * to its right, linked by an ordinary edge. Both disappear after
    * HANDOFF_VISIBLE_MS. The core needs no marker: it lights up as
-   * for any decision. The Web UI centres the pill on its
-   * destination once node heights are measured.
+   * for any decision.
    */
   const handoffPills = destinations.flatMap((destination, index) => {
     const handoff = liveHandoffs.get(destination.id);
@@ -194,7 +194,7 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
       node: {
         id: `handoff:${destination.id}:${stamp}`,
         type: "handoffPill",
-        position: { x: HANDOFF_PILL_X, y: index * FLOW_ROW_GAP + HANDOFF_PILL_Y_OFFSET },
+        position: { x: HANDOFF_PILL_X, y: index * FLOW_ROW_GAP },
         draggable: false,
         selectable: false,
         data: {

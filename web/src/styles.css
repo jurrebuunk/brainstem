@@ -2657,8 +2657,14 @@ button:disabled {
   width: auto;
 }
 
-.handoff-pill {
+.handoff-pill-slot {
   position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+.handoff-pill {
   display: flex;
   align-items: center;
   border: 1px solid var(--brainstem-active);

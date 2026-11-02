@@ -83,6 +83,7 @@ test("a handoff shows briefly as a pill node linked to the destination, then dis
   assert.equal(pill.selectable, false);
   assert.deepEqual(pill.data, { label: "↩ handing off", destinationId: "log-triage" });
   assert.ok(pill.position.x > node(live, "destination:log-triage").position.x, "right of its destination");
+  assert.equal(pill.position.y, node(live, "destination:log-triage").position.y, "same y as its destination");
 
   const link = edge(live, `edge-handoff-log-triage-${stamp}`);
   assert.equal(link.source, "destination:log-triage");

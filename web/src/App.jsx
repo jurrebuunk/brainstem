@@ -11,6 +11,7 @@ import {
   Handle,
   Position,
   ReactFlow,
+  useInternalNode,
   useEdgesState,
   useNodesState
 } from "@xyflow/react";
@@ -118,7 +119,7 @@ export default function App() {
   const [edges, setEdges, onEdgesChange] = useEdgesState(graph.edges);
 
   useEffect(() => {
-    setNodes(current => alignHandoffPills(graph.nodes, current));
+    setNodes(graph.nodes);
     setEdges(graph.edges);
 
     if (flowInstance && page === "flow" && !autoFitDoneRef.current && graph.nodes.length > 1) {
@@ -823,45 +824,23 @@ function BrainstemNode({ data }) {
 
 /*
  * The transient "handing off" node right of a destination, linked
- * by an ordinary edge. Appears and disappears like other nodes.
+ * by an ordinary edge. It sits at the destination's y and takes
+ * the destination's (already measured) height, with the pill
+ * centred inside, so its connection dot is level with the
+ * destination's from the first frame.
  */
 function HandoffPillNode({ data }) {
+  const destination = useInternalNode(`destination:${data.destinationId}`);
+  const height = destination?.measured?.height;
+
   return (
-    <div className="handoff-pill" title={`${data.destinationId} is handing an observation back to the core`}>
+    <div className="handoff-pill-slot" style={height ? { height } : undefined}>
       <Handle id="in" type="target" position={Position.Left} className="node-handle handoff-handle is-handle-active" isConnectable={false} />
-      {data.label}
+      <div className="handoff-pill" title={`${data.destinationId} is handing an observation back to the core`}>
+        {data.label}
+      </div>
     </div>
   );
-}
-
-const HANDOFF_PILL_HEIGHT = 44;
-
-/*
- * Centre each handoff pill on its destination node so the edge
- * between them is a straight line. Node heights are only known
- * once React Flow has measured them, so this uses the measured
- * sizes from the current nodes.
- */
-function alignHandoffPills(nodes, current) {
-  const measured = new Map(current.map(node => [node.id, node]));
-
-  return nodes.map(node => {
-    if (node.type !== "handoffPill") return node;
-
-    const destination = measured.get(`destination:${node.data.destinationId}`);
-    const destinationHeight = destination?.measured?.height;
-    if (!destination || !destinationHeight) return node;
-
-    const pillHeight = measured.get(node.id)?.measured?.height ?? HANDOFF_PILL_HEIGHT;
-
-    return {
-      ...node,
-      position: {
-        x: node.position.x,
-        y: destination.position.y + destinationHeight / 2 - pillHeight / 2
-      }
-    };
-  });
 }
 
 function StatsPage({ events, actualTheme, auth }) {
