@@ -2665,25 +2665,17 @@ button:disabled {
   border-radius: 999px;
   background: var(--panel);
   color: var(--text-strong);
-  padding: 12px 24px;
+  box-sizing: border-box;
+  height: 44px;
+  padding: 0 24px;
   font-size: var(--font-size-base);
   font-weight: 650;
   white-space: nowrap;
   box-shadow: 0 10px 24px var(--shadow);
-  animation-name: handoff-fade;
-  animation-timing-function: ease-out;
-  animation-fill-mode: forwards;
 }
 
 .react-flow__handle.node-handle.handoff-handle {
   background: var(--brainstem-active) !important;
-}
-
-@keyframes handoff-fade {
-  0% { opacity: 0; }
-  5% { opacity: 1; }
-  80% { opacity: 1; }
-  100% { opacity: 0; }
 }
 
 .node-footnote {

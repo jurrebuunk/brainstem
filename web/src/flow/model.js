@@ -181,8 +181,8 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
    * While a destination hands off, a "handing off" pill node sits
    * to its right, linked by an ordinary edge. Both disappear after
    * HANDOFF_VISIBLE_MS. The core needs no marker: it lights up as
-   * for any decision. Ids include the handoff time, so each
-   * handoff replays its fade-in.
+   * for any decision. The Web UI centres the pill on its
+   * destination once node heights are measured.
    */
   const handoffPills = destinations.flatMap((destination, index) => {
     const handoff = liveHandoffs.get(destination.id);
@@ -199,9 +199,7 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
         selectable: false,
         data: {
           label: "↩ handing off",
-          destinationId: destination.id,
-          startedAt: handoff.lastAt,
-          visibleMs: HANDOFF_VISIBLE_MS
+          destinationId: destination.id
         }
       },
       edge: graphEdge({
