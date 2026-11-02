@@ -8,7 +8,7 @@ import {
 /*
  * Flow model: what the Flow page draws, as plain data.
  *
- *   buildFlowModel({ topology, events, now }) -> {
+ *   buildFlowModel({ topology, events, nodeTotals, now }) -> {
  *     nodes, edges,          // React Flow nodes/edges
  *     cores,                 // registered cores (from /api/topology)
  *     structure,             // "topology" | "events": where the nodes came from
@@ -20,7 +20,10 @@ import {
  * (nodes keyed by configured ids, independent of which core spoke
  * last). Against an older backend it falls back to the latest
  * snapshot plus the ids seen in events. Activity always comes
- * from the event stream. No React here, so it is unit tested.
+ * from the event stream. Node counters come from `nodeTotals`
+ * (GET /api/stats `nodes`, counted in the database) when given,
+ * otherwise from the events at hand. No React here, so it is unit
+ * tested.
  */
 const FLOW_COLUMN_GAP = 420;
 const FLOW_ROW_GAP = 205;
@@ -44,7 +47,7 @@ const NODE_WIDTH = 260;
 export const DESTINATION_NODE_HEIGHT = 160;
 const HANDOFF_PILL_X = FLOW_DESTINATION_X + NODE_WIDTH + 90;
 
-export function buildFlowModel({ topology = null, events = [], now = Date.now() } = {}) {
+export function buildFlowModel({ topology = null, events = [], nodeTotals = null, now = Date.now() } = {}) {
   const structure = collectStructure(topology, events);
   const resolve = createResolver(structure);
   const nodeIdsFor = event => eventNodeIds(event, resolve);
@@ -92,6 +95,9 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
   const cores = topology?.cores ?? [];
   const isActive = timestamp => Boolean(timestamp) && now - Date.parse(timestamp) < ACTIVE_FOR_MS;
   const activeStatus = (id, fallback) => isActive(nodeActivity.get(id)) ? nodeStatus.get(id) ?? fallback : fallback;
+  // Database totals when available, else what the event window shows.
+  const count = (id, field) => nodeTotals?.[id]?.[field] ?? stats.get(id)?.[field] ?? 0;
+  const lastAt = id => latest(nodeTotals?.[id]?.lastAt ?? null, stats.get(id)?.lastAt ?? null);
 
   const rows = Math.max(inputs.length, destinations.length, 1);
   const coreHeight = coreHeightForHandles(Math.max(inputs.length, destinations.length));
@@ -120,9 +126,9 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
         subtitle: [input.plugin ?? input.module, input.input ?? "default"].filter(Boolean).join("."),
         status: activeStatus(id, "idle"),
         meta: compactMeta({
-          polls: stats.get(id)?.polls ?? 0,
-          outputs: stats.get(id)?.outputs ?? 0,
-          last: relativeTime(stats.get(id)?.lastAt, now)
+          polls: count(id, "polls"),
+          outputs: count(id, "observations"),
+          last: relativeTime(lastAt(id), now)
         }),
         footnote: coreId && cores.length > 1 ? `polled by ${coreId}` : null,
         x: 0,
@@ -139,9 +145,9 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
       subtitle: cores.length > 0 ? coreSummary(cores) : "dedupe · laya · policy · route",
       status: coreStatus(cores, activeStatus("core", "idle")),
       meta: compactMeta({
-        decisions: stats.get("core")?.decisions ?? 0,
-        outputs: stats.get("core")?.outputs ?? 0,
-        last: relativeTime(stats.get("core")?.lastAt, now)
+        decisions: count("core", "decisions"),
+        errors: count("core", "errors"),
+        last: relativeTime(lastAt("core"), now)
       }),
       footnote: topology && topology.consistent === false ? "cores loaded different configs" : null,
       x: FLOW_CORE_X,
@@ -162,12 +168,16 @@ export function buildFlowModel({ topology = null, events = [], now = Date.now() 
         label: destination.id,
         subtitle: [destination.plugin, destination.destination].filter(Boolean).join("."),
         status: activeStatus(id, "idle"),
-        meta: compactMeta({
-          outputs: stats.get(id)?.outputs ?? 0,
-          errors: stats.get(id)?.errors ?? 0,
-          ...(handoff?.count ? { handoffs: handoff.count } : {}),
-          last: handoff?.count ? null : relativeTime(stats.get(id)?.lastAt, now)
-        }),
+        meta: (() => {
+          const handoffCount = nodeTotals?.[id]?.handoffs ?? handoff?.count ?? 0;
+
+          return compactMeta({
+            delivered: count(id, "delivered"),
+            errors: count(id, "errors"),
+            ...(handoffCount ? { handoffs: handoffCount } : {}),
+            last: handoffCount ? null : relativeTime(lastAt(id), now)
+          });
+        })(),
         x: FLOW_DESTINATION_X,
         y: index * FLOW_ROW_GAP,
         nodeHeight: DESTINATION_NODE_HEIGHT,
@@ -539,8 +549,12 @@ function safeHandleId(value) {
   return String(value).replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
+/*
+ * Window counters, the same fields as the database totals
+ * (nodeStatsForEvent in src/telemetry/events.mjs).
+ */
 function touch(stats, nodeId, event, timestamp) {
-  const current = stats.get(nodeId) ?? { polls: 0, decisions: 0, outputs: 0, errors: 0, lastAt: null };
+  const current = stats.get(nodeId) ?? { polls: 0, observations: 0, decisions: 0, delivered: 0, errors: 0, lastAt: null };
   const payload = event.payload ?? {};
 
   if (event.kind === "brainstem.log") {
@@ -549,9 +563,9 @@ function touch(stats, nodeId, event, timestamp) {
     if (payload.level === "error") current.errors += 1;
   }
   if (event.kind === "brainstem.input.poll.started") current.polls += 1;
-  if (event.kind === "brainstem.input.observation") current.outputs += 1;
+  if (event.kind === "brainstem.input.observation") current.observations += 1;
   if (event.kind === "brainstem.core.decision") current.decisions += 1;
-  if (event.kind === "brainstem.output") current.outputs += 1;
+  if (event.kind === "brainstem.destination.completed") current.delivered += 1;
   if (event.kind === "brainstem.plugin.log" && payload.level === "error") current.errors += 1;
   if (String(event.kind ?? "").includes("failed")) current.errors += 1;
   current.lastAt = timestamp;

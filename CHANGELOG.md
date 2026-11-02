@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Per-node totals: the API counts polls, observations, decisions, completed deliveries, handoffs, errors and the last event time per flow node in a new `stat_nodes` table (migration `0004_node_stats`) as telemetry arrives, and returns them as `nodes` in `GET /api/stats`. The Flow page shows these totals, so node counters no longer reset when events leave the 2000-event window. Destination nodes now show `delivered` (completed deliveries) instead of `outputs`, which only ever counted the HTTP JSON destination's output events.
+
 - `agentos-runner` fails fast and clearly: a missing model API key is reported before a VM boots, and a sidecar that can't start (`EPIPE` and similar) becomes a permanent, readable error ("the agentOS sidecar could not start … on NixOS enable programs.nix-ld") instead of retried pipe errors. On NixOS, nix-ld is now the recommended setup; the real-VM test runs whenever nix-ld (or `AGENTOS_SIDECAR_BIN`) is available.
 - Fix: `npm run check` now fails on syntax errors (it used `find -exec`, which ignored them) and also checks `brainstem-api.mjs` and the Web UI flow model.
 

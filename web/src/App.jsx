@@ -105,15 +105,16 @@ export default function App() {
   const [flowInstance, setFlowInstance] = useState(null);
   const autoFitDoneRef = useRef(false);
   const topology = useTopology(auth);
+  const nodeTotals = useNodeTotals(auth);
   const graph = useMemo(() => {
     try {
-      return buildFlowModel({ topology, events, now: clock });
+      return buildFlowModel({ topology, events, nodeTotals, now: clock });
     }
     catch (error) {
       console.error("Failed to build flow graph", error);
       return { nodes: [], edges: [], cores: [], nodeIdsFor: () => [], error };
     }
-  }, [topology, events, clock]);
+  }, [topology, events, nodeTotals, clock]);
   const [nodes, setNodes, onNodesChange] = useNodesState(graph.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(graph.edges);
 
@@ -337,6 +338,46 @@ function useTopology(auth) {
   }, [allowed, auth.user?.id]);
 
   return topology;
+}
+
+/*
+ * Per-node totals counted in the database (GET /api/stats
+ * `nodes`), so node counters cover more than the event window.
+ * null without stats:read or on an older backend; the flow model
+ * then counts the events it holds.
+ */
+function useNodeTotals(auth) {
+  const [nodeTotals, setNodeTotals] = useState(null);
+  const allowed = Boolean(auth.user) && hasPermission(auth.user, "stats:read");
+
+  useEffect(() => {
+    if (!allowed) {
+      setNodeTotals(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const load = () => {
+      auth.apiFetch("/api/stats")
+        .then(response => response.json())
+        .then(body => {
+          if (!cancelled) setNodeTotals(body.nodes ?? null);
+        })
+        .catch(() => {
+          if (!cancelled) setNodeTotals(null);
+        });
+    };
+
+    load();
+    const interval = setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [allowed, auth.user?.id]);
+
+  return nodeTotals;
 }
 
 function useAuth() {

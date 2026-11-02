@@ -33,6 +33,7 @@ The schema is versioned. A single node applies pending migrations on start; clus
 | `plugin_state` | Durable plugin state by namespace and key |
 | `web_events` | Telemetry event log |
 | `stat_counters`, `stat_timeseries` | Dashboard counters and time series |
+| `stat_nodes` | Per-node totals for the Web UI flow, keyed by flow node id (`input:<id>`, `core`, `destination:<id>`) |
 | `auth_users`, `auth_roles`, `auth_user_roles`, `auth_sessions` | Web UI accounts, RBAC and sessions |
 | `auth_login_attempts` | Login rate limiting, shared across API replicas |
 | `maintenance_runs` | Bookkeeping for singleton tasks (pruning, imports) |
