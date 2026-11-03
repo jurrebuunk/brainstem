@@ -243,7 +243,9 @@ export class DatabaseTransport {
 
   /*
    * Expired leases (a crashed or partitioned worker) go back to
-   * `ready`, or to `dead` once their attempts are used up.
+   * `ready`, or to `dead` once their attempts are used up. Jobs
+   * held by a core the registry reports stopped, or lost (3 missed
+   * heartbeats), are reclaimed without waiting for lease expiry.
    * Returns the affected jobs with their new state.
    */
   async reclaimStalled() {
@@ -258,7 +260,17 @@ export class DatabaseTransport {
           last_error = ${"Lease expired before the job finished"},
           updated_at = ${new Date(now).toISOString()}
       where state = 'running'
-        and locked_until < ${now}
+        and (
+          locked_until < cast(${now} as bigint)
+          or exists (
+            select 1 from cores c
+            where c.id = jobs.locked_by
+              and (
+                c.status = 'stopped'
+                or c.last_seen_at < cast(${now} as bigint) - c.heartbeat_ms * 3
+              )
+          )
+        )
       returning *
     `.execute(db);
 

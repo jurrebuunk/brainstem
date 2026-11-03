@@ -1,6 +1,6 @@
 # Brainstem 2.0 — Scale-out architecture & roadmap
 
-Status: **accepted** (all decisions in §7 are final) · Current release: `v1.4.0` (Phases 0–2) · Phase 3 implemented on main · Target: `v2.0.0` · Baseline: `v0.1.0` (single Node process + SQLite)
+Status: **accepted** (all decisions in §7 are final) · Current release: `v1.4.0` (Phases 0–2) · Beta: `v2.0.0-beta.1` (Phase 3) · Target: `v2.0.0` · Baseline: `v0.1.0` (single Node process + SQLite)
 
 ## 1. Goal
 

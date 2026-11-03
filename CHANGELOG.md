@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 2.0.0-beta.1
+## 2.0.0-beta.1 — 2026-11-03
 
 Multi-core (roadmap Phase 3). Brainstem runs as several processes on one Postgres database: input polling, decisions and deliveries are shared across cores, a lost core loses nothing, and config is versioned data that every core hot-reloads. Single-node mode (`--role all`, SQLite) works as before. See [Cluster mode](docs/cluster.md).
 
@@ -26,6 +26,7 @@ Changes:
 - Web UI: versioned config editor with history and rollback; the Cores panel shows each core's config version.
 - Topology merges cores that run different queues and is consistent when running cores share a config version.
 - Failed input polls emit `brainstem.input.poll.failed` and count as input node errors.
+- Jobs held by a core that stopped or missed 3 heartbeats are reclaimed at once, like its input leases, instead of after the job lease expires.
 - The multi-core acceptance tests pass (no longer `todo`) on SQLite and Postgres, including killing a core mid-run.
 
 ## 1.4.0 — 2026-11-02
