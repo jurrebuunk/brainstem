@@ -1,6 +1,6 @@
 {
   "name": "@brainstem-dev/plugin-log-decisions",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Brainstem destination plugin: Log decisions to the console.",
   "type": "module",
   "main": "index.mjs",

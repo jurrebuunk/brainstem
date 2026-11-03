@@ -1,6 +1,6 @@
 {
   "name": "@brainstem-dev/plugin-http-health",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Brainstem input plugin: Poll HTTP endpoints and report health changes (status, latency, failures).",
   "type": "module",
   "main": "index.mjs",

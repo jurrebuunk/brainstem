@@ -51,13 +51,12 @@ jobs:
           npm --prefix web ci
           npm run web:build
 
-      # The first release of a package needs a token (secret NPM_TOKEN).
-      # Once each package has GitHub set up as a trusted publisher on
-      # npmjs.com, delete the secret: npm then authenticates with OIDC.
+      # npm trusted publishing: each package trusts this workflow
+      # (npm.yml in jurrebuunk/brainstem), so npm authenticates with
+      # GitHub's OIDC token. No npm token is stored.
       - name: Publish
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
         run: |
-          if [ -n "$NPM_TOKEN" ]; then export NODE_AUTH_TOKEN="$NPM_TOKEN"; else unset NODE_AUTH_TOKEN; fi
+          unset NODE_AUTH_TOKEN
           if [ "$DRY_RUN" = "true" ]; then node scripts/npm-publish.mjs --dry-run; else node scripts/npm-publish.mjs; fi

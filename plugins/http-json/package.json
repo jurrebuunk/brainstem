@@ -1,6 +1,6 @@
 {
   "name": "@brainstem-dev/plugin-http-json",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Brainstem destination plugin: POST the decision envelope as JSON to a webhook, with an Idempotency-Key.",
   "type": "module",
   "main": "index.mjs",

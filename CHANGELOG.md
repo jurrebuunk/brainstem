@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.1 — 2026-11-03
+
+The first release published to npm by CI, through npm trusted publishing and with provenance. 2.1.0 was published by hand to create the packages. Nothing changes for users.
+
+- The npm workflow publishes through OIDC only; no npm token is stored.
+- `scripts/npm-publish.mjs` is attached to the terminal, so a manual publish can answer npm's 2FA prompt.
+- The [release checklist](docs/release.md) covers trusted publishing and how a new plugin package gets its first version.
+
 ## 2.1.0 — 2026-11-03
 
 Brainstem on npm, with plugins as npm packages. The app installs with `npm install -g @brainstem-dev/brainstem`. Every plugin, the built-ins included, is its own package that can be installed, pinned, updated and removed, and third-party plugins work the same way. See [Plugins](docs/plugins.md) and [ADR-0010](docs/adr/0010-plugins-as-npm-packages.md).

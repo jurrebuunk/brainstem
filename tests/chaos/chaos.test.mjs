@@ -266,12 +266,14 @@ function assertGuarantees({ effects }, { suspects }) {
   const reEmitted = [...keysPerObservation].filter(([, keys]) => keys.size > 1).map(([id]) => id);
   assert.deepEqual(reEmitted, [], "observations emitted twice (a stale poller committed)");
 
-  // Repeated effects only inside the window: the repeated key was
-  // first attempted by a core that was killed or lost the database.
+  // Repeated effects only inside the window: a core that was killed,
+  // frozen or cut off took part. It may have acted first (it died
+  // before committing), or last: a frozen core finishes its stale
+  // call when it wakes, under the same key, and then loses the commit.
   const byKey = new Map();
   for (const effect of effects) byKey.set(effect.key, [...(byKey.get(effect.key) ?? []), effect.core]);
   const unexplained = [...byKey]
-    .filter(([, cores]) => cores.length > 1 && !suspects.includes(cores[0]))
+    .filter(([, cores]) => cores.length > 1 && !cores.some(core => suspects.includes(core)))
     .map(([key, cores]) => `${key} by ${cores.join(", ")}`);
   assert.deepEqual(unexplained, [], "repeated effects outside the at-least-once window");
 }

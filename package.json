@@ -1,6 +1,6 @@
 {
   "name": "@brainstem-dev/brainstem",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "A lightweight decision and orchestration layer for autonomous AI agents.",
   "main": "src/core/brainstem.mjs",
   "exports": {
@@ -39,7 +39,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@brainstem-dev/sdk": "2.1.0",
+    "@brainstem-dev/sdk": "2.1.1",
     "@receptron/laya": "^0.1.1",
     "argon2": "^0.45.1",
     "kysely": "^0.29.6",

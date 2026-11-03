@@ -1,6 +1,6 @@
 {
   "name": "@brainstem-dev/plugin-agentos-runner",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Brainstem destination plugin: Run small bounded agent tasks in an agentOS VM (log triage, issue summaries).",
   "type": "module",
   "main": "index.mjs",
