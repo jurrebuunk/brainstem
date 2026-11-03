@@ -35,6 +35,7 @@ Changes:
 - `BRAINSTEM_SCHEMA_WAIT_MS`: core and API processes wait for migrations (or the database) instead of exiting.
 - `BRAINSTEM_TELEMETRY_URL` / `BRAINSTEM_TELEMETRY_TOKEN`: cores without a config file send telemetry to the API.
 - The Dockerfile builds the Web UI once on the build platform, and installs native dependencies per target platform.
+- The runtime image no longer contains npm, npx, corepack or yarn. Brainstem doesn't use them, and they carried known vulnerabilities in their bundled dependencies.
 
 ## 2.0.0-beta.1 — 2026-11-03
 

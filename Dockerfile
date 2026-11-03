@@ -40,6 +40,12 @@ COPY docs ./docs
 COPY web/server.mjs web/package.json ./web/
 COPY --from=web /app/web/dist ./web/dist
 
+# The runtime never uses npm or yarn: drop them (and its vulnerable bundled
+# dependencies) from the final image.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+    /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+    /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-*
+
 RUN mkdir -p /app/data \
   && chown -R node:node /app \
   && chmod +x /app/brainstem.mjs /app/brainstem-api.mjs
