@@ -1,0 +1,205 @@
+{{- if eq .Values.mode "single" }}
+{{- $selector := include "brainstem.componentSelector" (dict "root" . "component" "single") }}
+{{- $postgres := include "brainstem.postgres" . }}
+{{- $persist := and .Values.single.persistence.enabled (not .Values.single.persistence.existingClaim) }}
+{{- if $persist }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "brainstem.fullname" . }}-data
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" . "component" "single") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml .Values.single.persistence.accessModes | nindent 4 }}
+  {{- with .Values.single.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.single.persistence.size }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "brainstem.fullname" . }}
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" . "component" "single") | nindent 4 }}
+spec:
+  # One process owns SQLite (and the volume): never two at once.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- $selector | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "brainstem.componentLabels" (dict "root" . "component" "single") | nindent 8 }}
+        brainstem.io/role: core
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ toJson .Values.config | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "brainstem.serviceAccountName" (dict "root" . "component" "single") }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.single.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- $import := and (eq .Values.config.source "database") (ne .Values.config.import "never") }}
+      {{- if or $import (include "brainstem.modelInitContainer" .) }}
+      initContainers:
+        {{- include "brainstem.modelInitContainer" . | nindent 8 }}
+        {{- if $import }}
+        # Migrates (role all owns its schema) and seeds the config store.
+        - name: config-import
+          image: {{ include "brainstem.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - node
+            - brainstem.mjs
+            - config
+            - import
+            - --comment
+            - "helm {{ .Release.Name }} revision {{ .Release.Revision }}"
+            - --author
+            - helm
+            {{- if eq .Values.config.import "onInstall" }}
+            - --if-empty
+            {{- end }}
+          env:
+            {{- include "brainstem.env" (dict "root" . "role" "all" "memory" "" "extra" dict) | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "brainstem.volumeMounts" . | nindent 12 }}
+            - name: data
+              mountPath: /app/data
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: brainstem
+          image: {{ include "brainstem.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - node
+            - brainstem.mjs
+            - --role
+            - all
+            - --health-port
+            - {{ .Values.single.healthPort | quote }}
+            - --drain-timeout
+            - {{ .Values.single.drainTimeoutMs | quote }}
+          {{- $extra := dict
+              "BRAINSTEM_API" "1"
+              "BRAINSTEM_API_HOST" "0.0.0.0"
+              "BRAINSTEM_API_PORT" (toString .Values.single.port)
+              "BRAINSTEM_TRUSTED_PROXIES" .Values.api.trustedProxies
+              "BRAINSTEM_COOKIE_SECURE" (include "brainstem.cookieSecure" .)
+          }}
+          {{- if .Values.models.enabled }}
+          {{- $_ := set $extra "BRAINSTEM_LAYA_MODEL_DIR" .Values.models.path }}
+          {{- end }}
+          env:
+            - name: BRAINSTEM_CORE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- include "brainstem.env" (dict "root" . "role" "all" "memory" (dig "limits" "memory" "" .Values.single.resources) "extra" (mergeOverwrite $extra .Values.single.env)) | nindent 12 }}
+            - name: BRAINSTEM_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "brainstem.apiTokenSecretName" . }}
+                  key: {{ include "brainstem.apiTokenSecretKey" . }}
+          {{- with .Values.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.single.port }}
+            - name: health
+              containerPort: {{ .Values.single.healthPort }}
+          startupProbe:
+            httpGet: { path: /startupz, port: health }
+            periodSeconds: 5
+            failureThreshold: 120
+          readinessProbe:
+            httpGet: { path: /readyz, port: health }
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /livez, port: health }
+            periodSeconds: 15
+            failureThreshold: 4
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.single.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "brainstem.volumeMounts" . | nindent 12 }}
+            - name: data
+              mountPath: /app/data
+            {{- include "brainstem.modelMount" . | nindent 12 }}
+      volumes:
+        {{- include "brainstem.volumes" . | nindent 8 }}
+        - name: data
+          {{- if .Values.single.persistence.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.single.persistence.existingClaim }}
+          {{- else if .Values.single.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "brainstem.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- include "brainstem.modelVolume" . | nindent 8 }}
+      {{- with .Values.single.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.single.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.single.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "brainstem.fullname" . }}
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" . "component" "single") | nindent 4 }}
+spec:
+  selector:
+    {{- $selector | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.single.port }}
+      targetPort: http
+    - name: health
+      port: {{ .Values.single.healthPort }}
+      targetPort: health
+{{- end }}

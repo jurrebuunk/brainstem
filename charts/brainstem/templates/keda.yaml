@@ -1,0 +1,23 @@
+{{- if eq .Values.mode "cluster" }}
+{{- $postgresTrigger := false }}
+{{- range .Values.cores.groups }}
+{{- $group := mergeOverwrite (deepCopy $.Values.cores.defaults) (deepCopy .) }}
+{{- if and $group.autoscaling.enabled (eq $group.autoscaling.type "keda") (eq $group.autoscaling.keda.trigger "postgresql") }}
+{{- $postgresTrigger = true }}
+{{- end }}
+{{- end }}
+{{- if $postgresTrigger }}
+# KEDA reads the database URL from the same Secret the pods use.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "brainstem.fullname" . }}-keda-postgres
+  labels:
+    {{- include "brainstem.labels" . | nindent 4 }}
+spec:
+  secretTargetRef:
+    - parameter: connection
+      name: {{ include "brainstem.databaseSecretName" . }}
+      key: {{ include "brainstem.databaseSecretKey" . }}
+{{- end }}
+{{- end }}

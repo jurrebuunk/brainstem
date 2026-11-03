@@ -1,0 +1,82 @@
+suite: single mode
+templates:
+  - templates/single.yaml
+  - templates/migrate-job.yaml
+  - templates/web.yaml
+set:
+  mode: single
+tests:
+  - it: runs one role-all pod with SQLite on a volume
+    template: templates/single.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+      - contains:
+          path: spec.template.spec.containers[0].command
+          content: all
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BRAINSTEM_DATABASE_URL
+          any: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            persistentVolumeClaim:
+              claimName: RELEASE-NAME-brainstem-data
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: config-import
+
+  - it: keeps the data volume on uninstall
+    template: templates/single.yaml
+    documentSelector:
+      path: kind
+      value: PersistentVolumeClaim
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: uses Postgres when given a URL, and needs no migration Job
+    templates:
+      - templates/single.yaml
+      - templates/migrate-job.yaml
+    set:
+      database.url: postgres://u:p@pg/b
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BRAINSTEM_DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-brainstem-database
+                key: url
+        template: templates/single.yaml
+        documentSelector:
+          path: kind
+          value: Deployment
+      - hasDocuments:
+          count: 0
+        template: templates/migrate-job.yaml
+
+  - it: points the Web UI at the single pod
+    template: templates/web.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: WEB_BACKEND_URL
+            value: http://RELEASE-NAME-brainstem:5174

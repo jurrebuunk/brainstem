@@ -1,0 +1,39 @@
+{{- if and .Values.metrics.enabled .Values.metrics.serviceMonitor.enabled }}
+{{- $sm := .Values.metrics.serviceMonitor }}
+{{- $targets := list }}
+{{- if eq .Values.mode "single" }}
+{{- $targets = list (dict "name" (include "brainstem.fullname" .) "component" "single" "port" "http") }}
+{{- else }}
+{{- $targets = list (dict "name" (printf "%s-api" (include "brainstem.fullname" .)) "component" "api" "port" "http") (dict "name" (printf "%s-cores" (include "brainstem.fullname" .)) "component" "cores" "port" "health") }}
+{{- end }}
+{{- range $targets }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" $ "component" .component) | nindent 4 }}
+    {{- with $sm.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "brainstem.componentSelector" (dict "root" $ "component" .component) | nindent 6 }}
+  namespaceSelector:
+    matchNames: [{{ $.Release.Namespace | quote }}]
+  endpoints:
+    - port: {{ .port }}
+      path: /metrics
+      interval: {{ $sm.interval }}
+      scrapeTimeout: {{ $sm.scrapeTimeout }}
+      {{- if $.Values.metrics.token.existingSecret }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ $.Values.metrics.token.existingSecret }}
+          key: {{ $.Values.metrics.token.existingSecretKey }}
+      {{- end }}
+{{- end }}
+{{- end }}

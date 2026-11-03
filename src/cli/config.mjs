@@ -7,7 +7,7 @@ import { configModuleSource, loadConfigFile, specFromConfig } from "../config/so
 import { createConfigVersionStore } from "../config/versions.mjs";
 
 export const CONFIG_USAGE = `Usage:
-  brainstem config import [--file path] [--comment text] [--author name] [--no-activate]
+  brainstem config import [--file path] [--comment text] [--author name] [--no-activate] [--if-empty]
   brainstem config export [--version id] [--out path] [--format mjs|json]
   brainstem config list
   brainstem config show [id]
@@ -21,7 +21,9 @@ Config as versioned data (docs/configuration.md#versioned-config):
             unless --no-activate). Running cores reload it when they run
             with BRAINSTEM_CONFIG_SOURCE=database. Bootstrap settings
             (runtime.database, api, logging, telemetry, coreId, role,
-            queues) stay per process and are not stored.
+            queues) stay per process and are not stored. With --if-empty
+            nothing happens once any version exists (seeding on first
+            install, e.g. the Helm chart, never overwrites UI edits).
   export    Write a version (default: the active one) as a config module
             (--format mjs, default) or JSON. Without --out it is printed.
   activate  Point every core at an existing version (rollback).
@@ -52,6 +54,14 @@ export async function runConfig(positionals, options, io) {
 
     case "import":
       return withStore(options, io, async store => {
+        if (options["if-empty"]) {
+          const [existing] = await store.list({ limit: 1 });
+          if (existing) {
+            io.out(`Skipped: config version ${existing.id} already exists (--if-empty).`);
+            return 0;
+          }
+        }
+
         const loaded = await loadSpec(file, io);
         if (!loaded) return 1;
 

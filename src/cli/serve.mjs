@@ -10,6 +10,8 @@ import { openRuntimeDatabase } from "../runtime/bootstrap.mjs";
 import { createHealthServer } from "../runtime/health-server.mjs";
 import { createRuntimeLogger } from "../runtime/logger.mjs";
 import { BrainstemRuntime, normalizeCoreQueues } from "../runtime/runtime.mjs";
+import { configureMetrics } from "../observability/metrics.mjs";
+import { configureTracing } from "../observability/tracing.mjs";
 
 /*
  * Process roles (roadmap 4.1). One image, one binary:
@@ -81,6 +83,8 @@ export async function runApiProcess({
 
   // Same database as the runtime (runtime.database / BRAINSTEM_DATABASE_URL).
   const database = await openRuntimeDatabase(config, { migrate: migrate ?? shouldMigrate("api") });
+  configureMetrics({ role: "api" });
+  const tracer = configureTracing({ role: "api", logger: createRuntimeLogger(config.runtime?.logging ?? {}) });
   const api = createBackendApiServer({ ...apiConfig, database });
   await api.listen();
 
@@ -94,6 +98,7 @@ export async function runApiProcess({
       await api.drain({ delayMs: Number(process.env.BRAINSTEM_DRAIN_DELAY_MS ?? 0) }).catch(() => {});
     }
     await api.close().catch(() => {});
+    await tracer.shutdown().catch(() => {});
     await database.close().catch(() => {});
     process.exit(0);
   });
@@ -135,6 +140,13 @@ export async function runCoreProcess({
   const queues = normalizeCoreQueues(
     queuesFlag ?? process.env.BRAINSTEM_QUEUES ?? bootstrap.runtime?.queues ?? (role === "all" ? "all" : null)
   );
+
+  configureMetrics({ role });
+  const tracer = configureTracing({
+    role,
+    instanceId: bootstrap.runtime?.coreId ?? process.env.BRAINSTEM_CORE_ID ?? null,
+    logger
+  });
 
   /*
    * One database handle for the runtime and the embedded backend
@@ -232,7 +244,10 @@ export async function runCoreProcess({
         host: healthHost ?? process.env.BRAINSTEM_HEALTH_HOST ?? "0.0.0.0",
         port: Number(port),
         runtime,
-        logger
+        logger,
+        // role all is the whole cluster; core leaves the shared
+        // gauges to the API so they are not reported N times.
+        clusterDatabase: role === "all" && !backendApi ? database : null
       });
       await health.listen();
     }
@@ -281,6 +296,7 @@ export async function runCoreProcess({
     await runtime?.close();
     await health?.close();
     await backendApi?.close();
+    await tracer.shutdown().catch(() => {});
     await database.close();
   }
 }

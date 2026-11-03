@@ -219,9 +219,38 @@ The API never writes or executes the config file: mount it read-only. To edit co
 
 ## Cluster roles
 
-The same image runs every role: `node brainstem.mjs --role core --queues deliver`, `--role api`, `--role web`. The Laya model is published as `ghcr.io/jurrebuunk/brainstem-models:laya-<version>` for mounting at `/models` (`BRAINSTEM_LAYA_MODEL_DIR=/models`). See [Cluster mode](cluster.md).
+The same image runs every role: `node brainstem.mjs --role core --queues deliver`, `--role api`, `--role web`. The Laya model is published as `ghcr.io/jurrebuunk/brainstem-models:laya-<version>` for mounting at `/models` (`BRAINSTEM_LAYA_MODEL_DIR=/models`). See [Cluster mode](cluster.md). For Kubernetes, use the [Helm chart](kubernetes.md).
+
+## Cluster mode
+
+[`docker-compose.cluster.yml`](../docker-compose.cluster.yml) runs the cluster process model on one machine, the same processes as the Helm chart:
+
+| Service | |
+|---|---|
+| `postgres` | the database |
+| `migrate` | runs `brainstem migrate`, then stores `./brainstem.config.mjs` as the first config version (`config import --if-empty`, so it never overwrites later edits) |
+| `models` | fills the `laya-model` volume from the `brainstem-models` image |
+| `api` | REST, SSE and config versions |
+| `web` | the Web UI on `127.0.0.1:5173` |
+| `core-poll`, `core-decide`, `core-deliver` | one stage each; only `core-decide` mounts the model |
+
+```sh
+cp brainstem.config.example.mjs brainstem.config.mjs    # the seed; leave runtime.database out
+docker compose -f docker-compose.cluster.yml up -d
+docker compose -f docker-compose.cluster.yml up -d --scale core-deliver=3
+```
+
+The config lives in Postgres: edit it in the Web UI, and every core reloads it. The runtime processes get their bootstrap settings from the environment, not from a config file. `--profile observability` adds Prometheus (`:9090`) and Jaeger (`:16686`; set `OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318` in `.env`); see [Observability](observability.md). After changing the models image, remove the `laya-model` volume so it is filled again.
 
 ## Verify published image
+
+Images are multi-arch (`linux/amd64`, `linux/arm64`), signed with cosign (keyless, GitHub OIDC) and carry SBOM and provenance attestations:
+
+```sh
+cosign verify ghcr.io/jurrebuunk/brainstem:v2.0.0-rc.1 \
+  --certificate-identity-regexp 'https://github.com/jurrebuunk/brainstem/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
 
 ```sh
 docker manifest inspect ghcr.io/jurrebuunk/brainstem:v1.4.0

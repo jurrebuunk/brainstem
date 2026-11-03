@@ -202,7 +202,8 @@ export function createDestinationContext({
   id,
   idempotencyKey = null,
   attempt = 1,
-  emit
+  emit,
+  traceparent = null
 } = {}) {
   return {
     config,
@@ -210,6 +211,9 @@ export function createDestinationContext({
     logger,
     idempotencyKey,
     attempt,
+    // W3C trace context of this delivery when tracing is on; forward
+    // it (e.g. as the `traceparent` header) to continue the trace.
+    traceparent,
     // emit(observation): hand an observation back to the core
     // (see docs/delivery-pipeline.md). Only set by the runtime.
     ...(emit ? { emit } : {}),

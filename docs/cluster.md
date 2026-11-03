@@ -4,6 +4,8 @@ Brainstem runs as one process by default (`--role all`, SQLite). Cluster mode ru
 
 Single-node mode is unchanged and stays first-class: nothing on this page is needed for it.
 
+To deploy it, use the [Helm chart](kubernetes.md) on Kubernetes or [`docker-compose.cluster.yml`](docker.md#cluster-mode) on one machine. [Observability](observability.md) covers metrics, alerts and traces.
+
 ## Roles
 
 ```
@@ -76,6 +78,7 @@ A second signal aborts at once. The API fails readiness, ends SSE streams so cli
 | `/livez` | the event loop is alive. Never touches the database, so a database outage doesn't restart pods. |
 | `/readyz` | started, not draining, database reachable within 2 s |
 | `/startupz` | started: schema checked, plugins and (for `decide`) the model loaded |
+| `/metrics` | Prometheus metrics ([Observability](observability.md)) |
 
 ## Real-time UI across replicas
 
@@ -121,3 +124,7 @@ On older clusters, copy it into an `emptyDir` with an init container (`cp -r /mo
 | `BRAINSTEM_LAYA_MODEL_DIR` | – | mounted model directory |
 | `BRAINSTEM_CONFIG_CHECK_MS` | `30000` | fallback check for config changes |
 | `BRAINSTEM_DRAIN_DELAY_MS` | `0` | API: wait after failing readiness |
+| `BRAINSTEM_SCHEMA_WAIT_MS` | `0` | core/api: keep retrying an outdated schema or unreachable database this long instead of exiting |
+| `BRAINSTEM_TELEMETRY_URL` / `_TOKEN` | – | where cores send telemetry (the API's `/api/events`) without a config file |
+| `BRAINSTEM_METRICS` / `_TOKEN` | on / – | `GET /metrics`; optional bearer token ([Observability](observability.md)) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | – | OTLP/HTTP traces ([Observability](observability.md#tracing)) |

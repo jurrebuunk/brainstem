@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased
+
+Kubernetes and operations (roadmap Phase 4): a Helm chart for single-node and cluster deployments, Prometheus metrics, OpenTelemetry traces across cores, a Compose file for cluster mode, and signed multi-arch images. See [Kubernetes](docs/kubernetes.md) and [Observability](docs/observability.md).
+
+Upgrading:
+
+- No migrations. `GET /metrics` is on by default on the API port and the core health port. Keep it off public ingresses, set `BRAINSTEM_METRICS_TOKEN`, or turn it off with `BRAINSTEM_METRICS=false`.
+- Job payloads gain an optional `trace` (W3C `traceparent`) when tracing is on. Older cores ignore it.
+
+Changes:
+
+- **Helm chart** (`charts/brainstem`, published as `oci://ghcr.io/<owner>/charts/brainstem` on release):
+  - modes: `mode: single` (one `role all` pod, SQLite on a kept PVC or Postgres) and `mode: cluster` (api, web and core worker groups from `cores.groups`, each running chosen stages);
+  - autoscaling: KEDA `ScaledObject`s on due jobs and oldest-job age (PostgreSQL or Prometheus trigger), an HPA for the API and poll-only groups;
+  - database: CloudNativePG `Cluster` or an external Postgres;
+  - migrations as a pre-install/pre-upgrade hook (a regular Job with CloudNativePG), config seeded with `config import --if-empty`;
+  - the model mounted from the `brainstem-models` image (init container or image volume);
+  - availability and security: PDBs, topology spread, preStop + drain, default-deny NetworkPolicies, non-root read-only pods without service account tokens;
+  - monitoring and access: ServiceMonitor, PrometheusRule alerts (no healthy core, API down, queue backlog, delivery failures, dead jobs, overdue inputs, event-loop lag), a Grafana dashboard ConfigMap, ingress with SSE-friendly defaults;
+  - safety nets: `values.schema.json`, and a `helm test` smoke test.
+- **Prometheus metrics** on `GET /metrics`:
+  - per core: polls, poll duration, observations, lease lag, decisions, job duration and failures, deliveries by destination and outcome, in-flight jobs;
+  - cluster-wide from the API: queue depth, delayed, running and dead jobs, oldest-job age, cores per status and queue, input states and schedule lag, the delivery log;
+  - process metrics, including event-loop lag.
+
+  An in-house registry, no dependencies ([ADR-0009](docs/adr/0009-in-house-metrics-and-tracing.md)).
+- **OpenTelemetry tracing:** `poll → decide → deliver` spans form one trace per envelope across cores, continued through `traceparent` stored in job payloads (handoffs included). Spans are exported as OTLP/HTTP JSON, configured by the standard `OTEL_*` variables; off without an endpoint. JSON log lines inside a span carry `trace_id`/`span_id`. Destinations get `ctx.traceparent`, and `http-json` forwards it as a `traceparent` header.
+- **`docker-compose.cluster.yml`:** Postgres, migrate + config seed, the model volume, API, Web UI and one core per stage. `--profile observability` adds Prometheus and Jaeger.
+- **CI:**
+  - chart: `helm lint`, helm-unittest, `ct lint`, kubeconform against several Kubernetes versions with CRD schemas, and `ct install` on kind with CloudNativePG and KEDA;
+  - images: multi-arch (amd64, arm64), cosign keyless signatures, SBOM and provenance, and Trivy scans (pull requests fail on fixable critical and high findings).
+- `brainstem config import --if-empty` seeds the config store only while it is empty.
+- `BRAINSTEM_SCHEMA_WAIT_MS`: core and API processes wait for migrations (or the database) instead of exiting.
+- `BRAINSTEM_TELEMETRY_URL` / `BRAINSTEM_TELEMETRY_TOKEN`: cores without a config file send telemetry to the API.
+- The Dockerfile builds the Web UI once on the build platform, and installs native dependencies per target platform.
+- The runtime image no longer contains npm, npx, corepack or yarn. Brainstem doesn't use them, and they carried known vulnerabilities in their bundled dependencies.
+
 ## 2.0.0-beta.1 — 2026-11-03
 
 Multi-core (roadmap Phase 3). Brainstem runs as several processes on one Postgres database: input polling, decisions and deliveries are shared across cores, a lost core loses nothing, and config is versioned data that every core hot-reloads. Single-node mode (`--role all`, SQLite) works as before. See [Cluster mode](docs/cluster.md).

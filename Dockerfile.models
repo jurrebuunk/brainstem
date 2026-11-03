@@ -7,7 +7,8 @@
 #
 # Point Brainstem at it with BRAINSTEM_LAYA_MODEL_DIR=/models (or
 # runtime.laya.modelDir); nothing is downloaded at start.
-FROM alpine:3.22 AS fetch
+# Downloaded once on the build host, whatever the target platforms.
+FROM --platform=$BUILDPLATFORM alpine:3.22 AS fetch
 
 ARG LAYA_REPO=receptron/laya-onnx
 ARG LAYA_REVISION=main

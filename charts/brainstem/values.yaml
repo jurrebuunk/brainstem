@@ -1,0 +1,355 @@
+# Brainstem Helm chart. See charts/brainstem/README.md and
+# docs/kubernetes.md for a walkthrough.
+
+# single:  one `role all` pod (inputs, decisions, deliveries and the API)
+#          plus the Web UI. SQLite on a volume by default, or Postgres.
+# cluster: api, web and core Deployments on Postgres; cores scale out
+#          in worker groups (cores.groups), optionally with KEDA.
+mode: cluster
+
+image:
+  repository: ghcr.io/jurrebuunk/brainstem
+  # Defaults to v<Chart.appVersion>.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+commonLabels: {}
+podAnnotations: {}
+podLabels: {}
+
+# Extra environment for every Brainstem container (api, cores, single,
+# jobs). Secrets for plugins (GITHUB_TOKEN, MATRIX_ACCESS_TOKEN,
+# AGENTOS_MODEL_API_KEY, ...) belong in a Secret referenced from envFrom.
+env: {}
+extraEnv: []
+envFrom: []
+#  - secretRef:
+#      name: brainstem-plugin-secrets
+
+# Extra volumes for every Brainstem container, e.g. custom plugins.
+extraVolumes: []
+extraVolumeMounts: []
+
+log:
+  level: info
+  # json: one object per line with trace_id/span_id when tracing is on.
+  format: json
+
+config:
+  # database: versioned config in Postgres/SQLite, edited in the Web UI;
+  #           every core hot-reloads the active version.
+  # file:     the module below is the config; the UI is read-only
+  #           (GitOps). Changing it rolls the pods.
+  source: database
+  # database source only: seed the store with the module below.
+  #   onInstall  only while no version exists (never overwrites UI edits)
+  #   always     store it on every install/upgrade (a no-op when unchanged)
+  #   never      manage versions yourself (brainstem config import, the UI)
+  import: onInstall
+  # The config module (brainstem.config.mjs). It must export plain data.
+  # Bootstrap settings (database, logging, api) come from this chart's
+  # environment, so leave them out.
+  file: |
+    // The example pipeline from the image: a log destination, no inputs.
+    // Add inputs and destinations here or, with config.source
+    // "database", in the Web UI.
+    import example from "/app/brainstem.config.example.mjs";
+
+    const {database, logging, api, ...runtime} = example.runtime;
+
+    export default {...example, runtime};
+  # Use an existing ConfigMap instead (key: brainstem.config.mjs).
+  existingConfigMap: ""
+
+database:
+  # Postgres URL (cluster mode needs Postgres; single mode uses SQLite
+  # on the data volume when this is empty and cnpg is off). Prefer
+  # existingSecret. LISTEN/NOTIFY and advisory locks need a direct
+  # connection or a session-mode pooler, not a transaction pool.
+  url: ""
+  existingSecret: ""
+  existingSecretKey: url
+
+# CloudNativePG: let the operator run Postgres for this release (the
+# operator must be installed). Brainstem connects with the generated
+# <release>-pg-app secret.
+cnpg:
+  enabled: false
+  instances: 3
+  imageName: ""
+  storage:
+    size: 10Gi
+    storageClass: ""
+  resources: {}
+  # Extra spec for the Cluster resource (postgresql parameters, backup, ...).
+  spec: {}
+
+migrations:
+  # Run `brainstem migrate` as a Job before api and cores start
+  # (cluster mode, or single mode on Postgres). It is a pre-install /
+  # pre-upgrade hook, except with cnpg (the database does not exist
+  # yet at pre-install): then it is a regular Job and pods wait for the
+  # schema (BRAINSTEM_SCHEMA_WAIT_MS).
+  enabled: true
+  backoffLimit: 10
+  activeDeadlineSeconds: 900
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 256Mi}
+  # How long api and core pods wait for the schema before failing.
+  schemaWaitSeconds: 600
+
+# The Laya model as an OCI image (ADR-0006), mounted where Brainstem
+# decides (decide cores, single). Without it each pod downloads ~1.9 GB
+# on its first start.
+models:
+  enabled: true
+  image:
+    repository: ghcr.io/jurrebuunk/brainstem-models
+    tag: laya-0.1.1
+    pullPolicy: IfNotPresent
+  # initContainer: copy into an emptyDir (works everywhere).
+  # imageVolume:   mount the image directly (Kubernetes >= 1.33 with
+  #                the ImageVolume feature, on by default from 1.35).
+  mount: initContainer
+  path: /models
+  sizeLimit: 4Gi
+  # The copy's page cache counts against its memory limit: keep the
+  # limit well above a small request, or a 1.7 GB copy gets OOMKilled.
+  initResources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 2Gi}
+
+api:
+  replicas: 2
+  port: 5174
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 512Mi}
+  # Machine token for POST /api/events (cores send telemetry with it).
+  # Generated and kept in a Secret when neither is set.
+  token:
+    value: ""
+    existingSecret: ""
+    existingSecretKey: token
+  # Proxies whose X-Forwarded-For is trusted for the login rate limit:
+  # the web pods and the ingress controller.
+  trustedProxies: "loopback,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fd00::/8"
+  # Secure cookies; null: on when the ingress has TLS.
+  cookieSecure: null
+  # Seconds readiness fails before the API stops on SIGTERM.
+  drainDelaySeconds: 5
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  pdb:
+    enabled: true
+    maxUnavailable: 1
+  service:
+    type: ClusterIP
+    port: 5174
+  env: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  terminationGracePeriodSeconds: 30
+
+web:
+  enabled: true
+  replicas: 2
+  port: 5173
+  resources:
+    requests: {cpu: 25m, memory: 64Mi}
+    limits: {memory: 128Mi}
+  pdb:
+    enabled: true
+    maxUnavailable: 1
+  service:
+    type: ClusterIP
+    port: 80
+  env: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Core worker groups (cluster mode). Each becomes a Deployment
+# <release>-core-<name> running the given stages:
+#   poll     claim due inputs by lease and poll them
+#   decide   Laya decisions (loads the model: give it memory)
+#   deliver  destinations (slow external calls, retries)
+# Fields left out come from cores.defaults. Replace the list to split
+# stages, e.g.:
+#   groups:
+#     - { name: poll, queues: [poll], replicas: 2 }
+#     - { name: decide, queues: [decide], autoscaling: { enabled: true, maxReplicas: 6 } }
+#     - { name: deliver, queues: [deliver], resources: { requests: { memory: 256Mi } } }
+cores:
+  groups:
+    - name: all
+      queues: [poll, decide, deliver]
+  defaults:
+    replicas: 2
+    # Decide jobs at once per pod, each with its own Laya worker thread.
+    decideConcurrency: null
+    # Ms in-flight work may take to finish on SIGTERM.
+    drainTimeoutMs: 45000
+    preStopSleepSeconds: 8
+    terminationGracePeriodSeconds: 75
+    healthPort: 8081
+    # Memory request = limit (no OOM surprises); generous for the model.
+    resources:
+      requests: {cpu: 250m, memory: 3Gi}
+      limits: {memory: 3Gi}
+    # Groups without decide need far less.
+    resourcesWithoutModel:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {memory: 512Mi}
+    autoscaling:
+      enabled: false
+      # keda: scale on queue depth and oldest-job age (decide/deliver).
+      # hpa:  CPU (e.g. poll-only groups).
+      type: keda
+      minReplicas: 2
+      maxReplicas: 10
+      keda:
+        pollingInterval: 15
+        cooldownPeriod: 300
+        # One replica per this many due jobs ...
+        readyPerReplica: 20
+        # ... and per this many seconds the oldest due job has waited.
+        oldestAgeSeconds: 60
+        # postgresql: query the jobs table (no Prometheus needed).
+        # prometheus: use brainstem_queue_* from the API's /metrics.
+        trigger: postgresql
+        prometheus:
+          serverAddress: http://prometheus-operated.monitoring.svc:9090
+        advanced: {}
+      hpa:
+        targetCPUUtilizationPercentage: 70
+    pdb:
+      enabled: true
+      maxUnavailable: 1
+    env: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+
+single:
+  port: 5174
+  healthPort: 8081
+  resources:
+    requests: {cpu: 250m, memory: 3Gi}
+    limits: {memory: 3Gi}
+  drainTimeoutMs: 25000
+  terminationGracePeriodSeconds: 45
+  # SQLite and the model cache live here (when not on Postgres).
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    existingClaim: ""
+  env: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Spread replicas across nodes (and zones where available).
+topologySpread:
+  enabled: true
+  maxSkew: 1
+  whenUnsatisfiable: ScheduleAnyway
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+serviceAccount:
+  # One ServiceAccount per role, without an API token (Brainstem never
+  # talks to the Kubernetes API).
+  create: true
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations:
+    # SSE (live telemetry) through ingress-nginx: no buffering, long reads.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  hosts:
+    - host: brainstem.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: brainstem-tls
+  #    hosts: [brainstem.example.com]
+
+networkPolicy:
+  # Default-deny for Brainstem pods with the traffic they need allowed.
+  enabled: false
+  # Who may reach the Web UI (the ingress controller).
+  webFrom:
+    - namespaceSelector: {}
+  # Prometheus scraping /metrics.
+  metricsFrom:
+    - namespaceSelector: {}
+  # Postgres; empty `to` allows any address on the port.
+  postgres:
+    port: 5432
+    to: []
+  # Cores reach inputs and destinations anywhere by default.
+  coreEgress:
+    - {}
+  # Extra egress for api and cores (e.g. an OTLP collector).
+  extraEgress: []
+
+metrics:
+  # GET /metrics on the API port and the core health port.
+  enabled: true
+  # Bearer token for /metrics (Secret name/key), optional.
+  token:
+    existingSecret: ""
+    existingSecretKey: token
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+  prometheusRule:
+    enabled: false
+    labels: {}
+    # Alert thresholds.
+    queueAgeSeconds: 300
+    inputLagSeconds: 300
+    deliveryFailureRatio: 0.2
+    eventLoopLagSeconds: 1
+  grafanaDashboard:
+    # A ConfigMap the Grafana sidecar picks up.
+    enabled: false
+    labels:
+      grafana_dashboard: "1"
+    annotations: {}
+
+tracing:
+  # OTLP/HTTP endpoint, e.g. http://otel-collector.observability:4318.
+  endpoint: ""
+  headers: ""
+  sampleRatio: 1

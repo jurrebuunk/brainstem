@@ -1,0 +1,264 @@
+{{- if eq .Values.mode "cluster" }}
+{{- $names := list }}
+{{- range $raw := .Values.cores.groups }}
+{{- $group := mergeOverwrite (deepCopy $.Values.cores.defaults) (deepCopy $raw) }}
+{{- if not $group.name }}{{ fail "every cores.groups entry needs a name" }}{{ end }}
+{{- if has $group.name $names }}{{ fail (printf "duplicate cores.groups name %q" $group.name) }}{{ end }}
+{{- $names = append $names $group.name }}
+{{- range $group.queues }}
+{{- if not (has . (list "poll" "decide" "deliver")) }}{{ fail (printf "cores.groups %q: unknown queue %q (use poll, decide, deliver)" $group.name .) }}{{ end }}
+{{- end }}
+{{- $decides := has "decide" $group.queues }}
+{{- $resources := $group.resources }}
+{{- if and (not $decides) (not (hasKey $raw "resources")) }}{{ $resources = $group.resourcesWithoutModel }}{{ end }}
+{{- $component := printf "core-%s" $group.name }}
+{{- $name := printf "%s-%s" (include "brainstem.fullname" $) $component | trunc 63 | trimSuffix "-" }}
+{{- $selector := include "brainstem.componentSelector" (dict "root" $ "component" $component) }}
+{{- $pipelineQueues := without $group.queues "poll" }}
+{{- $autoscaling := $group.autoscaling }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" $ "component" $component) | nindent 4 }}
+    brainstem.io/role: core
+    brainstem.io/queues: {{ join "." $group.queues | quote }}
+spec:
+  {{- if not $autoscaling.enabled }}
+  replicas: {{ $group.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- $selector | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "brainstem.componentLabels" (dict "root" $ "component" $component) | nindent 8 }}
+        brainstem.io/role: core
+        {{- with $.Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ toJson $.Values.config | sha256sum }}
+        {{- with $.Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "brainstem.serviceAccountName" (dict "root" $ "component" "core") }}
+      automountServiceAccountToken: false
+      # Longer than preStop + drain, so in-flight jobs finish.
+      terminationGracePeriodSeconds: {{ $group.terminationGracePeriodSeconds }}
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+      {{- include "brainstem.topologySpread" (dict "root" $ "selector" $selector) | nindent 6 }}
+      {{- if $decides }}
+      {{- with include "brainstem.modelInitContainer" $ }}
+      initContainers:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      containers:
+        - name: core
+          image: {{ include "brainstem.image" $ }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command:
+            - node
+            - brainstem.mjs
+            - --role
+            - core
+            - --queues
+            - {{ join "," $group.queues | quote }}
+            - --health-port
+            - {{ $group.healthPort | quote }}
+            - --drain-timeout
+            - {{ $group.drainTimeoutMs | quote }}
+            {{- if and $decides $group.decideConcurrency }}
+            - --decide-concurrency
+            - {{ $group.decideConcurrency | quote }}
+            {{- end }}
+          {{- $extra := dict
+              "BRAINSTEM_MIGRATE" "false"
+              "BRAINSTEM_SCHEMA_WAIT_MS" (toString (mul $.Values.migrations.schemaWaitSeconds 1000))
+              "BRAINSTEM_TELEMETRY_URL" (printf "%s/api/events" (include "brainstem.apiUrl" $))
+          }}
+          {{- if and $decides $.Values.models.enabled }}
+          {{- $_ := set $extra "BRAINSTEM_LAYA_MODEL_DIR" $.Values.models.path }}
+          {{- end }}
+          env:
+            # The pod name is the core id in the registry and the Web UI.
+            - name: BRAINSTEM_CORE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- include "brainstem.env" (dict "root" $ "role" "core" "memory" (dig "limits" "memory" "" $resources) "extra" (mergeOverwrite $extra $group.env)) | nindent 12 }}
+            - name: BRAINSTEM_TELEMETRY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "brainstem.apiTokenSecretName" $ }}
+                  key: {{ include "brainstem.apiTokenSecretKey" $ }}
+          {{- with $.Values.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: health
+              containerPort: {{ $group.healthPort }}
+          # Startup covers the schema wait and loading the model.
+          startupProbe:
+            httpGet: { path: /startupz, port: health }
+            periodSeconds: 5
+            failureThreshold: {{ add 60 (div $.Values.migrations.schemaWaitSeconds 5) }}
+          readinessProbe:
+            httpGet: { path: /readyz, port: health }
+            periodSeconds: 5
+            failureThreshold: 2
+          # Event loop only, never the database.
+          livenessProbe:
+            httpGet: { path: /livez, port: health }
+            periodSeconds: 15
+            failureThreshold: 4
+          lifecycle:
+            preStop:
+              exec:
+                # Let endpoints and scrapers notice before draining.
+                command: ["sleep", {{ $group.preStopSleepSeconds | quote }}]
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml $resources | nindent 12 }}
+          volumeMounts:
+            {{- include "brainstem.volumeMounts" $ | nindent 12 }}
+            - name: data
+              mountPath: /app/data
+            {{- if $decides }}
+            {{- include "brainstem.modelMount" $ | nindent 12 }}
+            {{- end }}
+      volumes:
+        {{- include "brainstem.volumes" $ | nindent 8 }}
+        - name: data
+          emptyDir: {}
+        {{- if $decides }}
+        {{- include "brainstem.modelVolume" $ | nindent 8 }}
+        {{- end }}
+      {{- with $group.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $group.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $group.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if $group.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  maxUnavailable: {{ $group.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- $selector | nindent 6 }}
+{{- end }}
+{{- if $autoscaling.enabled }}
+{{- if eq $autoscaling.type "hpa" }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $name }}
+  minReplicas: {{ $autoscaling.minReplicas }}
+  maxReplicas: {{ $autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $autoscaling.hpa.targetCPUUtilizationPercentage }}
+{{- else if eq $autoscaling.type "keda" }}
+{{- if not $pipelineQueues }}
+{{- fail (printf "cores.groups %q: KEDA scales on the decide/deliver queues; use autoscaling.type hpa for a poll-only group" $group.name) }}
+{{- end }}
+{{- $keda := $autoscaling.keda }}
+{{- $queueList := printf "'%s'" (join "','" $pipelineQueues) }}
+{{- $nowMs := "(extract(epoch from now()) * 1000)::bigint" }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ $name }}
+  minReplicaCount: {{ $autoscaling.minReplicas }}
+  maxReplicaCount: {{ $autoscaling.maxReplicas }}
+  pollingInterval: {{ $keda.pollingInterval }}
+  cooldownPeriod: {{ $keda.cooldownPeriod }}
+  {{- with $keda.advanced }}
+  advanced:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  triggers:
+    {{- if eq $keda.trigger "prometheus" }}
+    - type: prometheus
+      name: ready
+      metadata:
+        serverAddress: {{ $keda.prometheus.serverAddress | quote }}
+        query: {{ printf "sum(max by (queue) (brainstem_queue_ready{namespace=%q,queue=~%q}))" $.Release.Namespace (join "|" $pipelineQueues) | quote }}
+        threshold: {{ $keda.readyPerReplica | quote }}
+    - type: prometheus
+      name: oldest-age
+      metadata:
+        serverAddress: {{ $keda.prometheus.serverAddress | quote }}
+        query: {{ printf "max(brainstem_queue_oldest_age_seconds{namespace=%q,queue=~%q})" $.Release.Namespace (join "|" $pipelineQueues) | quote }}
+        threshold: {{ $keda.oldestAgeSeconds | quote }}
+    {{- else if eq $keda.trigger "postgresql" }}
+    # Due jobs waiting for a core.
+    - type: postgresql
+      name: ready
+      metadata:
+        query: {{ printf "SELECT count(*) FROM jobs WHERE state = 'ready' AND queue IN (%s) AND run_at <= %s" $queueList $nowMs | quote }}
+        targetQueryValue: {{ $keda.readyPerReplica | quote }}
+        activationTargetQueryValue: "0"
+      authenticationRef:
+        name: {{ include "brainstem.fullname" $ }}-keda-postgres
+    # Seconds the oldest due job has waited.
+    - type: postgresql
+      name: oldest-age
+      metadata:
+        query: {{ printf "SELECT COALESCE(EXTRACT(EPOCH FROM now()) - MIN(run_at) / 1000.0, 0) FROM jobs WHERE state = 'ready' AND queue IN (%s) AND run_at <= %s" $queueList $nowMs | quote }}
+        targetQueryValue: {{ $keda.oldestAgeSeconds | quote }}
+        activationTargetQueryValue: "0"
+      authenticationRef:
+        name: {{ include "brainstem.fullname" $ }}-keda-postgres
+    {{- else }}
+    {{- fail (printf "cores.groups %q: autoscaling.keda.trigger must be postgresql or prometheus" $group.name) }}
+    {{- end }}
+{{- else }}
+{{- fail (printf "cores.groups %q: autoscaling.type must be keda or hpa" $group.name) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

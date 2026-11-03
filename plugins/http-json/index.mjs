@@ -10,6 +10,7 @@ export default defineDestinationPlugin({
        * POSTs the brainstem.output envelope as-is. The
        * Idempotency-Key header is the same on every retry of
        * one delivery, so the receiver can drop duplicates.
+       * With tracing on, `traceparent` continues the trace.
        */
       async handle(ctx, output) {
         const config = normalizeConfig(ctx.config);
@@ -20,6 +21,7 @@ export default defineDestinationPlugin({
           headers: {
             "content-type": "application/json",
             ...(ctx.idempotencyKey ? { "idempotency-key": ctx.idempotencyKey } : {}),
+            ...(ctx.traceparent ? { traceparent: ctx.traceparent } : {}),
             ...config.headers
           },
           body: JSON.stringify(output)

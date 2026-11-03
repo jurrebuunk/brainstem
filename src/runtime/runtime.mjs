@@ -37,6 +37,9 @@ import {
   nextDueAt
 } from "./input-leases.mjs";
 import { withSingletonLock } from "../db/locks.mjs";
+import { defaultRegistry } from "../observability/metrics.mjs";
+import { runtimeMetrics } from "../observability/brainstem-metrics.mjs";
+import { SPAN_KIND, defaultTracer } from "../observability/tracing.mjs";
 import { Brainstem } from "../core/brainstem.mjs";
 export { loadDestinationPlugin, loadInputPlugin } from "./plugin-loader.mjs";
 import {
@@ -127,7 +130,9 @@ export class BrainstemRuntime {
     pipeline,
     role,
     queues,
-    configVersion = null
+    configVersion = null,
+    metrics,
+    tracer
   } = {}) {
     if (!brainstem && !config) {
       throw new Error(
@@ -349,9 +354,19 @@ export class BrainstemRuntime {
     this.inputsById = new Map();
     this.warnedV1Plugins = new Set();
     this.telemetry = createTelemetrySink(
-      this.config.runtime?.telemetry
+      this.config.runtime?.telemetry ?? undefined
     );
     this.telemetryInterval = null;
+
+    /*
+     * Prometheus metrics (process registry unless injected) and
+     * OpenTelemetry tracing (off unless OTEL_EXPORTER_OTLP_ENDPOINT
+     * is set). See docs/observability.md.
+     */
+    this.metricsRegistry = metrics ?? defaultRegistry();
+    this.metrics = runtimeMetrics(this.metricsRegistry);
+    this.tracer = tracer ?? defaultTracer();
+    this.removeMetricsCollector = null;
   }
 
   async start({ signal } = {}) {
@@ -391,6 +406,7 @@ export class BrainstemRuntime {
 
     this.#startWork();
     this.started = true;
+    this.#startMetrics();
 
     this.logger.info?.(
       "runtime started",
@@ -542,6 +558,7 @@ export class BrainstemRuntime {
     if (this.draining) return;
 
     this.draining = true;
+    this.metrics.draining.set({}, 1);
 
     this.logger.info?.(
       "runtime draining",
@@ -960,6 +977,10 @@ export class BrainstemRuntime {
 
     await this.#stopCoreHeartbeat();
 
+    this.removeMetricsCollector?.();
+    this.removeMetricsCollector = null;
+    await this.tracer.flush().catch(() => {});
+
     await this.brainstem.close();
     await this.checkpointStore.close?.();
     await this.transport.close?.();
@@ -1141,6 +1162,11 @@ export class BrainstemRuntime {
    * aborts the poll), then release it with the next due time.
    */
   async #pollLeased(loaded, lease, signal, { rethrow = false } = {}) {
+    this.metrics.leaseLag.set(
+      { input: lease.id },
+      Math.max(0, (Date.now() - lease.nextDueAt) / 1000)
+    );
+
     const controller = new AbortController();
     const onAbort = () => controller.abort(signal.reason);
 
@@ -1532,7 +1558,45 @@ export class BrainstemRuntime {
     }
   }
 
-  async #pollInput({
+  /*
+   * One poll attempt in its own trace (the root of every envelope
+   * it emits), timed and counted per input.
+   */
+  async #pollInput(args) {
+    const started = performance.now();
+
+    try {
+      await this.tracer.span(
+        `poll ${args.checkpointKey}`,
+        {
+          parent: null,
+          attributes: {
+            "brainstem.input.id": args.checkpointKey,
+            "brainstem.input.plugin": args.plugin.name,
+            "brainstem.input.name": args.inputName,
+            "brainstem.core.id": this.coreId,
+            ...(args.lease ? { "brainstem.lease.epoch": args.lease.epoch } : {})
+          }
+        },
+        span => this.#pollInputOnce(args, span)
+      );
+      this.metrics.polls.inc({ input: args.checkpointKey, outcome: "ok" });
+    }
+    catch (error) {
+      if (!args.signal.aborted) {
+        this.metrics.polls.inc({ input: args.checkpointKey, outcome: "failed" });
+      }
+      throw error;
+    }
+    finally {
+      this.metrics.pollDuration.observe(
+        { input: args.checkpointKey },
+        (performance.now() - started) / 1000
+      );
+    }
+  }
+
+  async #pollInputOnce({
     entry,
     plugin,
     inputName,
@@ -1540,7 +1604,7 @@ export class BrainstemRuntime {
     signal,
     checkpointKey,
     lease = null
-  }) {
+  }, span) {
     const checkpoint =
       createDeferredCheckpoint({
         store: this.checkpointStore,
@@ -1631,6 +1695,7 @@ export class BrainstemRuntime {
           // Stable across decide retries, unique per emission.
           emissionId: randomUUID(),
           pollId,
+          ...(span.traceparent ? { trace: span.traceparent } : {}),
           origin: { kind: "input", id: checkpointKey },
           input: {
             id: checkpointKey,
@@ -1674,6 +1739,14 @@ export class BrainstemRuntime {
       }
 
       await checkpoint.commit();
+    }
+
+    span.setAttributes({
+      "brainstem.poll.id": pollId,
+      "brainstem.poll.observations": jobs.length
+    });
+    if (jobs.length > 0) {
+      this.metrics.observations.inc({ input: checkpointKey }, jobs.length);
     }
 
     const level = jobs.length > 0
@@ -1816,7 +1889,7 @@ export class BrainstemRuntime {
         concurrency: this.queueConfig.decide.concurrency,
         retry: this.queueConfig.decide.retry,
         handler: (job, context) =>
-          this.#decide(job, context),
+          this.#inJobSpan("decide", job, context, (span, ctx) => this.#decide(job, ctx, span)),
         onFailure: (job, error, details) =>
           this.#decideFailed(job, error, details)
       },
@@ -1826,7 +1899,12 @@ export class BrainstemRuntime {
           this.destinationsById.get(job.payload.destination)?.retry ??
           this.queueConfig.deliver.retry,
         handler: (job, context) =>
-          this.#deliver(job, context),
+          this.#inJobSpan(
+            `deliver ${job.payload.destination}`,
+            job,
+            context,
+            (span, ctx) => this.#deliver(job, ctx, span)
+          ),
         onFailure: (job, error, details) =>
           this.#deliverFailed(job, error, details)
       }
@@ -1844,7 +1922,59 @@ export class BrainstemRuntime {
       leaseMs: this.queueConfig.leaseMs,
       pollIntervalMs: this.queueConfig.pollIntervalMs,
       logger: this.logger,
-      queues
+      queues,
+      onSettled: (job, { outcome, durationMs }) => {
+        this.metrics.jobDuration.observe(
+          { queue: job.queue, outcome },
+          durationMs / 1000
+        );
+
+        if (outcome === "retry" || outcome === "dead") {
+          this.metrics.jobFailures.inc({
+            queue: job.queue,
+            dead: String(outcome === "dead")
+          });
+        }
+      }
+    });
+  }
+
+  /*
+   * A job's span continues the trace of the stage that enqueued it
+   * (payload.trace), so one envelope is one trace across cores.
+   */
+  async #inJobSpan(name, job, context, fn) {
+    return await this.tracer.span(
+      name,
+      {
+        parent: job.payload.trace ?? null,
+        kind: SPAN_KIND.consumer,
+        attributes: {
+          "brainstem.job.id": job.id,
+          "brainstem.job.queue": job.queue,
+          "brainstem.job.attempt": job.attempts,
+          "brainstem.core.id": this.coreId
+        }
+      },
+      span => fn(span, context)
+    );
+  }
+
+  #startMetrics() {
+    this.metrics.draining.set({}, 0);
+    this.metrics.coreInfo.set(
+      { core_id: this.coreId, role: this.role, queues: this.queues.join(",") },
+      1
+    );
+
+    this.removeMetricsCollector?.();
+    this.removeMetricsCollector = this.metricsRegistry.collect(() => {
+      for (const queue of this.queues.filter(name => name !== "poll")) {
+        const running = this.runner
+          ? [...this.runner.inflight.values()].filter(run => run.queue === queue).length
+          : 0;
+        this.metrics.inflight.set({ queue }, running);
+      }
     });
   }
 
@@ -1857,7 +1987,7 @@ export class BrainstemRuntime {
    * decide job (same emission) produces the same
    * idempotency keys and enqueues nothing twice.
    */
-  async #decide(job, { signal, commit }) {
+  async #decide(job, { signal, commit }, span) {
     const {
       observation,
       emissionId,
@@ -1893,6 +2023,15 @@ export class BrainstemRuntime {
 
     const observationPayload =
       observation.payload;
+
+    this.metrics.decisions.inc({ decision: decisionPayload.decision ?? "unknown" });
+    span.setAttributes({
+      "brainstem.observation.id": observationPayload.id,
+      "brainstem.observation.source": observationPayload.source?.type,
+      "brainstem.decision": decisionPayload.decision,
+      "brainstem.decision.route": decisionPayload.route,
+      "brainstem.decision.revision": decisionPayload.revision
+    });
 
     const decisionInfo = {
       observationId: observationPayload.id,
@@ -1991,6 +2130,7 @@ export class BrainstemRuntime {
           payload: {
             key,
             destination: item.id,
+            ...(span.traceparent ? { trace: span.traceparent } : {}),
             ...(origin ? { origin } : {})
           }
         })),
@@ -2033,7 +2173,7 @@ export class BrainstemRuntime {
    * so a job that runs again after its delivery
    * was recorded is acked without sending.
    */
-  async #deliver(job, { signal, commit }) {
+  async #deliver(job, { signal, commit }, span) {
     const {
       key,
       destination: destinationId
@@ -2066,11 +2206,20 @@ export class BrainstemRuntime {
     const destinationInfo =
       this.#destinationInfo(item, delivery, job);
 
+    span.setAttributes({
+      "brainstem.destination.id": item.id,
+      "brainstem.destination.plugin": item.plugin.name,
+      "brainstem.delivery.key": key,
+      "brainstem.observation.id": delivery.observationId ?? destinationInfo.observationId
+    });
+
     if (delivery.status === "delivered") {
       this.logger.debug?.(
         "destination already delivered; skipping",
         destinationInfo
       );
+      span.setAttribute("brainstem.delivery.outcome", "skipped");
+      this.metrics.deliveries.inc({ destination: item.id, plugin: item.plugin.name, outcome: "skipped" });
       return;
     }
 
@@ -2109,6 +2258,7 @@ export class BrainstemRuntime {
         id: item.entry.id,
         idempotencyKey: key,
         attempt: job.attempts,
+        traceparent: span.traceparent,
         emit: observation => {
           if (depth + 1 > this.handoffConfig.maxDepth) {
             throw new Error(
@@ -2150,6 +2300,7 @@ export class BrainstemRuntime {
               observation,
               emissionId: randomUUID(),
               pollId: null,
+              ...(span.traceparent ? { trace: span.traceparent } : {}),
               // Not from an input: `input` stays empty and the
               // origin names the destination that emitted it.
               origin: {
@@ -2188,6 +2339,9 @@ export class BrainstemRuntime {
       );
     }
 
+    span.setAttribute("brainstem.delivery.outcome", "delivered");
+    this.metrics.deliveries.inc({ destination: item.id, plugin: item.plugin.name, outcome: "delivered" });
+
     this.logger.debug?.(
       "destination handled decision",
       destinationInfo
@@ -2216,6 +2370,12 @@ export class BrainstemRuntime {
 
     const delivery =
       await this.deliveries.get(key);
+
+    this.metrics.deliveries.inc({
+      destination: destinationId,
+      plugin: item?.plugin.name ?? delivery?.plugin ?? "unknown",
+      outcome: dead ? "dead" : "failed"
+    });
 
     const failureInfo = {
       ...this.#destinationInfo(item, delivery, job),

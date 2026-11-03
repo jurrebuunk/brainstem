@@ -1,0 +1,292 @@
+suite: cluster mode
+templates:
+  - templates/configmap.yaml
+  - templates/cores.yaml
+  - templates/api.yaml
+  - templates/keda.yaml
+  - templates/migrate-job.yaml
+  - templates/config-import-job.yaml
+set:
+  database.url: postgres://brainstem:secret@pg:5432/brainstem
+tests:
+  - it: needs Postgres
+    template: templates/configmap.yaml
+    set:
+      database.url: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "cluster mode needs Postgres: set database.url, database.existingSecret or cnpg.enabled"
+
+  - it: runs one core group with every stage by default
+    template: templates/cores.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-brainstem-core-all
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: [node, brainstem.mjs, --role, core, --queues, "poll,decide,deliver", --health-port, "8081", --drain-timeout, "45000"]
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BRAINSTEM_MIGRATE
+            value: "false"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BRAINSTEM_LAYA_MODEL_DIR
+            value: /models
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BRAINSTEM_TELEMETRY_URL
+            value: http://RELEASE-NAME-brainstem-api:5174/api/events
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NODE_OPTIONS
+            value: --max-old-space-size=2304
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: ghcr.io/jurrebuunk/brainstem-models:laya-0.1.1
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.exec.command
+          value: [sleep, "8"]
+
+  - it: splits stages into groups; only decide groups get the model
+    template: templates/cores.yaml
+    set:
+      cores.groups:
+        - { name: poll, queues: [poll], replicas: 1 }
+        - { name: decide, queues: [decide], decideConcurrency: 3 }
+        - { name: deliver, queues: [deliver] }
+    # Per group: Deployment, PodDisruptionBudget.
+    asserts:
+      - hasDocuments:
+          count: 6
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-brainstem-core-decide
+        documentIndex: 2
+      - isNull:
+          path: spec.template.spec.initContainers
+        documentIndex: 0
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 512Mi
+        documentIndex: 0
+      - contains:
+          path: spec.template.spec.containers[0].command
+          content: "3"
+        documentIndex: 2
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 3Gi
+        documentIndex: 2
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BRAINSTEM_LAYA_MODEL_DIR
+            value: /models
+        documentIndex: 4
+
+  - it: mounts the model as an image volume when asked
+    template: templates/cores.yaml
+    set:
+      models.mount: imageVolume
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - isNull:
+          path: spec.template.spec.initContainers
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: models
+            image:
+              reference: ghcr.io/jurrebuunk/brainstem-models:laya-0.1.1
+              pullPolicy: IfNotPresent
+
+  - it: scales decide and deliver groups with KEDA on queue depth and age
+    template: templates/cores.yaml
+    set:
+      cores.groups:
+        - { name: work, queues: [decide, deliver], autoscaling: { enabled: true, maxReplicas: 8 } }
+    documentSelector:
+      path: kind
+      value: ScaledObject
+    asserts:
+      - equal:
+          path: spec.maxReplicaCount
+          value: 8
+      - equal:
+          path: spec.minReplicaCount
+          value: 2
+      - equal:
+          path: spec.triggers[0].metadata.query
+          value: "SELECT count(*) FROM jobs WHERE state = 'ready' AND queue IN ('decide','deliver') AND run_at <= (extract(epoch from now()) * 1000)::bigint"
+      - equal:
+          path: spec.triggers[1].name
+          value: oldest-age
+      - equal:
+          path: spec.triggers[0].authenticationRef.name
+          value: RELEASE-NAME-brainstem-keda-postgres
+
+  - it: leaves replicas to the autoscaler
+    template: templates/cores.yaml
+    set:
+      cores.groups:
+        - { name: work, queues: [decide], autoscaling: { enabled: true } }
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notExists:
+          path: spec.replicas
+
+  - it: creates the KEDA TriggerAuthentication from the database Secret
+    template: templates/keda.yaml
+    set:
+      cores.groups:
+        - { name: work, queues: [decide], autoscaling: { enabled: true } }
+    asserts:
+      - equal:
+          path: spec.secretTargetRef[0]
+          value:
+            parameter: connection
+            name: RELEASE-NAME-brainstem-database
+            key: url
+
+  - it: can scale on Prometheus instead
+    template: templates/cores.yaml
+    release:
+      namespace: ops
+    set:
+      cores.groups:
+        - { name: deliver, queues: [deliver], autoscaling: { enabled: true, keda: { trigger: prometheus } } }
+    documentSelector:
+      path: kind
+      value: ScaledObject
+    asserts:
+      - equal:
+          path: spec.triggers[0].metadata.query
+          value: sum(max by (queue) (brainstem_queue_ready{namespace="ops",queue=~"deliver"}))
+
+  - it: refuses KEDA for a poll-only group
+    template: templates/cores.yaml
+    set:
+      cores.groups:
+        - { name: poll, queues: [poll], autoscaling: { enabled: true } }
+    asserts:
+      - failedTemplate:
+          errorMessage: 'cores.groups "poll": KEDA scales on the decide/deliver queues; use autoscaling.type hpa for a poll-only group'
+
+  - it: uses an HPA for a poll-only group
+    template: templates/cores.yaml
+    set:
+      cores.groups:
+        - { name: poll, queues: [poll], autoscaling: { enabled: true, type: hpa } }
+    documentSelector:
+      path: kind
+      value: HorizontalPodAutoscaler
+    asserts:
+      - equal:
+          path: spec.metrics[0].resource.target.averageUtilization
+          value: 70
+
+  - it: refuses duplicate group names
+    template: templates/cores.yaml
+    set:
+      cores.groups:
+        - { name: a, queues: [poll] }
+        - { name: a, queues: [deliver] }
+    asserts:
+      - failedTemplate:
+          errorMessage: duplicate cores.groups name "a"
+
+  - it: runs migrations as a pre-install hook
+    template: templates/migrate-job.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: [node, brainstem.mjs, migrate]
+
+  - it: with CloudNativePG migrations are a regular Job per revision
+    template: templates/migrate-job.yaml
+    set:
+      database.url: ""
+      cnpg.enabled: true
+    release:
+      revision: 3
+    asserts:
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-brainstem-migrate-3
+      - notExists:
+          path: metadata.annotations
+      - equal:
+          path: spec.template.spec.containers[0].env[0].valueFrom.secretKeyRef
+          value:
+            name: RELEASE-NAME-brainstem-pg-app
+            key: uri
+
+  - it: seeds the config store only while it is empty
+    template: templates/config-import-job.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].command
+          content: --if-empty
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+
+  - it: imports nothing in file mode
+    template: templates/config-import-job.yaml
+    set:
+      config.source: file
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: rolls api pods when the config changes
+    template: templates/api.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - exists:
+          path: spec.template.metadata.annotations["checksum/config"]
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BRAINSTEM_API_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-brainstem-api-token
+                key: token
+
+  - it: gives the model copy room for its page cache
+    template: templates/cores.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].resources.limits.memory
+          value: 2Gi

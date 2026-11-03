@@ -1,0 +1,12 @@
+{{- include "brainstem.validate" . }}
+{{- if not .Values.config.existingConfigMap }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "brainstem.configMapName" . }}
+  labels:
+    {{- include "brainstem.labels" . | nindent 4 }}
+data:
+  brainstem.config.mjs: |
+    {{- .Values.config.file | nindent 4 }}
+{{- end }}

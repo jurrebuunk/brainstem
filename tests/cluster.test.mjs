@@ -491,6 +491,13 @@ export default { ...example, inputs: [{ id: "a", module: "./x.mjs" }] };`);
   assert.equal(await run(["config", "import", "--file", file, "--database", database]), 0);
   assert.match(io.lines.at(-2) ?? "", /Unchanged/);
 
+  // Seeding (Helm): never overwrites what is there.
+  await writePlugin(dir, "seed.mjs", `
+import example from ${JSON.stringify(new URL("../brainstem.config.example.mjs", import.meta.url).href)};
+export default { ...example, inputs: [] };`);
+  assert.equal(await run(["config", "import", "--if-empty", "--file", join(dir, "seed.mjs"), "--database", database]), 0);
+  assert.match(io.lines.at(-1), /Skipped: config version 1 already exists/);
+
   const out = join(dir, "exported.mjs");
   assert.equal(await run(["config", "export", "--database", database, "--out", out]), 0);
   const exported = (await import(`${new URL(`file://${out}`).href}?t=1`)).default;

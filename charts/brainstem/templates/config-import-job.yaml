@@ -1,0 +1,70 @@
+{{- if and (eq .Values.mode "cluster") (eq .Values.config.source "database") (ne .Values.config.import "never") }}
+{{- if not (has .Values.config.import (list "onInstall" "always")) }}{{ fail "config.import must be onInstall, always or never" }}{{ end }}
+{{- $hook := not .Values.cnpg.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  {{- if $hook }}
+  name: {{ include "brainstem.fullname" . }}-config-import
+  {{- else }}
+  name: {{ include "brainstem.fullname" . }}-config-import-{{ .Release.Revision }}
+  {{- end }}
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" . "component" "config-import") | nindent 4 }}
+  {{- if $hook }}
+  annotations:
+    # After the ConfigMap exists; cores wait for an active version.
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+  {{- end }}
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "brainstem.componentLabels" (dict "root" . "component" "config-import") | nindent 8 }}
+      annotations:
+        checksum/config: {{ toJson .Values.config | sha256sum }}
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: config-import
+          image: {{ include "brainstem.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - node
+            - brainstem.mjs
+            - config
+            - import
+            - --comment
+            - "helm {{ .Release.Name }} revision {{ .Release.Revision }}"
+            - --author
+            - helm
+            {{- if eq .Values.config.import "onInstall" }}
+            - --if-empty
+            {{- end }}
+          env:
+            {{- include "brainstem.env" (dict "root" . "role" "core" "memory" "" "extra" dict) | nindent 12 }}
+          {{- with .Values.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "brainstem.volumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "brainstem.volumes" . | nindent 8 }}
+{{- end }}

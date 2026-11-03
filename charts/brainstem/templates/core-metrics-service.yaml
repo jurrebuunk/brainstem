@@ -1,0 +1,18 @@
+{{- if and (eq .Values.mode "cluster") .Values.metrics.enabled }}
+# Every core pod's health port, for Prometheus (/metrics).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "brainstem.fullname" . }}-cores
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" . "component" "cores") | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "brainstem.selectorLabels" . | nindent 4 }}
+    brainstem.io/role: core
+  ports:
+    - name: health
+      port: {{ .Values.cores.defaults.healthPort }}
+      targetPort: health
+{{- end }}

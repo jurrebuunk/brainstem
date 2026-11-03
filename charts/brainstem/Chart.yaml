@@ -1,0 +1,21 @@
+apiVersion: v2
+name: brainstem
+description: Brainstem, a decision and orchestration layer for autonomous AI agents, on Kubernetes (single node or a scaled-out cluster).
+type: application
+version: 2.0.0-beta.1
+appVersion: "2.0.0-beta.1"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/jurrebuunk/brainstem
+sources:
+  - https://github.com/jurrebuunk/brainstem
+icon: https://raw.githubusercontent.com/jurrebuunk/brainstem/main/docs/assets/brainstem-flow.png
+keywords:
+  - ai
+  - agents
+  - orchestration
+  - monitoring
+maintainers:
+  - name: jurrebuunk
+    url: https://github.com/jurrebuunk
+annotations:
+  artifacthub.io/license: ISC

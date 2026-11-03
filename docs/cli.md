@@ -72,7 +72,7 @@ See [Cluster mode](cluster.md).
 ## Config commands
 
 ```sh
-node brainstem.mjs config import [--file path] [--comment text] [--no-activate]
+node brainstem.mjs config import [--file path] [--comment text] [--no-activate] [--if-empty]
 node brainstem.mjs config export [--version id] [--out path] [--format mjs|json]
 node brainstem.mjs config list
 node brainstem.mjs config show [id]
@@ -80,7 +80,7 @@ node brainstem.mjs config activate <id>     # rollback
 node brainstem.mjs config validate [--file path]
 ```
 
-`import` evaluates the module locally, checks it is plain data that matches the schema, and stores it as a new version. Unless `--no-activate` is given, the new version becomes active, and cores running with `BRAINSTEM_CONFIG_SOURCE=database` reload it. Per-process bootstrap settings (`runtime.database`, `api`, `logging`, `telemetry`, `coreId`, `role`, `queues`) are not stored. See [Configuration](configuration.md#versioned-config).
+`import` evaluates the module locally, checks it is plain data that matches the schema, and stores it as a new version. Unless `--no-activate` is given, the new version becomes active, and cores running with `BRAINSTEM_CONFIG_SOURCE=database` reload it. Per-process bootstrap settings (`runtime.database`, `api`, `logging`, `telemetry`, `coreId`, `role`, `queues`) are not stored. `--if-empty` does nothing once any version exists, which is how the Helm chart and `docker-compose.cluster.yml` seed the store without overwriting edits made in the UI. See [Configuration](configuration.md#versioned-config).
 
 ## Database commands
 

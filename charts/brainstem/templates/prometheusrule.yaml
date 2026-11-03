@@ -1,0 +1,78 @@
+{{- if and .Values.metrics.enabled .Values.metrics.prometheusRule.enabled }}
+{{- $rule := .Values.metrics.prometheusRule }}
+{{- $ns := printf "namespace=%q" .Release.Namespace }}
+{{- $api := ternary (include "brainstem.fullname" .) (printf "%s-api" (include "brainstem.fullname" .)) (eq .Values.mode "single") }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "brainstem.fullname" . }}
+  labels:
+    {{- include "brainstem.labels" . | nindent 4 }}
+    {{- with $rule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: brainstem
+      rules:
+        # Cluster gauges come from every API replica: max() dedupes them.
+        - alert: BrainstemNoHealthyCore
+          expr: max by (queue) (brainstem_cores_running{ {{- $ns }}}) < 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: No running Brainstem core serves the {{ "{{ $labels.queue }}" }} queue
+            description: Nothing polls, decides or delivers for that stage. Check the core Deployments and their logs.
+        - alert: BrainstemApiDown
+          expr: sum(up{ {{- $ns }},job={{ $api | quote }}}) == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: No Brainstem API replica can be scraped
+            description: The Web UI, telemetry and the cluster metrics are unavailable.
+        - alert: BrainstemQueueBacklog
+          expr: max by (queue) (brainstem_queue_oldest_age_seconds{ {{- $ns }}}) > {{ $rule.queueAgeSeconds }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Brainstem {{ "{{ $labels.queue }}" }} jobs wait longer than {{ $rule.queueAgeSeconds }}s
+            description: The oldest due job has waited {{ "{{ $value | humanizeDuration }}" }}. Add cores for this queue or check for a slow destination.
+        - alert: BrainstemDeliveryFailures
+          expr: |
+            sum by (destination) (rate(brainstem_deliveries_total{ {{- $ns }},outcome=~"failed|dead"}[15m]))
+              / sum by (destination) (rate(brainstem_deliveries_total{ {{- $ns }}}[15m]))
+              > {{ $rule.deliveryFailureRatio }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Deliveries to {{ "{{ $labels.destination }}" }} keep failing
+            description: '{{ "{{ $value | humanizePercentage }}" }} of delivery attempts failed over 15 minutes.'
+        - alert: BrainstemDeadJobs
+          expr: max by (queue) (brainstem_queue_dead{ {{- $ns }}}) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Brainstem has dead {{ "{{ $labels.queue }}" }} jobs
+            description: '{{ "{{ $value }}" }} jobs ran out of attempts. Inspect and redrive them in the Web UI (Pipeline).'
+        - alert: BrainstemInputsOverdue
+          expr: max(brainstem_input_schedule_lag_seconds{ {{- $ns }}}) > {{ $rule.inputLagSeconds }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Brainstem inputs are not being polled
+            description: An input has been due for {{ "{{ $value | humanizeDuration }}" }} without a poll core claiming it.
+        - alert: BrainstemEventLoopLag
+          expr: max by (pod) (nodejs_eventloop_lag_p99_seconds{ {{- $ns }}}) > {{ $rule.eventLoopLagSeconds }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Brainstem pod {{ "{{ $labels.pod }}" }} has a blocked event loop
+            description: p99 event-loop delay is {{ "{{ $value }}" }}s; the pod is CPU-starved or doing synchronous work.
+{{- end }}

@@ -1,0 +1,151 @@
+{{- if eq .Values.mode "cluster" }}
+{{- $selector := include "brainstem.componentSelector" (dict "root" . "component" "api") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "brainstem.fullname" . }}-api
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  {{- if not .Values.api.autoscaling.enabled }}
+  replicas: {{ .Values.api.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- $selector | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "brainstem.componentLabels" (dict "root" . "component" "api") | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ toJson .Values.config | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "brainstem.serviceAccountName" (dict "root" . "component" "api") }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.api.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- include "brainstem.topologySpread" (dict "root" . "selector" $selector) | nindent 6 }}
+      containers:
+        - name: api
+          image: {{ include "brainstem.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "brainstem.mjs", "--role", "api"]
+          env:
+            {{- include "brainstem.env" (dict "root" . "role" "api" "memory" .Values.api.resources.limits.memory "extra" (mergeOverwrite (dict
+              "BRAINSTEM_API_HOST" "0.0.0.0"
+              "BRAINSTEM_API_PORT" (toString .Values.api.port)
+              "BRAINSTEM_MIGRATE" "false"
+              "BRAINSTEM_SCHEMA_WAIT_MS" (toString (mul .Values.migrations.schemaWaitSeconds 1000))
+              "BRAINSTEM_TRUSTED_PROXIES" .Values.api.trustedProxies
+              "BRAINSTEM_COOKIE_SECURE" (include "brainstem.cookieSecure" .)
+              "BRAINSTEM_DRAIN_DELAY_MS" (toString (mul .Values.api.drainDelaySeconds 1000))
+              "UV_THREADPOOL_SIZE" "8"
+            ) .Values.api.env)) | nindent 12 }}
+            - name: BRAINSTEM_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "brainstem.apiTokenSecretName" . }}
+                  key: {{ include "brainstem.apiTokenSecretKey" . }}
+          {{- with .Values.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.api.port }}
+          startupProbe:
+            httpGet: { path: /startupz, port: http }
+            periodSeconds: 5
+            failureThreshold: {{ add 12 (div .Values.migrations.schemaWaitSeconds 5) }}
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /livez, port: http }
+            periodSeconds: 15
+            failureThreshold: 4
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "brainstem.volumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "brainstem.volumes" . | nindent 8 }}
+      {{- with .Values.api.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "brainstem.fullname" . }}-api
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  type: {{ .Values.api.service.type }}
+  selector:
+    {{- $selector | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.api.service.port }}
+      targetPort: http
+{{- if .Values.api.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "brainstem.fullname" . }}-api
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "brainstem.fullname" . }}-api
+  minReplicas: {{ .Values.api.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.api.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.api.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- if .Values.api.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "brainstem.fullname" . }}-api
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.api.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- $selector | nindent 6 }}
+{{- end }}
+{{- end }}

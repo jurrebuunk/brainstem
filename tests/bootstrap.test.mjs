@@ -42,3 +42,29 @@ test("legacy import can be disabled", async () => {
   assert.equal((await handle.db.selectFrom("checkpoints").selectAll().execute()).length, 0);
   await handle.close();
 });
+
+test("cluster roles wait for the schema when asked, instead of failing at once", async () => {
+  const dir = await tempDir("bootstrap-wait");
+  const config = { runtime: { database: { url: `sqlite:${join(dir, "brainstem.sqlite")}`, importLegacy: false } } };
+
+  await assert.rejects(
+    openRuntimeDatabase(config, { baseDir: dir, migrate: false }),
+    /not up to date/,
+    "no wait: fails at once"
+  );
+
+  const waiting = openRuntimeDatabase(config, { baseDir: dir, migrate: false, waitMs: 5_000, retryMs: 50 });
+  // Meanwhile the migration Job runs.
+  await new Promise(resolve => setTimeout(resolve, 150));
+  const migrator = await openRuntimeDatabase(config, { baseDir: dir });
+  await migrator.close();
+
+  const handle = await waiting;
+  await handle.close();
+
+  await assert.rejects(
+    openRuntimeDatabase({ runtime: { database: { url: `sqlite:${join(dir, "other.sqlite")}` } } }, { baseDir: dir, migrate: false, waitMs: 120, retryMs: 50 }),
+    /not up to date/,
+    "gives up after waitMs"
+  );
+});

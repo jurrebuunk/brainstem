@@ -1,0 +1,40 @@
+Brainstem {{ .Chart.AppVersion }} ({{ .Values.mode }} mode) is installed as "{{ .Release.Name }}".
+
+{{- if .Values.ingress.enabled }}
+
+Web UI:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+
+Web UI:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "brainstem.fullname" . }}-web 5173:{{ .Values.web.service.port }}
+  open http://localhost:5173 and create the first admin user.
+{{- end }}
+
+{{- if eq .Values.mode "cluster" }}
+
+Cores (every pod registers itself; see Cores in the Web UI):
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }},brainstem.io/role=core
+{{- end }}
+
+Config ({{ .Values.config.source }}):
+{{- if eq .Values.config.source "database" }}
+  Edit it in the Web UI (Settings > Config); every core reloads the active version.
+  From a workstation: brainstem config import|export|list|activate (docs/configuration.md).
+{{- else }}
+  The config comes from {{ include "brainstem.configMapName" . }}; change config.file and upgrade.
+{{- end }}
+
+{{- if .Values.metrics.enabled }}
+
+Metrics: GET /metrics on the API{{ if eq .Values.mode "cluster" }} and on every core's health port{{ end }}.
+{{- if not .Values.metrics.serviceMonitor.enabled }}
+  Set metrics.serviceMonitor.enabled=true to scrape them with the Prometheus Operator.
+{{- end }}
+{{- end }}
+{{- if .Values.tracing.endpoint }}
+
+Traces go to {{ .Values.tracing.endpoint }} (OTLP/HTTP).
+{{- end }}

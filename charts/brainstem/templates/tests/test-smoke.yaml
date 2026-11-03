@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "brainstem.fullname" . }}-test
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" . "component" "test") | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    {{- toYaml .Values.podSecurityContext | nindent 4 }}
+  containers:
+    - name: smoke
+      image: {{ include "brainstem.image" . }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      # The API is ready, reports a running core and metrics, and the
+      # Web UI proxies to it.
+      command:
+        - node
+        - -e
+        - |
+          const api = {{ include "brainstem.apiUrl" . | quote }};
+          const web = "http://{{ include "brainstem.fullname" . }}-web:{{ .Values.web.service.port }}";
+          const check = async (name, url, test) => {
+            for (let attempt = 1; attempt <= 30; attempt += 1) {
+              try {
+                const response = await fetch(url);
+                const body = await response.text();
+                if (response.ok && test(body)) return console.log(`ok ${name}`);
+              }
+              catch {}
+              await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+            console.error(`failed ${name}`);
+            process.exit(1);
+          };
+          await check("api ready", `${api}/readyz`, () => true);
+          {{- if .Values.metrics.enabled }}
+          await check("a core is running", `${api}/metrics`, body => /brainstem_cores\{status="running"\} [1-9]/.test(body));
+          {{- end }}
+          {{- if .Values.web.enabled }}
+          await check("web proxies the api", `${web}/api/auth/status`, body => JSON.parse(body).permissions.length > 0);
+          {{- end }}
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      resources:
+        requests: { cpu: 10m, memory: 64Mi }
+        limits: { memory: 128Mi }

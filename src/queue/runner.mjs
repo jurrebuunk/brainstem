@@ -36,6 +36,9 @@ export const DEFAULT_POLL_INTERVAL_MS = 1_000;
  * the running handlers. Jobs interrupted that way are released
  * without counting the attempt.
  *
+ * onSettled(job, { outcome, durationMs }) is told how every run
+ * ended (metrics): ok, retry, dead, lease_lost or released.
+ *
  * drain() runs every due job (including jobs those jobs enqueue)
  * until none is left, then returns { processed, failures }.
  */
@@ -47,7 +50,8 @@ export class JobRunner {
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
     workerId = createWorkerId(),
     logger = null,
-    random = Math.random
+    random = Math.random,
+    onSettled = null
   }) {
     this.transport = transport;
     this.queues = queues;
@@ -56,6 +60,7 @@ export class JobRunner {
     this.workerId = workerId;
     this.logger = logger;
     this.random = random;
+    this.onSettled = onSettled;
 
     this.inflight = new Map();
     this.wakeups = new Set();
@@ -244,6 +249,8 @@ export class JobRunner {
     heartbeat.unref?.();
 
     let committed = false;
+    let outcome = "ok";
+    const startedAt = performance.now();
 
     const commit = async fn => {
       if (committed) throw new Error(`Job ${job.id} was already committed`);
@@ -272,15 +279,18 @@ export class JobRunner {
           queue: job.queue,
           jobId: job.id
         });
+        outcome = "lease_lost";
         return;
       }
 
       if (signal?.aborted && !committed) {
         await this.transport.release(job).catch(() => {});
+        outcome = "released";
         return;
       }
 
       const dead = error?.permanent === true || job.attempts >= job.maxAttempts;
+      outcome = dead ? "dead" : "retry";
       const retryInMs = dead
         ? null
         : backoffDelayMs(
@@ -313,6 +323,13 @@ export class JobRunner {
     finally {
       clearInterval(heartbeat);
       signal?.removeEventListener("abort", abort);
+
+      try {
+        this.onSettled?.(job, { outcome, durationMs: performance.now() - startedAt });
+      }
+      catch {
+        // Metrics never break a job.
+      }
     }
   }
 
