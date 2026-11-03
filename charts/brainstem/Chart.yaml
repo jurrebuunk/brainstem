@@ -2,8 +2,8 @@ apiVersion: v2
 name: brainstem
 description: Brainstem, a decision and orchestration layer for autonomous AI agents, on Kubernetes (single node or a scaled-out cluster).
 type: application
-version: 2.0.0-rc.1
-appVersion: "2.0.0-rc.1"
+version: 2.0.0
+appVersion: "2.0.0"
 kubeVersion: ">=1.27.0-0"
 home: https://github.com/jurrebuunk/brainstem
 sources:
