@@ -1,6 +1,6 @@
 {
   "name": "@brainstem-dev/plugin-static-observations",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Brainstem input plugin: Emit fixed observations from config; for tests and demos.",
   "type": "module",
   "main": "index.mjs",

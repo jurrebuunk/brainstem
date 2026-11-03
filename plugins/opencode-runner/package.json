@@ -1,6 +1,6 @@
 {
   "name": "@brainstem-dev/plugin-opencode-runner",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Brainstem destination plugin: Start an opencode session for a decision (a coding agent).",
   "type": "module",
   "main": "index.mjs",

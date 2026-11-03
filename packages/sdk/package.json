@@ -1,6 +1,6 @@
 {
   "name": "@brainstem-dev/sdk",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "The plugin API of Brainstem: define and test input and destination plugins.",
   "type": "module",
   "main": "index.mjs",

@@ -1,6 +1,6 @@
 {
   "name": "@brainstem-dev/plugin-tls-certificate",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Brainstem input plugin: Watch TLS certificates and report upcoming expiry.",
   "type": "module",
   "main": "index.mjs",

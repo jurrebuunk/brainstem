@@ -61,12 +61,30 @@ cosign verify ghcr.io/jurrebuunk/brainstem:vX.Y.Z --certificate-identity-regexp 
 
 `workflow_dispatch` on the npm workflow, with dry-run on, packs everything without publishing.
 
-## npm setup (once)
+## npm publishing
 
-The packages live in the `@brainstem-dev` npm organization.
+The packages live in the `@brainstem-dev` npm organization and are published by GitHub Actions through **npm trusted publishing**. Each package trusts `.github/workflows/npm.yml` in `jurrebuunk/brainstem`, and npm authenticates the workflow with GitHub's OIDC token. No npm token is stored anywhere, and every version carries a provenance statement.
 
-1. Two-factor authentication on the npm account (Authorization and Publishing).
-2. **First publish of a package:** npmjs.com → Access Tokens → Generate New Token → Granular, read and write on the `@brainstem-dev` organization's packages, short expiry. Store it as the GitHub Actions secret `NPM_TOKEN`.
-3. **After the first publish:** on each package's npm page → Settings → Trusted publishing, add GitHub Actions with repository `jurrebuunk/brainstem` and workflow `npm.yml`. Then delete the `NPM_TOKEN` secret and revoke the token. The workflow then publishes through OIDC, with no stored secret.
+Check a package's setting with `npx npm@12 trust list @brainstem-dev/brainstem`.
 
-A new plugin package needs step 2 for its first release (or a manual first `npm publish`), then step 3.
+### A new package (a new plugin)
+
+Trusted publishing can only be set up for a package that already exists. Its first version is therefore published by hand:
+
+1. Add the package (for example `plugins/<name>` with its own `package.json` at the current version), and merge it.
+2. Publish it from a checkout, with 2FA:
+
+   ```sh
+   npm login
+   npm publish -w plugins/<name> --access public --ignore-scripts
+   ```
+
+3. Trust the workflow (npm 11.15 or newer; `npx npm@12` works):
+
+   ```sh
+   npx npm@12 trust github @brainstem-dev/plugin-<name> --file npm.yml --repository jurrebuunk/brainstem --allow-publish --yes
+   ```
+
+4. Release through CI within 2 days. npm drops a trusted-publisher setting that hasn't been used for a publish in that time.
+
+`node scripts/npm-publish.mjs` also works by hand. It is attached to the terminal, so npm can ask for the 2FA code, and it skips what is already published.

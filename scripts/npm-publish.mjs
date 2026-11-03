@@ -10,7 +10,7 @@
  * registry are skipped, so a re-run after a partial failure finishes
  * the job. Adds --provenance in GitHub Actions.
  */
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,16 +64,18 @@ for (const { dir, manifest } of packages) {
   }
 
   console.log(`publish ${manifest.name}@${version}${dryRun ? " (dry run)" : ""}`);
-  try {
-    const { stdout, stderr } = await run("npm", ["publish", ...flags, "--ignore-scripts"], { cwd: dir, maxBuffer: 16 * 1024 * 1024 });
-    process.stdout.write(stdout);
-    process.stderr.write(stderr.split("\n").filter(line => !line.startsWith("npm notice")).join("\n"));
-    published += 1;
-  }
-  catch (error) {
-    process.stderr.write(error.stderr ?? "");
-    fail(`publishing ${manifest.name} failed`);
-  }
+
+  // Attached to the terminal, so a manual publish can answer npm's
+  // 2FA prompt (the first release of a new package, before trusted
+  // publishing can be set up for it).
+  const code = await new Promise(resolve => {
+    const child = spawn("npm", ["publish", ...flags, "--ignore-scripts"], { cwd: dir, stdio: "inherit" });
+    child.on("error", () => resolve(1));
+    child.on("close", resolve);
+  });
+
+  if (code !== 0) fail(`publishing ${manifest.name} failed`);
+  published += 1;
 }
 
 console.log(`\n${published} published, ${packages.length - published} skipped (version ${version}).`);

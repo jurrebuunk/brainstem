@@ -1,6 +1,6 @@
 {
   "name": "@brainstem-dev/plugin-log-file",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Brainstem input plugin: Watch a log file and report new matching lines (errors by default).",
   "type": "module",
   "main": "index.mjs",

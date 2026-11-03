@@ -1,6 +1,6 @@
 {
   "name": "@brainstem-dev/plugin-github-issues",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Brainstem input plugin: Turn new and updated GitHub issues into observations.",
   "type": "module",
   "main": "index.mjs",
