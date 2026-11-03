@@ -43,7 +43,7 @@ jobs:
           cache-to: type=gha,scope=brainstem,mode=max
 
       - name: Trivy
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: brainstem:pr
           severity: CRITICAL,HIGH
@@ -118,7 +118,7 @@ jobs:
           done
 
       - name: Trivy
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
           severity: CRITICAL,HIGH
