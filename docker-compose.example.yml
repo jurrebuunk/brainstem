@@ -1,6 +1,6 @@
 services:
   brainstem:
-    image: ghcr.io/jurrebuunk/brainstem:v1.4.0
+    image: ghcr.io/jurrebuunk/brainstem:v2.0.0
     restart: unless-stopped
     env_file:
       - .env
@@ -42,7 +42,7 @@ services:
   #     retries: 10
 
   brainstem-web:
-    image: ghcr.io/jurrebuunk/brainstem:v1.4.0
+    image: ghcr.io/jurrebuunk/brainstem:v2.0.0
     restart: unless-stopped
     environment:
       NODE_ENV: production

@@ -13,6 +13,9 @@ Documentation is kept in the repository so it is versioned with the code.
 - [Cluster mode](cluster.md) — roles and queues, Postgres, input leases, hot config reload, drain, probes and the model image.
 - [Kubernetes](kubernetes.md) — the Helm chart: single and cluster mode, worker groups, KEDA, CloudNativePG, the model image, network policies.
 - [Observability](observability.md) — Prometheus metrics, alerts, the Grafana dashboard, OpenTelemetry traces and log correlation.
+- [Upgrading from 1.x to 2.0](upgrade-2.0.md) — what changes, how to upgrade, moving to cluster mode, rolling back.
+- [Operations runbook](runbook.md) — delivery guarantees, alerts and what to do about them, upgrades, capacity.
+- [Load testing](load-testing.md) — pipeline throughput and how to size concurrency, cores and KEDA.
 - [Web UI](web-ui.md) — React Flow live view, persisted stats, first-run auth, RBAC, users, roles, and the versioned config editor.
 - [Runtime telemetry](telemetry.md) — structured events emitted by the runtime.
 
@@ -21,6 +24,7 @@ Documentation is kept in the repository so it is versioned with the code.
 - [Plugins overview](plugins.md) — all built-in plugins shipped with Brainstem.
 - [Input plugin API](input-plugins.md) — how to write input plugins.
 - [Destination adapter API](destination-adapters.md) — how to write destination plugins.
+- [Migrating destination plugins to v2](plugin-v2-migration.md) — from `brainstem.destination/v1` to v2.
 
 Built-in plugin pages:
 

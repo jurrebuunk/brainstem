@@ -9,7 +9,7 @@ ghcr.io/jurrebuunk/brainstem
 Current stable image:
 
 ```text
-ghcr.io/jurrebuunk/brainstem:v1.4.0
+ghcr.io/jurrebuunk/brainstem:v2.0.0
 ```
 
 The image contains both:
@@ -61,7 +61,7 @@ docker run --rm \
   --env-file .env \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v1.4.0 \
+  ghcr.io/jurrebuunk/brainstem:v2.0.0 \
   node brainstem.mjs --once
 ```
 
@@ -77,7 +77,7 @@ docker run -d \
   -e BRAINSTEM_API_PORT=5174 \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v1.4.0
+  ghcr.io/jurrebuunk/brainstem:v2.0.0
 ```
 
 Run the Web UI container separately:
@@ -91,7 +91,7 @@ docker run -d \
   -e PORT=5173 \
   -e WEB_BACKEND_URL=http://brainstem:5174 \
   -p 127.0.0.1:5173:5173 \
-  ghcr.io/jurrebuunk/brainstem:v1.4.0 \
+  ghcr.io/jurrebuunk/brainstem:v2.0.0 \
   node web/server.mjs
 ```
 
@@ -167,6 +167,8 @@ docker compose run --rm brainstem node brainstem.mjs migrate sqlite-to-pg \
 ```
 
 ### Upgrading a 1.x volume
+
+See [Upgrading from 1.x to 2.0](upgrade-2.0.md) for everything that changes.
 
 1.x kept state in `data/brainstem.sqlite`, `data/web-stats.sqlite` and `data/checkpoints.json`. Back up the volume and stop the old containers. 1.3 and later import these files automatically on first start; to do it by hand first:
 
@@ -247,19 +249,19 @@ The config lives in Postgres: edit it in the Web UI, and every core reloads it. 
 Images are multi-arch (`linux/amd64`, `linux/arm64`), signed with cosign (keyless, GitHub OIDC) and carry SBOM and provenance attestations:
 
 ```sh
-cosign verify ghcr.io/jurrebuunk/brainstem:v2.0.0-rc.1 \
+cosign verify ghcr.io/jurrebuunk/brainstem:v2.0.0 \
   --certificate-identity-regexp 'https://github.com/jurrebuunk/brainstem/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
 ```sh
-docker manifest inspect ghcr.io/jurrebuunk/brainstem:v1.4.0
+docker manifest inspect ghcr.io/jurrebuunk/brainstem:v2.0.0
 ```
 
 Pull explicitly:
 
 ```sh
-docker pull ghcr.io/jurrebuunk/brainstem:v1.4.0
+docker pull ghcr.io/jurrebuunk/brainstem:v2.0.0
 ```
 
 ## Build locally
@@ -287,7 +289,7 @@ The GitHub Actions workflow publishes:
 
 - `latest` from `main`
 - branch tags such as `main`
-- git tags such as `v1.4.0`
+- git tags such as `v2.0.0`
 - SHA tags such as `sha-...`
 
 If the package is not visible in the GitHub UI immediately, verify with `docker manifest inspect`; GHCR package pages can lag behind successful pushes.

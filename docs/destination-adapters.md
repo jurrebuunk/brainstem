@@ -129,6 +129,8 @@ Destination failures never block input checkpoints. A failing delivery is retrie
 
 ## Migrating from v1
 
+The [plugin v2 migration guide](plugin-v2-migration.md) walks through it with a full example. In short:
+
 v1 destinations (`apiVersion: "brainstem.destination/v1"`) receive the 1.x event with live plugin objects:
 
 ```js

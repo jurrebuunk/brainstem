@@ -4,7 +4,7 @@ Brainstem runs as one process by default (`--role all`, SQLite). Cluster mode ru
 
 Single-node mode is unchanged and stays first-class: nothing on this page is needed for it.
 
-To deploy it, use the [Helm chart](kubernetes.md) on Kubernetes or [`docker-compose.cluster.yml`](docker.md#cluster-mode) on one machine. [Observability](observability.md) covers metrics, alerts and traces.
+Coming from 1.x? Start with [Upgrading to 2.0](upgrade-2.0.md). To run it, see the [ops runbook](runbook.md). To deploy it, use the [Helm chart](kubernetes.md) on Kubernetes or [`docker-compose.cluster.yml`](docker.md#cluster-mode) on one machine. [Observability](observability.md) covers metrics, alerts and traces.
 
 ## Roles
 

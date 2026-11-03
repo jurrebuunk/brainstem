@@ -11,7 +11,10 @@ import packageJson from "../../package.json" with { type: "json" };
  * simply add rows. Consumers (the API, the Web UI) never need to
  * know which core spoke last.
  */
-export const DEFAULT_CORE_HEARTBEAT_MS = 10_000;
+// A core counts as lost after 3 missed heartbeats, and its leases and
+// jobs move on: 5 s keeps that failover window around 15-20 s (roadmap
+// Phase 5) for one small UPDATE per core every 5 s.
+export const DEFAULT_CORE_HEARTBEAT_MS = 5_000;
 
 // Missed heartbeats before a running core counts as lost.
 const LOST_AFTER_HEARTBEATS = 3;
@@ -113,13 +116,23 @@ export function topologyFromCores(cores) {
   const inputs = new Map();
   const destinations = new Map();
 
-  for (const core of sources) {
-    for (const input of core.topology.inputs ?? []) {
-      if (!inputs.has(input.id)) inputs.set(input.id, input);
-    }
-    for (const destination of core.topology.destinations ?? []) {
-      if (!destinations.has(destination.id)) destinations.set(destination.id, destination);
-    }
+  /*
+   * Only cores that poll load the input plugins (and know their
+   * names); only decide/deliver cores load destinations. Their view
+   * wins; other cores fill in what is missing.
+   */
+  const runsQueue = (core, queue) => !core.queues?.length || core.queues.includes(queue);
+  const merge = (map, item) => map.set(item.id, { ...item, ...(map.get(item.id) ?? {}) });
+  const byQueue = (...queues) => [
+    ...sources.filter(core => queues.some(queue => runsQueue(core, queue))),
+    ...sources.filter(core => !queues.some(queue => runsQueue(core, queue)))
+  ];
+
+  for (const core of byQueue("poll")) {
+    for (const input of core.topology.inputs ?? []) merge(inputs, input);
+  }
+  for (const core of byQueue("decide", "deliver")) {
+    for (const destination of core.topology.destinations ?? []) merge(destinations, destination);
   }
 
   /*

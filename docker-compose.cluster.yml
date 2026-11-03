@@ -14,7 +14,7 @@
 # once; after that, edit it in the Web UI and every core reloads it.
 
 x-brainstem: &brainstem
-  image: ${BRAINSTEM_IMAGE:-ghcr.io/jurrebuunk/brainstem:v2.0.0-rc.1}
+  image: ${BRAINSTEM_IMAGE:-ghcr.io/jurrebuunk/brainstem:v2.0.0}
   restart: unless-stopped
   env_file:
     - path: .env

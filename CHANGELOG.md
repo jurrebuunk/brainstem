@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.0.0 — 2026-11-03
+
+Brainstem 2.0: a scale-out architecture that keeps the single-node setup first-class. It covers one database for all state, a durable decide/deliver pipeline, multi-core operation on Postgres, and the Helm chart, metrics and tracing. It also adds hardening (roadmap Phase 5): chaos and load tests, fixes they found, and the upgrade guide, ops runbook and plugin migration guide.
+
+**Coming from 1.x? Read [Upgrading from 1.x to 2.0](docs/upgrade-2.0.md).** The release candidates below list every change since 1.4.0.
+
+Upgrading from 2.0.0-rc.1:
+
+- No migrations.
+- `runtime.cores.heartbeatMs` defaults to 5 s (was 10 s), so a core that disappears counts as lost after 15 s instead of 30 s.
+
+Changes since 2.0.0-rc.1:
+
+- **Chaos tests** (`npm run test:chaos`, in CI) run real core processes on Postgres, each behind a TCP proxy. The scenarios kill a core mid-poll and mid-delivery, freeze one past its lease (a GC pause), fail over Postgres for every core, and partition one core from the database. Every scenario checks that no observation is lost, none is emitted twice (lease fencing), and effects repeat only inside the documented at-least-once window, always under the same idempotency key.
+- **Fix: a Postgres restart or failover crashed every Brainstem process.** An idle connection dropped by the server emitted an unhandled pool `error`. Processes now stay up and reconnect.
+- **Fix: a network partition could hang queries for many minutes** on dead connections. The pool has a 10 s connect timeout, a 30 s client-side query timeout and TCP keepalive (`runtime.database.pool.connectionTimeoutMillis`, `queryTimeoutMs`, `idleTimeoutMillis`). The LISTEN connection gets keepalive and is pinged every 15 s; when a ping fails it reconnects and resyncs.
+- **Faster failover:** the heartbeat drops to 5 s, and runners scan for stalled jobs at least every 5 s instead of every half lease (30 s). A crashed core's jobs and input leases move on within about 20 s instead of up to a minute.
+- **Load test:** `npm run test:load` (`scripts/load-test.mjs`) measures pipeline throughput and latency over core counts and concurrency. Results and sizing advice are in [Load testing](docs/load-testing.md).
+- **Docs:**
+  - [upgrade guide 1.x → 2.0](docs/upgrade-2.0.md)
+  - [operations runbook](docs/runbook.md): guarantees, alerts and what to do, upgrades, capacity
+  - [plugin v2 migration guide](docs/plugin-v2-migration.md)
+  - [load testing](docs/load-testing.md)
+- **Topology fix:** the Web UI shows plugin names for inputs again when cores run different queues. Inputs come from the cores that poll them, destinations from the cores that run them.
+- **Web UI fix:** on the Deliveries page, a dead job's key sits on its own line below the job number.
+- New README screenshots: the flow with the core pool, the core overview, deliveries, versioned config, stats, users and roles.
+
 ## 2.0.0-rc.1 — 2026-11-03
 
 Kubernetes and operations (roadmap Phase 4): a Helm chart for single-node and cluster deployments, Prometheus metrics, OpenTelemetry traces across cores, a Compose file for cluster mode, and signed multi-arch images. See [Kubernetes](docs/kubernetes.md) and [Observability](docs/observability.md).

@@ -147,3 +147,21 @@ test("a runtime without a database does not open one for the registry", async ()
 
   assert.equal(runtime.coreRegistry, null);
 });
+
+test("inputs come from the cores that poll them, destinations from the cores that run them", () => {
+  const core = (id, queues, topology) => ({ id, status: "running", queues, configVersion: 3, topologyHash: id, topology });
+  const topology = topologyFromCores([
+    core("deliver", ["deliver"], {
+      inputs: [{ id: "health", module: "./plugins/http-health/index.mjs", input: "check" }],
+      destinations: [{ id: "tickets", plugin: "@brainstem/http-json", destination: "default" }]
+    }),
+    core("poll", ["poll"], {
+      inputs: [{ id: "health", module: "./plugins/http-health/index.mjs", input: "check", plugin: "@brainstem/http-health", intervalMs: 20000 }],
+      destinations: [{ id: "tickets" }]
+    })
+  ]);
+
+  assert.equal(topology.inputs[0].plugin, "@brainstem/http-health");
+  assert.equal(topology.inputs[0].intervalMs, 20000);
+  assert.equal(topology.destinations[0].plugin, "@brainstem/http-json");
+});

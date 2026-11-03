@@ -7,6 +7,11 @@ import {
 
 export const DEFAULT_POLL_INTERVAL_MS = 1_000;
 
+// How often a runner looks for stalled jobs (expired leases, jobs of
+// lost cores). Bounded so a crashed core's jobs are picked up within
+// seconds of it counting as lost, not half a lease later.
+export const MAX_RECLAIM_INTERVAL_MS = 5_000;
+
 /*
  * Runs jobs from one transport.
  *
@@ -193,7 +198,10 @@ export class JobRunner {
   }
 
   async #reclaimMaybe() {
-    const interval = Math.max(this.pollIntervalMs, Math.floor(this.leaseMs / 2));
+    const interval = Math.max(
+      this.pollIntervalMs,
+      Math.min(MAX_RECLAIM_INTERVAL_MS, Math.floor(this.leaseMs / 2))
+    );
     if (Date.now() - this.lastReclaimAt < interval) return;
 
     await this.#reclaim();

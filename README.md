@@ -23,7 +23,7 @@ Brainstem is designed to be:
 - **Observable** — backend API persists event history, stats, live SSE, and raw envelopes.
 - **Secure enough to leave running** — first-run admin setup, Argon2id passwords, persistent sessions, CSRF protection, RBAC, and optional machine bearer tokens.
 - **Plugin-shaped** — inputs observe the world; destinations notify, log, post, or start an agent runner.
-- **Simple to operate** — one repo, one image, one SQLite-backed runtime; no queue, broker, or microservice stack required.
+- **Simple to operate** — one repo, one image. A single node runs on SQLite with no extra infrastructure; when you need HA or more throughput, the same image scales out on Postgres alone (no broker), with a Helm chart for Kubernetes.
 
 ## Product shape
 
@@ -33,24 +33,42 @@ Inputs                         Brainstem Core                    Destinations
 HTTP health ─────────────┐     checkpoints/dedupe ─┐             Matrix room
 GitHub issues ───────────┼──▶  Laya signals        ├──▶ route ─▶ HTTP JSON / Web UI
 Email / IMAP ────────────┤     policy thresholds   ┘             opencode runner
-TLS certificates ────────┘     SQLite records                    logs
+TLS certificates ────────┘     durable records                   agent runners · logs
 ```
 
 The runtime emits structured telemetry to the backend API. The Web UI is presentation-only: it renders flow, history, stats, config, users, and roles from backend-owned state.
 
 ## Screenshots
 
+### Live flow
+
+Inputs, the core pool and destinations, with live counters. Click the core pool for a per-core overview: every core's queues, config version and recent work, with a filter per core. Click any node to inspect its polls, decisions and deliveries.
+
+![Brainstem core pool overview](docs/assets/brainstem-cores.png)
+
+### Deliveries
+
+The durable pipeline: queue depth per stage, the delivery log with each delivery's idempotency key, and dead jobs to redrive or discard once the receiver is fixed.
+
+![Brainstem Deliveries page](docs/assets/brainstem-deliveries.png)
+
+### Versioned config
+
+With the config in the database, every save is a validated version with an author and a note. Saves are guarded against concurrent edits, and every core reloads the active version. Roll back by activating an older one.
+
+![Brainstem versioned config editor](docs/assets/brainstem-config.png)
+
+### Persistent stats
+
+Stats are derived from telemetry and stored in the database, so charts and counters survive restarts.
+
+![Brainstem Stats view](docs/assets/brainstem-stats.png)
+
 ### First-run onboarding
 
 Brainstem ships without default credentials. The first visit creates the initial administrator through a guided setup flow.
 
 ![Brainstem first-run onboarding](docs/assets/brainstem-onboarding.png)
-
-### Persistent stats
-
-Stats are derived from telemetry and stored in SQLite, so charts and counters survive UI restarts.
-
-![Brainstem Stats view](docs/assets/brainstem-stats.png)
 
 ### Authenticated administration
 
@@ -219,14 +237,14 @@ docker run --rm \
   --env-file .env \
   -v "$PWD/brainstem.config.mjs:/app/brainstem.config.mjs:ro" \
   -v brainstem-data:/app/data \
-  ghcr.io/jurrebuunk/brainstem:v1.4.0 \
+  ghcr.io/jurrebuunk/brainstem:v2.0.0 \
   node brainstem.mjs --once
 ```
 
 Verify the image:
 
 ```sh
-docker manifest inspect ghcr.io/jurrebuunk/brainstem:v1.4.0
+docker manifest inspect ghcr.io/jurrebuunk/brainstem:v2.0.0
 ```
 
 See [`docs/docker.md`](docs/docker.md).
