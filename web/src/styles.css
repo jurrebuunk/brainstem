@@ -2892,3 +2892,90 @@ button:disabled {
     min-width: 0;
   }
 }
+
+/* Core pool overview in the inspector: one card per core, click to filter. */
+.core-overview {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.core-overview-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+  min-width: 190px;
+  max-width: 260px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 10px 12px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.core-overview-card:hover {
+  border-color: color-mix(in srgb, var(--brainstem-active) 50%, var(--border));
+}
+
+.core-overview-card.selected {
+  border-color: var(--brainstem-active);
+  background: color-mix(in srgb, var(--brainstem-active) 12%, var(--surface-2));
+}
+
+.core-overview-all {
+  min-width: 140px;
+  justify-content: center;
+}
+
+.core-overview-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--font-size-sm);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.core-overview-line {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--font-size-xs, 12px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.core-overview-stats {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+  color: var(--muted-2);
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.core-overview-stats strong {
+  margin-right: 3px;
+  color: var(--text-strong);
+  font-size: var(--font-size-sm);
+  letter-spacing: 0;
+}
+
+.core-overview-stats .is-failed strong {
+  color: var(--danger);
+}
+
+.core-unknown .core-dot {
+  background: var(--muted-2);
+}
