@@ -1,0 +1,43 @@
+{
+  "name": "@brainstem-dev/plugin-http-json",
+  "version": "2.1.0",
+  "description": "Brainstem destination plugin: POST the decision envelope as JSON to a webhook, with an Idempotency-Key.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "README.md"
+  ],
+  "keywords": [
+    "brainstem",
+    "brainstem-plugin",
+    "brainstem-destination"
+  ],
+  "brainstem": {
+    "kind": "destination",
+    "api": 2
+  },
+  "peerDependencies": {
+    "@brainstem-dev/sdk": "^2.1.0"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jurrebuunk/brainstem.git",
+    "directory": "plugins/http-json"
+  },
+  "homepage": "https://github.com/jurrebuunk/brainstem/blob/main/docs/plugins/http-json.md",
+  "bugs": {
+    "url": "https://github.com/jurrebuunk/brainstem/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

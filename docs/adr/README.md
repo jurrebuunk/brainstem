@@ -29,3 +29,4 @@ Status values:
 | [0007](0007-destination-handoff.md) | Destinations hand observations back to the core | Accepted |
 | [0008](0008-core-registry-and-topology.md) | Core registry with heartbeats as the source of topology | Accepted |
 | [0009](0009-in-house-metrics-and-tracing.md) | In-house Prometheus metrics and OTLP tracing, no client libraries | Accepted |
+| [0010](0010-plugins-as-npm-packages.md) | Plugins are npm packages in a managed plugin folder | Accepted |

@@ -1,0 +1,40 @@
+{
+  "name": "@brainstem-dev/sdk",
+  "version": "2.1.0",
+  "description": "The plugin API of Brainstem: define and test input and destination plugins.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./testing": "./testing.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "state.mjs",
+    "testing.mjs",
+    "README.md"
+  ],
+  "keywords": [
+    "brainstem",
+    "brainstem-plugin",
+    "sdk",
+    "agents"
+  ],
+  "license": "ISC",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jurrebuunk/brainstem.git",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://github.com/jurrebuunk/brainstem/blob/main/docs/plugins.md",
+  "bugs": {
+    "url": "https://github.com/jurrebuunk/brainstem/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

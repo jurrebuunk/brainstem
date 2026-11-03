@@ -6,24 +6,34 @@ import { parseArgs } from "node:util";
 import { resolveDatabaseUrl } from "../db/database.mjs";
 import { MIGRATE_USAGE, runMigrate } from "./migrate.mjs";
 import { CONFIG_USAGE, runConfig } from "./config.mjs";
+import { PLUGINS_USAGE, runInit, runPlugins } from "./plugins.mjs";
 
 /*
  * Subcommands handled before the runtime starts:
  *
  *   brainstem migrate [status|import-v1|copy|sqlite-to-pg] ...
  *   brainstem config [import|export|list|show|activate|validate] ...
+ *   brainstem init
+ *   brainstem plugins [list|add|remove|update] ...
  *
  * Everything else (no subcommand, or flags only) falls through
  * to the runtime in brainstem.mjs.
  */
 export const COMMANDS = {
   migrate: runMigrate,
-  config: runConfig
+  config: runConfig,
+  init: runInit,
+  plugins: runPlugins
 };
+
+// Commands that never touch the database.
+const NO_DATABASE = new Set(["init", "plugins"]);
 
 const USAGE = {
   migrate: MIGRATE_USAGE,
-  config: CONFIG_USAGE
+  config: CONFIG_USAGE,
+  init: PLUGINS_USAGE,
+  plugins: PLUGINS_USAGE
 };
 
 export const COMMANDS_USAGE = `Commands:
@@ -35,7 +45,11 @@ export const COMMANDS_USAGE = `Commands:
   config export         Write a stored version as a config module
   config list|show      List versions / show one
   config activate <id>  Activate a version (rollback)
-  config validate       Check a config module against the schema`;
+  config validate       Check a config module against the schema
+  init                  Create a config and the plugin folder with the default plugins
+  plugins list          Installed plugins (see: brainstem plugins --help)
+  plugins add|remove    Install or uninstall plugin packages
+  plugins update        Update installed plugins`;
 
 const OPTIONS = {
   config: { type: "string" },
@@ -56,6 +70,8 @@ const OPTIONS = {
   version: { type: "string" },
   "no-activate": { type: "boolean" },
   "if-empty": { type: "boolean" },
+  "plugins-dir": { type: "string" },
+  "no-defaults": { type: "boolean" },
   help: { type: "boolean", short: "h" }
 };
 
@@ -86,12 +102,14 @@ export async function runCli(argv, io = consoleIo()) {
 
   const options = { ...parsed.values };
 
-  try {
-    options.databaseUrl = options.database ?? await databaseUrlFromConfig(options.config);
-  }
-  catch (error) {
-    io.err(error.message);
-    return 1;
+  if (!NO_DATABASE.has(command)) {
+    try {
+      options.databaseUrl = options.database ?? await databaseUrlFromConfig(options.config);
+    }
+    catch (error) {
+      io.err(error.message);
+      return 1;
+    }
   }
 
   return handler(parsed.positionals, options, io);

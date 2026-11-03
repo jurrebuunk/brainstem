@@ -1,0 +1,51 @@
+{
+  "name": "@brainstem-dev/plugin-agentos-runner",
+  "version": "2.1.0",
+  "description": "Brainstem destination plugin: Run small bounded agent tasks in an agentOS VM (log triage, issue summaries).",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "adapter.mjs",
+    "agent.mjs",
+    "config.mjs",
+    "index.mjs",
+    "prompt.mjs",
+    "tools.mjs",
+    "README.md"
+  ],
+  "keywords": [
+    "brainstem",
+    "brainstem-plugin",
+    "brainstem-destination"
+  ],
+  "brainstem": {
+    "kind": "destination",
+    "api": 2
+  },
+  "peerDependencies": {
+    "@brainstem-dev/sdk": "^2.1.0"
+  },
+  "optionalDependencies": {
+    "@rivet-dev/agentos-core": "0.4.6"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jurrebuunk/brainstem.git",
+    "directory": "plugins/agentos-runner"
+  },
+  "homepage": "https://github.com/jurrebuunk/brainstem/blob/main/docs/plugins/agentos-runner.md",
+  "bugs": {
+    "url": "https://github.com/jurrebuunk/brainstem/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

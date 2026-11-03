@@ -5,7 +5,7 @@ Logs matching Brainstem decisions to stdout.
 ## Module
 
 ```js
-"./plugins/log-decisions/index.mjs"
+"@brainstem-dev/plugin-log-decisions"
 ```
 
 ## Config
@@ -13,7 +13,7 @@ Logs matching Brainstem decisions to stdout.
 ```js
 destinations: [
   {
-    module: "./plugins/log-decisions/index.mjs",
+    module: "@brainstem-dev/plugin-log-decisions",
     destination: "default",
     decisions: ["queue", "dispatch", "escalate"],
     routes: "all",

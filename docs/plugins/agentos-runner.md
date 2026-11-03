@@ -48,7 +48,7 @@ When the sidecar can't start, the delivery fails permanently with a message sayi
 ## Module
 
 ```js
-"./plugins/agentos-runner/index.mjs"
+"@brainstem-dev/plugin-agentos-runner"
 ```
 
 ## Example
@@ -56,7 +56,7 @@ When the sidecar can't start, the delivery fails permanently with a message sayi
 Two tasks from one plugin. Brainstem's filters decide which task gets a decision.
 
 ```js
-import { defineAgentOsTask } from "./plugins/agentos-runner/index.mjs";
+import { defineAgentOsTask } from "@brainstem-dev/plugin-agentos-runner";
 import { sendRoomMessage } from "./plugins/matrix/client.mjs";
 
 // A tool any task can be given. It runs on the host.
@@ -87,7 +87,7 @@ export default {
   destinations: [
     {
       id: "log-triage",
-      module: "./plugins/agentos-runner/index.mjs",
+      module: "@brainstem-dev/plugin-agentos-runner",
       decisions: ["queue", "escalate"],
       sources: ["http"],
       config: defineAgentOsTask({
@@ -101,7 +101,7 @@ export default {
     },
     {
       id: "issue-summary",
-      module: "./plugins/agentos-runner/index.mjs",
+      module: "@brainstem-dev/plugin-agentos-runner",
       decisions: ["queue"],
       sources: ["github"],
       types: ["issue"],
@@ -189,7 +189,7 @@ facts    { minimum_decision: handoff.minimumDecision, report_for: <original id> 
 `minimum_decision` keeps the core from ignoring the report. Route it with ordinary filters:
 
 ```js
-{ id: "ops-room", module: "./plugins/matrix/index.mjs", destination: "room", sources: ["agentos"], types: ["agent_report"], config: { ... } }
+{ id: "ops-room", module: "@brainstem-dev/plugin-matrix", destination: "room", sources: ["agentos"], types: ["agent_report"], config: { ... } }
 ```
 
 The runtime never routes a report back to the task that wrote it, and limits chain depth (see [Handoff](../delivery-pipeline.md#handoff-destinations-emitting-observations)).

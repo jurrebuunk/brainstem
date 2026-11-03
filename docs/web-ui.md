@@ -183,7 +183,7 @@ To emit destination output envelopes into the backend telemetry history, configu
 ```js
 destinations: [
   {
-    module: "./plugins/http-json/index.mjs",
+    module: "@brainstem-dev/plugin-http-json",
     destination: "default",
     decisions: "all",
     routes: "all",

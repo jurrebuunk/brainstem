@@ -8,7 +8,7 @@ The HTTP health input polls one or more URLs and emits Brainstem observations.
 inputs: [
   {
     id: "api-health",
-    module: "./plugins/http-health/index.mjs",
+    module: "@brainstem-dev/plugin-http-health",
     input: "check",
     config: {
       url: "https://example.com/health",
@@ -28,7 +28,7 @@ inputs: [
 inputs: [
   {
     id: "service-health",
-    module: "./plugins/http-health/index.mjs",
+    module: "@brainstem-dev/plugin-http-health",
     input: "check",
     config: {
       checks: [
@@ -80,7 +80,7 @@ Use destination filters to route HTTP health decisions:
 ```js
 destinations: [
   {
-    module: "./plugins/matrix/index.mjs",
+    module: "@brainstem-dev/plugin-matrix",
     destination: "room",
     decisions: "all",
     routes: ["infrastructure"],

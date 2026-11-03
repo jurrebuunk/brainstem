@@ -91,26 +91,20 @@ Administrators can create, disable, and delete users; create and delete custom r
 - Persists telemetry, event history, stats, sessions, users, and roles in SQLite.
 - Exposes protected backend APIs and live SSE for the optional Web UI.
 
-## Built-in plugins
+## Plugins
 
-Input plugins:
+Plugins are npm packages, including Brainstem's own (`@brainstem-dev/plugin-<name>`). `brainstem init` installs a default set into the plugin folder. After that, every plugin can be removed, pinned, updated or reinstalled with `brainstem plugins`, and third-party plugins install the same way.
 
-- `github-issues` — polls GitHub issues.
-- `email-imap` — polls IMAP inboxes for new email.
-- `http-health` — polls HTTP endpoints.
-- `tls-certificate` — checks TLS certificate validity and expiry.
-- `log-file` — watches a log file for new error lines.
-- `static-observations` — local smoke-test input.
+| Inputs | Default | Destinations | Default |
+|---|---|---|---|
+| `http-health`: HTTP endpoint health | yes | `log-decisions`: decisions to stdout | yes |
+| `tls-certificate`: certificate expiry | yes | `http-json`: POST to a webhook | yes |
+| `github-issues`: new and changed issues | yes | `matrix`: a Matrix room | yes |
+| `log-file`: new error lines in a log | yes | `opencode-runner`: start an opencode session | |
+| `static-observations`: smoke tests and demos | yes | `agentos-runner`: small agent tasks in an agentOS VM | |
+| `email-imap`: new email over IMAP | | | |
 
-Destination plugins:
-
-- `log-decisions` — logs decisions to stdout.
-- `matrix` — sends decisions to a Matrix room.
-- `http-json` — posts output envelopes to an HTTP endpoint or the Brainstem backend.
-- `opencode-runner` — starts matching work on an opencode server.
-- `agentos-runner` — runs a configured task in a Rivet agentOS VM with host-side tools (optional dependency).
-
-See the [plugin catalog](docs/plugins.md).
+See [Plugins](docs/plugins.md) for installing, writing and publishing plugins ([`@brainstem-dev/sdk`](packages/sdk/README.md)).
 
 ## Requirements
 
@@ -118,6 +112,17 @@ See the [plugin catalog](docs/plugins.md).
 - npm
 
 Brainstem uses Node's built-in SQLite support. Node may print an experimental SQLite warning depending on the Node build.
+
+## Install from npm
+
+```sh
+npm install -g @brainstem-dev/brainstem
+mkdir my-brainstem && cd my-brainstem
+brainstem init                       # brainstem.config.mjs + the default plugins
+brainstem plugins add email-imap     # optional plugins, when you need them
+brainstem                            # run it (enable runtime.api in the config for the API)
+brainstem --role web                 # the Web UI, in another terminal
+```
 
 ## Quick start from source
 
@@ -164,7 +169,7 @@ export default {
   inputs: [
     {
       id: "api-health",
-      module: "./plugins/http-health/index.mjs",
+      module: "@brainstem-dev/plugin-http-health",
       input: "check",
       config: {
         name: "api",
@@ -181,7 +186,7 @@ export default {
   destinations: [
     {
       id: "log",
-      module: "./plugins/log-decisions/index.mjs",
+      module: "@brainstem-dev/plugin-log-decisions",
       destination: "default",
       decisions: ["queue", "dispatch", "escalate"],
       routes: "all",
@@ -261,22 +266,12 @@ To run the same processes on one machine, use `docker compose -f docker-compose.
 
 ## Package binaries
 
-The package exposes two binaries when installed from npm or directly from the repository:
+`@brainstem-dev/brainstem` installs two commands:
 
-- `brainstem` — headless runtime.
-- `brainstem-api` — standalone backend API.
+- `brainstem`: the runtime and every role (`--role all|core|api|web`), plus `init`, `plugins`, `migrate` and `config`;
+- `brainstem-api`: the standalone backend API.
 
-Install from the GitHub release source or run from a cloned checkout today:
-
-```sh
-git clone https://github.com/jurrebuunk/brainstem.git
-cd brainstem
-npm install
-node brainstem.mjs --help
-node brainstem-api.mjs --help
-```
-
-The Docker image is the recommended install path for production deployments.
+From a checkout, run `node brainstem.mjs` and `node brainstem-api.mjs`. The Docker image is the recommended install path for production deployments.
 
 ## Runtime commands
 
@@ -384,7 +379,7 @@ BRAINSTEM_CONFIG             editable config path
 Input plugins emit observations:
 
 ```js
-import { defineInputPlugin } from "./src/sdk/index.mjs";
+import { defineInputPlugin } from "@brainstem-dev/sdk";
 
 export default defineInputPlugin({
   apiVersion: "brainstem.input/v1",
@@ -410,7 +405,7 @@ export default defineInputPlugin({
 Destination plugins receive routed decisions as a serializable `brainstem.output` envelope, one delivery per call, with an idempotency key that stays the same across retries:
 
 ```js
-import { defineDestinationPlugin } from "./src/sdk/index.mjs";
+import { defineDestinationPlugin } from "@brainstem-dev/sdk";
 
 export default defineDestinationPlugin({
   apiVersion: "brainstem.destination/v2",
@@ -445,8 +440,9 @@ src/runtime/               plugin loading, routing, checkpoints, telemetry
 src/queue/                 job transport, delivery log, job runner
 src/backend/               backend HTTP API, telemetry, auth, stats, SSE, config
 src/telemetry/             shared telemetry selectors and metric derivation
-src/sdk/                   plugin author helpers
-plugins/<name>/            built-in input and destination plugins
+src/sdk/                   re-exports packages/sdk for the runtime
+packages/sdk/              @brainstem-dev/sdk: the plugin API and test kit
+plugins/<name>/            built-in plugins, each its own npm package (@brainstem-dev/plugin-<name>)
 web/                       React Flow Web UI and static/proxy server
 docs/                      user, plugin, and maintainer documentation
 ```

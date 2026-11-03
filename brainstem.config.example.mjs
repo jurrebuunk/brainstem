@@ -8,7 +8,7 @@ export default {
     /*
     {
       id: "api-health",
-      module: "./plugins/http-health/index.mjs",
+      module: "@brainstem-dev/plugin-http-health",
       input: "check",
       config: {
         name: "example-api",
@@ -22,7 +22,7 @@ export default {
     },
     {
       id: "example-tls",
-      module: "./plugins/tls-certificate/index.mjs",
+      module: "@brainstem-dev/plugin-tls-certificate",
       input: "check",
       config: {
         host: "example.com",
@@ -34,7 +34,7 @@ export default {
     },
     {
       id: "email-inbox",
-      module: "./plugins/email-imap/index.mjs",
+      module: "@brainstem-dev/plugin-email-imap",
       input: "messages",
       config: {
         host: "imap.example.com",
@@ -49,7 +49,7 @@ export default {
     },
     {
       id: "github-issues",
-      module: "./plugins/github-issues/index.mjs",
+      module: "@brainstem-dev/plugin-github-issues",
       input: "issues",
       config: {
         repo: "owner/repo",
@@ -67,7 +67,7 @@ export default {
     {
       // Stable id: part of every delivery's idempotency key.
       id: "log",
-      module: "./plugins/log-decisions/index.mjs",
+      module: "@brainstem-dev/plugin-log-decisions",
       destination: "default",
       decisions: [
         "queue",
@@ -85,7 +85,7 @@ export default {
     /*
     ,{
       id: "ops-room",
-      module: "./plugins/matrix/index.mjs",
+      module: "@brainstem-dev/plugin-matrix",
       destination: "room",
       // Optional: override runtime.queue.deliver.retry for this destination.
       // retry: { attempts: 10, minDelayMs: 10000, maxDelayMs: 600000, factor: 2 },
@@ -124,7 +124,7 @@ export default {
     // @rivet-dev/agentos-core. See docs/plugins/agentos-runner.md.
     ,{
       id: "log-triage",
-      module: "./plugins/agentos-runner/index.mjs",
+      module: "@brainstem-dev/plugin-agentos-runner",
       decisions: ["queue", "escalate"],
       sources: ["http"],
       types: ["health_check"],
@@ -151,7 +151,7 @@ export default {
     }
     ,{
       id: "issue-summary",
-      module: "./plugins/agentos-runner/index.mjs",
+      module: "@brainstem-dev/plugin-agentos-runner",
       decisions: ["queue"],
       sources: ["github"],
       types: ["issue"],

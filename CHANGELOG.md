@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.1.0 — 2026-11-03
+
+Brainstem on npm, with plugins as npm packages. The app installs with `npm install -g @brainstem-dev/brainstem`. Every plugin, the built-ins included, is its own package that can be installed, pinned, updated and removed, and third-party plugins work the same way. See [Plugins](docs/plugins.md) and [ADR-0010](docs/adr/0010-plugins-as-npm-packages.md).
+
+Upgrading:
+
+- Nothing to change for existing installs. Configs with paths (`./plugins/matrix/index.mjs`) keep working, Docker images contain every built-in plugin as before, and no migrations run.
+- The npm package is `@brainstem-dev/brainstem` (the `@jurrebuunk/brainstem` name was never published).
+- The app's npm package no longer contains the plugins. After `npm install -g @brainstem-dev/brainstem`, run `brainstem init` to install them.
+
+Changes:
+
+- **Plugins are npm packages:** `@brainstem-dev/plugin-<name>` for each of the 11 built-ins, each with its own dependencies. IMAP libraries now come only with email-imap, and the agentOS runtime only with agentos-runner.
+- **`brainstem init`** creates `brainstem.config.mjs` and the plugin folder, then installs the default plugins. These are http-health, tls-certificate, github-issues, log-file, static-observations, http-json, log-decisions and matrix.
+- **`brainstem plugins list|add|remove|update`** manages the plugin folder (`--plugins-dir`, `BRAINSTEM_PLUGINS_DIR`, default `./brainstem-plugins`) with npm. It takes any npm spec, and built-ins can be given by short name (`brainstem plugins add email-imap`). Installed packages are checked to load as plugins, and rolled back when they don't.
+- **The config names plugins by package** (`module: "@brainstem-dev/plugin-matrix"`). The loader looks in the plugin folder, next to the working directory, then next to Brainstem, and honours `exports`/`main`. Local files and the built-ins' old paths still work. A missing package's error says how to install it.
+- **`@brainstem-dev/sdk`** is the plugin API as its own package with no dependencies: defining and validating plugins, `createObservation`, contexts and plugin state. Its test kit (`@brainstem-dev/sdk/testing`: `runInput`, `runDestination`, `createTestOutput`) runs a plugin the way the runtime does.
+- **Publishing:** the `npm` workflow publishes all packages from the release tag with provenance, through npm trusted publishing after the first release (`scripts/npm-publish.mjs`, [release checklist](docs/release.md)).
+- **CI** runs a packaging smoke test (`scripts/npm-smoke.mjs`). It publishes every package to a throwaway local registry, installs the app globally, runs `brainstem init`, removes and adds plugins, polls, and serves the Web UI.
+- The npm package includes the prebuilt Web UI (`brainstem --role web`).
+- email-imap: `mailparser` 3.14, which fixes the `nodemailer` advisories. `npm audit` reports no vulnerabilities in runtime dependencies.
+
 ## 2.0.0 — 2026-11-03
 
 Brainstem 2.0: a scale-out architecture that keeps the single-node setup first-class. It covers one database for all state, a durable decide/deliver pipeline, multi-core operation on Postgres, and the Helm chart, metrics and tracing. It also adds hardening (roadmap Phase 5): chaos and load tests, fixes they found, and the upgrade guide, ops runbook and plugin migration guide.

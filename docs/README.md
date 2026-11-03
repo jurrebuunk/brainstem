@@ -21,7 +21,8 @@ Documentation is kept in the repository so it is versioned with the code.
 
 ## Plugin docs
 
-- [Plugins overview](plugins.md) — all built-in plugins shipped with Brainstem.
+- [Plugins](plugins.md) — plugins as npm packages: installing (`brainstem plugins`), the built-ins, writing and publishing your own.
+- [`@brainstem-dev/sdk`](../packages/sdk/README.md) — the plugin API and test kit.
 - [Input plugin API](input-plugins.md) — how to write input plugins.
 - [Destination adapter API](destination-adapters.md) — how to write destination plugins.
 - [Migrating destination plugins to v2](plugin-v2-migration.md) — from `brainstem.destination/v1` to v2.

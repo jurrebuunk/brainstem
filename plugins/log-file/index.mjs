@@ -1,7 +1,7 @@
 import { open, stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 
-import { defineInputPlugin } from "../../src/sdk/index.mjs";
+import { defineInputPlugin } from "@brainstem-dev/sdk";
 
 /*
  * Watches a log file and emits one observation per poll that

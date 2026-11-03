@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 
-import { defineDestinationPlugin } from "../../src/sdk/index.mjs";
+import { defineDestinationPlugin } from "@brainstem-dev/sdk";
 import { normalizeConfig } from "./config.mjs";
 import { loadAgentOsAdapter } from "./adapter.mjs";
 import { buildAgentPrompt, renderCommand } from "./prompt.mjs";

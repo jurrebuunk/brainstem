@@ -9,7 +9,7 @@ It includes notification policy, repeat suppression, recovery messages, delivery
 ```js
 destinations: [
   {
-    module: "./plugins/matrix/index.mjs",
+    module: "@brainstem-dev/plugin-matrix",
     destination: "room",
 
     // Use "all" when recovery notifications are enabled,
@@ -105,7 +105,7 @@ State is namespaced per destination entry. Give each Matrix destination entry
 its own `id` if two entries must keep separate state:
 
 ```js
-{ id: "ops-room", module: "./plugins/matrix/index.mjs", destination: "room", ... }
+{ id: "ops-room", module: "@brainstem-dev/plugin-matrix", destination: "room", ... }
 ```
 
 ### Upgrading from the JSON state file
@@ -235,7 +235,7 @@ Send HTTP health alerts and recoveries to Matrix:
 ```js
 destinations: [
   {
-    module: "./plugins/matrix/index.mjs",
+    module: "@brainstem-dev/plugin-matrix",
     destination: "room",
     decisions: "all",
     routes: "all",

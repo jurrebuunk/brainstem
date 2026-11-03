@@ -42,7 +42,7 @@ Inputs are configured plugin instances:
 inputs: [
   {
     id: "api-health",
-    module: "./plugins/http-health/index.mjs",
+    module: "@brainstem-dev/plugin-http-health",
     input: "check",
     retry: {
       attempts: 3,
@@ -66,7 +66,7 @@ Destinations receive matching decision events:
 ```js
 destinations: [
   {
-    module: "./plugins/log-decisions/index.mjs",
+    module: "@brainstem-dev/plugin-log-decisions",
     destination: "default",
     decisions: ["queue", "dispatch", "escalate"],
     routes: "all",

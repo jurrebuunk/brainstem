@@ -5,7 +5,7 @@ The Email IMAP input polls an IMAP mailbox and emits new email messages as Brain
 ## Module
 
 ```js
-"./plugins/email-imap/index.mjs"
+"@brainstem-dev/plugin-email-imap"
 ```
 
 ## Config
@@ -14,7 +14,7 @@ The Email IMAP input polls an IMAP mailbox and emits new email messages as Brain
 inputs: [
   {
     id: "inbox",
-    module: "./plugins/email-imap/index.mjs",
+    module: "@brainstem-dev/plugin-email-imap",
     input: "messages",
     config: {
       host: "imap.example.com",
@@ -74,7 +74,7 @@ To let Brainstem decide which emails are actionable and send those to Matrix:
 ```js
 destinations: [
   {
-    module: "./plugins/matrix/index.mjs",
+    module: "@brainstem-dev/plugin-matrix",
     destination: "room",
     decisions: "all",
     sources: ["email"],

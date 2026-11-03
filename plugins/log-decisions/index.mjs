@@ -1,4 +1,4 @@
-import { defineDestinationPlugin } from "../../src/sdk/index.mjs";
+import { defineDestinationPlugin } from "@brainstem-dev/sdk";
 
 export default defineDestinationPlugin({
   apiVersion: "brainstem.destination/v2",

@@ -96,7 +96,7 @@ runtime: {
 A destination entry can override the deliver retry policy:
 
 ```js
-{ id: "pager", module: "./plugins/http-json/index.mjs", retry: { attempts: 20, maxDelayMs: 600000 } }
+{ id: "pager", module: "@brainstem-dev/plugin-http-json", retry: { attempts: 20, maxDelayMs: 600000 } }
 ```
 
 `runtime.retry` still controls retries of a failing **input poll**. It no longer covers decisions or deliveries.

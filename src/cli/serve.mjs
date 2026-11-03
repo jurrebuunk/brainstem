@@ -373,7 +373,7 @@ function pipelineFor(config, { printAll }) {
   return {
     inputs: config.inputs ?? [],
     destinations: (config.destinations ?? []).map(entry =>
-      printAll && entry.module === "./plugins/log-decisions/index.mjs"
+      printAll && ["./plugins/log-decisions/index.mjs", "@brainstem-dev/plugin-log-decisions"].includes(entry.module)
         ? { ...entry, decisions: "all" }
         : entry
     )

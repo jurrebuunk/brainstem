@@ -30,7 +30,7 @@ export default {
 
 ```js
 // v2
-import { defineDestinationPlugin } from "@jurrebuunk/brainstem/sdk";
+import { defineDestinationPlugin } from "@brainstem-dev/sdk";
 
 export default defineDestinationPlugin({
   apiVersion: "brainstem.destination/v2",
@@ -69,7 +69,7 @@ export default defineDestinationPlugin({
 
 ## Step by step
 
-1. **API version.** Set `apiVersion: "brainstem.destination/v2"`. Optionally wrap the plugin in `defineDestinationPlugin` (from `@jurrebuunk/brainstem/sdk`, or `src/sdk/index.mjs` in a checkout), which validates it at load time.
+1. **API version.** Set `apiVersion: "brainstem.destination/v2"`. Optionally wrap the plugin in `defineDestinationPlugin` (from `@brainstem-dev/sdk`, a peer dependency of your plugin), which validates it at load time.
 2. **Read the output.** The second argument is the `brainstem.output` envelope. Map the fields:
 
    | v1 `event` | v2 `output.payload` |
@@ -120,7 +120,7 @@ node run-plugin-test.mjs        # loads every plugin in plugins/ and checks its 
 Run your plugin under the delivery pipeline with a static input:
 
 ```js
-inputs: [{ id: "probe", module: "./plugins/static-observations/index.mjs",
+inputs: [{ id: "probe", module: "@brainstem-dev/plugin-static-observations",
   config: { observations: [{ id: "probe:1", source: { type: "test", name: "probe" }, type: "item", state: "new", title: "Probe", message: "Hello" }] } }],
 destinations: [{ id: "tickets", module: "./plugins/acme-tickets/index.mjs", decisions: "all", config: { url: "http://127.0.0.1:9999" } }]
 ```

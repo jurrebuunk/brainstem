@@ -18,7 +18,7 @@ Read the [CHANGELOG](../CHANGELOG.md) entries from your version up to 2.0.0 for 
 docker compose pull && docker compose up -d
 ```
 
-or, from npm or a checkout: `npm install @jurrebuunk/brainstem@2` / `git pull && npm ci`, then start it as before.
+or, from npm or a checkout: `npm install -g @brainstem-dev/brainstem` (2.1+; then `brainstem init` for the plugins) / `git pull && npm ci`, then start it as before.
 
 On first start, `--role all` (the default):
 

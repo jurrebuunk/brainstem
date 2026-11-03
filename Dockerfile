@@ -18,6 +18,10 @@ FROM node:24-slim AS deps
 WORKDIR /app
 
 COPY package.json package-lock.json ./
+# Workspaces: the SDK and every built-in plugin package, linked into
+# node_modules/@brainstem-dev so they load by package name.
+COPY packages ./packages
+COPY plugins ./plugins
 # Optional dependencies (the agentOS runner's VM runtime) are left out
 # unless built with --build-arg INSTALL_OPTIONAL=true.
 ARG INSTALL_OPTIONAL=false
@@ -35,6 +39,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
 COPY brainstem.mjs brainstem-api.mjs brainstem.config.example.mjs .env.example README.md LICENSE CHANGELOG.md ./
 COPY src ./src
+COPY packages ./packages
 COPY plugins ./plugins
 COPY docs ./docs
 COPY web/server.mjs web/package.json ./web/
