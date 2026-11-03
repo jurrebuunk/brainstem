@@ -11,6 +11,8 @@ Documentation is kept in the repository so it is versioned with the code.
 - [State](state.md) — the database: records, checkpoints, plugin state, jobs and deliveries.
 - [Delivery pipeline](delivery-pipeline.md) — durable decide/deliver jobs, retries, idempotency keys, dead jobs and redrive.
 - [Cluster mode](cluster.md) — roles and queues, Postgres, input leases, hot config reload, drain, probes and the model image.
+- [Kubernetes](kubernetes.md) — the Helm chart: single and cluster mode, worker groups, KEDA, CloudNativePG, the model image, network policies.
+- [Observability](observability.md) — Prometheus metrics, alerts, the Grafana dashboard, OpenTelemetry traces and log correlation.
 - [Web UI](web-ui.md) — React Flow live view, persisted stats, first-run auth, RBAC, users, roles, and the versioned config editor.
 - [Runtime telemetry](telemetry.md) — structured events emitted by the runtime.
 

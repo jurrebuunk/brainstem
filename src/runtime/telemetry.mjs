@@ -1,4 +1,10 @@
-export function createTelemetrySink(config) {
+/*
+ * Where the runtime sends telemetry events (the API's
+ * /api/events): runtime.telemetry, else BRAINSTEM_TELEMETRY_URL
+ * with an optional BRAINSTEM_TELEMETRY_TOKEN (bearer), which is how
+ * cluster cores without a config file find the API.
+ */
+export function createTelemetrySink(config = telemetryFromEnv()) {
   if (!config) return null;
 
   const url = typeof config === "string" ? config : config.url;
@@ -50,5 +56,16 @@ export function telemetryEvent(kind, payload = {}) {
       timestamp: new Date().toISOString(),
       ...payload
     }
+  };
+}
+
+export function telemetryFromEnv(env = process.env) {
+  if (!env.BRAINSTEM_TELEMETRY_URL) return null;
+
+  const token = env.BRAINSTEM_TELEMETRY_TOKEN ?? env.BRAINSTEM_API_TOKEN;
+
+  return {
+    url: env.BRAINSTEM_TELEMETRY_URL,
+    headers: token ? { authorization: `Bearer ${token}` } : {}
   };
 }

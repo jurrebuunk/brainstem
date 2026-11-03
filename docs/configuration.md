@@ -227,8 +227,9 @@ BRAINSTEM_CONFIG_SOURCE=database node brainstem.mjs
 - Saves in the UI or through `PUT /api/config` send `If-Match` with the version they edited. When someone else activated another version meanwhile, the save fails with 409 instead of overwriting their change.
 - Activating a version (`brainstem config activate <id>`, or **Activate** in the UI) is a rollback. Running cores reload the active version without a restart: claiming stops, in-flight work finishes, inputs and destinations reload, and work resumes. A version that fails to load is logged, and the previous one keeps running.
 - Stored config must be plain data: functions (such as agentOS `tools.*.run`) can't be stored, and `config import` reports where they are.
-- Bootstrap settings stay per process, in the file or the environment: `runtime.database`, `api`, `logging`, `telemetry`, `coreId`, `role`, `queues`. They are left out on import, and a process's own values win.
+- Bootstrap settings stay per process, in the file or the environment: `runtime.database`, `api`, `logging`, `telemetry`, `coreId`, `role`, `queues`. They are left out on import, and a process's own values win. Without a config file, the environment covers them: `BRAINSTEM_DATABASE_URL`, `BRAINSTEM_LOG_LEVEL`/`_FORMAT`, `BRAINSTEM_TELEMETRY_URL`/`_TOKEN`, `BRAINSTEM_CORE_ID`, `BRAINSTEM_ROLE` and `BRAINSTEM_QUEUES`.
 - `brainstem config export` writes a version back as a config module (GitOps, backups).
+- `brainstem config import --if-empty` stores the file only while no version exists (seeding on first install).
 
 Hot reload covers inputs, destinations, policy, Laya questions and load options, `runtime.queue` (not `transport`), `inputs` (not `scheduling`), `handoff` and `shutdown`. The other settings need a restart.
 

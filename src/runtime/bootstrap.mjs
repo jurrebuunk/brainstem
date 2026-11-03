@@ -20,27 +20,40 @@ const AUTO_IMPORT_TASK = "auto-import-v1";
  * `brainstem migrate` or a deploy hook, never from every pod) the
  * schema is only checked, and opening fails while migrations are
  * pending.
+ *
+ * `waitMs` (BRAINSTEM_SCHEMA_WAIT_MS) keeps retrying that for a
+ * while instead of failing at once: on Kubernetes the pods start
+ * together with the migration Job, or before the database is up.
  */
 export async function openRuntimeDatabase(config = {}, {
   baseDir = process.cwd(),
   logger = null,
-  migrate = true
+  migrate = true,
+  waitMs = Number(process.env.BRAINSTEM_SCHEMA_WAIT_MS ?? 0),
+  retryMs = 2_000
 } = {}) {
   const options = config.runtime?.database ?? {};
   const url = runtimeDatabaseUrl(options, baseDir);
 
   if (!migrate) {
-    const handle = await openDatabase({ url, pool: options.pool ?? {} });
+    const deadline = Date.now() + Math.max(0, waitMs || 0);
+    let warned = false;
 
-    try {
-      await assertSchemaCurrent(handle);
-    }
-    catch (error) {
-      await handle.close();
-      throw error;
-    }
+    while (true) {
+      try {
+        return await openCurrentDatabase(url, options);
+      }
+      catch (error) {
+        if (Date.now() + retryMs > deadline) throw error;
 
-    return handle;
+        if (!warned) {
+          warned = true;
+          logger?.warn?.("waiting for the database schema", { error: error.message, waitMs });
+        }
+
+        await new Promise(resolve => setTimeout(resolve, retryMs));
+      }
+    }
   }
 
   const handle = await openMigratedDatabase({
@@ -56,6 +69,20 @@ export async function openRuntimeDatabase(config = {}, {
       await handle.close();
       throw error;
     }
+  }
+
+  return handle;
+}
+
+async function openCurrentDatabase(url, options) {
+  const handle = await openDatabase({ url, pool: options.pool ?? {} });
+
+  try {
+    await assertSchemaCurrent(handle);
+  }
+  catch (error) {
+    await handle.close();
+    throw error;
   }
 
   return handle;

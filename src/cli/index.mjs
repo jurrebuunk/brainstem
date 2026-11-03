@@ -55,6 +55,7 @@ const OPTIONS = {
   author: { type: "string" },
   version: { type: "string" },
   "no-activate": { type: "boolean" },
+  "if-empty": { type: "boolean" },
   help: { type: "boolean", short: "h" }
 };
 

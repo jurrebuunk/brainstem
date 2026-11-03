@@ -1,0 +1,10 @@
+# ct install: single mode, SQLite on a volume, config seeded at start.
+mode: single
+web:
+  replicas: 1
+single:
+  resources:
+    requests: {cpu: 250m, memory: 1Gi}
+    limits: {memory: 3Gi}
+  persistence:
+    size: 1Gi

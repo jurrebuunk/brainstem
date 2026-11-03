@@ -1,0 +1,153 @@
+{{- define "brainstem.np.dns" -}}
+- ports:
+    - { port: 53, protocol: UDP }
+    - { port: 53, protocol: TCP }
+{{- end }}
+{{- define "brainstem.np.postgres" -}}
+- ports:
+    - { port: {{ .Values.networkPolicy.postgres.port }}, protocol: TCP }
+  {{- if or .Values.networkPolicy.postgres.to .Values.cnpg.enabled }}
+  to:
+    {{- with .Values.networkPolicy.postgres.to }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if .Values.cnpg.enabled }}
+    - podSelector:
+        matchLabels:
+          cnpg.io/cluster: {{ include "brainstem.cnpgName" . }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+{{- $selector := include "brainstem.selectorLabels" . }}
+{{- $apiPods := ternary (dict "app.kubernetes.io/component" "single") (dict "app.kubernetes.io/component" "api") (eq .Values.mode "single") }}
+{{- $apiPort := ternary .Values.single.port .Values.api.port (eq .Values.mode "single") }}
+# Web UI: from the ingress controller; to the API only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "brainstem.fullname" . }}-web
+  labels:
+    {{- include "brainstem.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "brainstem.componentSelector" (dict "root" . "component" "web") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - { port: {{ .Values.web.port }}, protocol: TCP }
+      from:
+        {{- toYaml $np.webFrom | nindent 8 }}
+  egress:
+    {{- include "brainstem.np.dns" . | nindent 4 }}
+    - ports:
+        - { port: {{ $apiPort }}, protocol: TCP }
+      to:
+        - podSelector:
+            matchLabels:
+              {{- $selector | nindent 14 }}
+              {{- toYaml $apiPods | nindent 14 }}
+{{- if eq .Values.mode "cluster" }}
+---
+# API: from the Web UI, cores (telemetry) and Prometheus; to Postgres.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "brainstem.fullname" . }}-api
+  labels:
+    {{- include "brainstem.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "brainstem.componentSelector" (dict "root" . "component" "api") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - { port: {{ .Values.api.port }}, protocol: TCP }
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "brainstem.componentSelector" (dict "root" . "component" "web") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- $selector | nindent 14 }}
+              brainstem.io/role: core
+        {{- toYaml $np.metricsFrom | nindent 8 }}
+  egress:
+    {{- include "brainstem.np.dns" . | nindent 4 }}
+    {{- include "brainstem.np.postgres" . | nindent 4 }}
+    {{- with $np.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+---
+# Cores: Prometheus in; Postgres, the API and inputs/destinations out.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "brainstem.fullname" . }}-cores
+  labels:
+    {{- include "brainstem.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- $selector | nindent 6 }}
+      brainstem.io/role: core
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - { port: {{ ternary .Values.single.healthPort .Values.cores.defaults.healthPort (eq .Values.mode "single") }}, protocol: TCP }
+      from:
+        {{- toYaml $np.metricsFrom | nindent 8 }}
+    {{- if eq .Values.mode "single" }}
+    - ports:
+        - { port: {{ .Values.single.port }}, protocol: TCP }
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "brainstem.componentSelector" (dict "root" . "component" "web") | nindent 14 }}
+        {{- toYaml $np.metricsFrom | nindent 8 }}
+    {{- end }}
+  egress:
+    {{- include "brainstem.np.dns" . | nindent 4 }}
+    {{- include "brainstem.np.postgres" . | nindent 4 }}
+    {{- if eq .Values.mode "cluster" }}
+    - ports:
+        - { port: {{ .Values.api.port }}, protocol: TCP }
+      to:
+        - podSelector:
+            matchLabels:
+              {{- include "brainstem.componentSelector" (dict "root" . "component" "api") | nindent 14 }}
+    {{- end }}
+    {{- with $np.coreEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with $np.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- if eq .Values.mode "cluster" }}
+---
+# Migration and config-import jobs: Postgres only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "brainstem.fullname" . }}-jobs
+  labels:
+    {{- include "brainstem.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/instance
+        operator: In
+        values: [{{ .Release.Name | quote }}]
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [migrate, config-import]
+  policyTypes: [Ingress, Egress]
+  egress:
+    {{- include "brainstem.np.dns" . | nindent 4 }}
+    {{- include "brainstem.np.postgres" . | nindent 4 }}
+{{- end }}
+{{- end }}

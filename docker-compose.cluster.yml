@@ -1,0 +1,169 @@
+# Brainstem in cluster mode on one machine: Postgres, the API, the
+# Web UI and three cores with one stage each, the same processes the
+# Helm chart runs on Kubernetes (docs/docker.md#cluster-mode).
+#
+#   cp brainstem.config.example.mjs brainstem.config.mjs   # the seed
+#   docker compose -f docker-compose.cluster.yml up -d
+#   open http://127.0.0.1:5173
+#
+# Scale a stage:   docker compose -f docker-compose.cluster.yml up -d --scale core-deliver=3
+# With Prometheus and Jaeger (traces):  --profile observability
+#
+# The config lives in Postgres (BRAINSTEM_CONFIG_SOURCE=database). The
+# migrate service stores ./brainstem.config.mjs as the first version
+# once; after that, edit it in the Web UI and every core reloads it.
+
+x-brainstem: &brainstem
+  image: ${BRAINSTEM_IMAGE:-ghcr.io/jurrebuunk/brainstem:v2.0.0-beta.1}
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: false
+  environment: &brainstem-env
+    BRAINSTEM_DATABASE_URL: postgres://brainstem:${POSTGRES_PASSWORD:-brainstem}@postgres:5432/brainstem
+    BRAINSTEM_CONFIG_SOURCE: database
+    # No config file in the runtime processes: bootstrap comes from here.
+    BRAINSTEM_CONFIG: /nonexistent/brainstem.config.mjs
+    BRAINSTEM_MIGRATE: "false"
+    BRAINSTEM_SCHEMA_WAIT_MS: "120000"
+    BRAINSTEM_LOG_FORMAT: json
+    BRAINSTEM_API_TOKEN: ${BRAINSTEM_API_TOKEN:-}
+    BRAINSTEM_TELEMETRY_URL: http://api:5174/api/events
+    # Traces, with --profile observability (ignored when Jaeger is not up).
+    OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+  depends_on: &brainstem-depends
+    migrate:
+      condition: service_completed_successfully
+  stop_grace_period: 60s
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: brainstem
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-brainstem}
+      POSTGRES_DB: brainstem
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brainstem -d brainstem"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Schema migrations, then the first config version (never overwrites).
+  migrate:
+    <<: *brainstem
+    restart: "no"
+    environment:
+      <<: *brainstem-env
+      BRAINSTEM_CONFIG: /app/seed/brainstem.config.mjs
+    command:
+      - sh
+      - -c
+      - node brainstem.mjs migrate && node brainstem.mjs config import --if-empty --author compose
+    volumes:
+      - ./brainstem.config.mjs:/app/seed/brainstem.config.mjs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # The Laya model from its OCI image: Docker fills the empty volume
+  # with the image's /models on first use. After changing the models
+  # image, remove the volume (docker volume rm <project>_laya-model).
+  models:
+    image: ${BRAINSTEM_MODELS_IMAGE:-ghcr.io/jurrebuunk/brainstem-models:laya-0.1.1}
+    restart: "no"
+    command: ["ls", "/models/laya.onnx.data"]
+    volumes:
+      - laya-model:/models
+
+  api:
+    <<: *brainstem
+    command: ["node", "brainstem.mjs", "--role", "api"]
+    environment:
+      <<: *brainstem-env
+      BRAINSTEM_API_HOST: 0.0.0.0
+      BRAINSTEM_API_PORT: "5174"
+      BRAINSTEM_TRUSTED_PROXIES: loopback,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8
+      BRAINSTEM_DRAIN_DELAY_MS: "2000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5174/readyz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  web:
+    <<: *brainstem
+    command: ["node", "web/server.mjs"]
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "5173"
+      WEB_BACKEND_URL: http://api:5174
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  core-poll:
+    <<: *brainstem
+    command: ["node", "brainstem.mjs", "--role", "core", "--queues", "poll"]
+
+  core-decide:
+    <<: *brainstem
+    command: ["node", "brainstem.mjs", "--role", "core", "--queues", "decide", "--drain-timeout", "45000"]
+    environment:
+      <<: *brainstem-env
+      BRAINSTEM_LAYA_MODEL_DIR: /models
+    volumes:
+      - laya-model:/models:ro
+    depends_on:
+      <<: *brainstem-depends
+      models:
+        condition: service_completed_successfully
+
+  core-deliver:
+    <<: *brainstem
+    command: ["node", "brainstem.mjs", "--role", "core", "--queues", "deliver", "--drain-timeout", "45000"]
+
+  # --profile observability: Prometheus on :9090, Jaeger on :16686.
+  # Set OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 in .env for traces.
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: [observability]
+    restart: unless-stopped
+    configs:
+      - source: prometheus
+        target: /etc/prometheus/prometheus.yml
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  jaeger:
+    image: jaegertracing/jaeger:2.10.0
+    profiles: [observability]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:16686:16686"
+
+configs:
+  prometheus:
+    content: |
+      global:
+        scrape_interval: 15s
+      scrape_configs:
+        - job_name: brainstem-api
+          static_configs:
+            - targets: ["api:5174"]
+        # Every core replica, also after --scale (Docker DNS).
+        - job_name: brainstem-cores
+          dns_sd_configs:
+            - names: [core-poll, core-decide, core-deliver]
+              type: A
+              port: 8081
+
+volumes:
+  postgres-data:
+  laya-model:

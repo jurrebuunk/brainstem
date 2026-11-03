@@ -67,6 +67,7 @@
     "flake.nix",
     "brainstem.config.example.mjs",
     "docker-compose.example.yml",
+    "docker-compose.cluster.yml",
     "Dockerfile",
     "Dockerfile.models",
     ".env.example",

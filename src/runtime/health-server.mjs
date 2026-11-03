@@ -1,6 +1,9 @@
 import http from "node:http";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 
+import { registerClusterMetrics } from "../observability/brainstem-metrics.mjs";
+import { defaultRegistry, metricsAuthorized, metricsEnabled, sendMetrics } from "../observability/metrics.mjs";
+
 /*
  * Probes for a core process (roadmap §5):
  *
@@ -8,12 +11,26 @@ import { monitorEventLoopDelay } from "node:perf_hooks";
  *                  database, so a database outage never restarts pods
  *   GET /readyz    started, not draining and the database reachable
  *   GET /startupz  started: schema checked, plugins and model loaded
+ *   GET /metrics   Prometheus metrics of this process; with
+ *                  `clusterDatabase` (role all) also the cluster-wide
+ *                  queue, core and input gauges
  *
  * The API serves the same paths on its own port.
  */
-export function createHealthServer({ host = "0.0.0.0", port = 8081, runtime, logger = null }) {
+export function createHealthServer({
+  host = "0.0.0.0",
+  port = 8081,
+  runtime,
+  logger = null,
+  metrics = metricsEnabled() ? defaultRegistry() : null,
+  clusterDatabase = null
+}) {
   const delay = monitorEventLoopDelay({ resolution: 20 });
   delay.enable();
+
+  const removeCluster = metrics && clusterDatabase
+    ? registerClusterMetrics(metrics, { database: clusterDatabase })
+    : null;
 
   const server = http.createServer(async (request, response) => {
     const path = new URL(request.url, "http://localhost").pathname;
@@ -36,6 +53,16 @@ export function createHealthServer({ host = "0.0.0.0", port = 8081, runtime, log
     if (path === "/readyz") {
       const ready = await runtime.ready();
       send(response, ready ? 200 : 503, { ok: ready, ...health });
+      return;
+    }
+
+    if (path === "/metrics" && metrics) {
+      if (!metricsAuthorized(request)) {
+        send(response, 401, { ok: false, error: "Unauthorized" });
+        return;
+      }
+
+      await sendMetrics(response, metrics);
       return;
     }
 
@@ -68,6 +95,7 @@ export function createHealthServer({ host = "0.0.0.0", port = 8081, runtime, log
 
     async close() {
       delay.disable();
+      removeCluster?.();
       server.closeAllConnections?.();
       await new Promise(resolve => server.close(() => resolve()));
     }

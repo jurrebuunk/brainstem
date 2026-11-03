@@ -1,0 +1,31 @@
+{{- if .Values.cnpg.enabled }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "brainstem.cnpgName" . }}
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" . "component" "postgres") | nindent 4 }}
+spec:
+  instances: {{ .Values.cnpg.instances }}
+  {{- with .Values.cnpg.imageName }}
+  imageName: {{ . }}
+  {{- end }}
+  # Brainstem connects as the owner of the `app` database, using the
+  # generated <name>-app Secret (key: uri).
+  bootstrap:
+    initdb:
+      database: app
+      owner: app
+  storage:
+    size: {{ .Values.cnpg.storage.size }}
+    {{- with .Values.cnpg.storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+  {{- with .Values.cnpg.resources }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.cnpg.spec }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+{{- end }}

@@ -1,6 +1,6 @@
 # Brainstem 2.0 — Scale-out architecture & roadmap
 
-Status: **accepted** (all decisions in §7 are final) · Current release: `v1.4.0` (Phases 0–2) · Beta: `v2.0.0-beta.1` (Phase 3) · Target: `v2.0.0` · Baseline: `v0.1.0` (single Node process + SQLite)
+Status: **accepted** (all decisions in §7 are final) · Current release: `v1.4.0` (Phases 0–2) · Beta: `v2.0.0-beta.1` (Phase 3) · Phase 4 implemented (`2.0.0-rc`) · Target: `v2.0.0` · Baseline: `v0.1.0` (single Node process + SQLite)
 
 ## 1. Goal
 
@@ -176,7 +176,7 @@ Core tables: `inputs` (schedule + lease), `checkpoints`, `observations`, `record
 - **Migrations:** Helm `pre-install,pre-upgrade` hook Job (`brainstem migrate`); Argo CD `PreSync` documented. Never migrate from every pod.
 - **Caveat:** advisory locks and LISTEN need a direct (non-PgBouncer-transaction) connection.
 - **Security:** non-root uid 1000, read-only rootfs + `emptyDir /tmp`, drop ALL caps, seccomp RuntimeDefault, default-deny NetworkPolicy (core gets egress), per-role ServiceAccount with no token automount, cosign-signed multi-arch images, Trivy in CI.
-- **Observability:** OTel spans `poll → decide → deliver:<dest>`, `traceparent` stored on each job so one envelope = one trace across pods. Metrics: `brainstem_queue_ready`, `brainstem_queue_oldest_age_seconds`, `brainstem_job_duration_seconds`, `brainstem_job_failures_total`, `brainstem_deliveries_total`, `brainstem_input_lease_lag_seconds`, event-loop lag. pino JSON logs with `trace_id`, `observation_id`, `role`.
+- **Observability:** OTel spans `poll → decide → deliver:<dest>`, `traceparent` stored on each job so one envelope = one trace across pods ([ADR-0009](adr/0009-in-house-metrics-and-tracing.md): in-house exporter, no SDK). Metrics: `brainstem_queue_ready`, `brainstem_queue_oldest_age_seconds`, `brainstem_job_duration_seconds`, `brainstem_job_failures_total`, `brainstem_deliveries_total`, `brainstem_input_lease_lag_seconds`, event-loop lag. pino JSON logs with `trace_id`, `observation_id`, `role`.
 
 ## 6. Roadmap
 
@@ -211,7 +211,7 @@ Each phase is releasable on its own and keeps `role=all` working. Rough sizing a
 - Config as versioned data + JSON Schema + hot reload; `config import|export`.
 - Graceful drain on SIGTERM; health/readiness endpoints on every role.
 
-### Phase 4 — Kubernetes & ops (≈2–3 wks) → `2.0.0-rc`
+### Phase 4 — Kubernetes & ops (≈2–3 wks) → `2.0.0-rc` · implemented, see [Kubernetes](kubernetes.md) and [Observability](observability.md)
 - Helm chart (single + cluster), KEDA/HPA, PDBs, NetworkPolicies, migration hook.
 - OTel tracing, Prometheus metrics + ServiceMonitor, example Grafana dashboard and alerts (queue age, failure rate, no healthy core).
 - `docker-compose.cluster.yml` (postgres + api + web + 3 cores) for parity.

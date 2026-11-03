@@ -107,11 +107,15 @@ ctx.logger          // scoped logs, shown under the destination in the Web UI
 ctx.state           // durable plugin state (get / set / update / delete)
 ctx.idempotencyKey  // stable across retries of this delivery
 ctx.attempt         // 1 on the first try
+ctx.traceparent     // W3C trace context of this delivery, or null (tracing off)
+ctx.emit            // hand an observation back to the core
 ```
 
 Each call delivers one decision to one destination and runs as its own job (see [Delivery pipeline](delivery-pipeline.md)). Return normally when the receiver accepted it, and throw to have it retried with backoff. Throw an error with `permanent: true` to skip the retries, for example on a 4xx response that will not change.
 
 A delivery can run more than once: a retry after an ambiguous failure, or a job whose lease expired. Pass `ctx.idempotencyKey` on to the receiving system so a repeat has no second effect. Where the receiver has no such mechanism, record progress under that key in `ctx.state` and resume from it, like opencode-runner does with its session.
+
+With tracing on ([Observability](observability.md#tracing)), forward `ctx.traceparent` to the receiving service, for example as the `traceparent` HTTP header, so its spans join the envelope's trace.
 
 Destination adapters should not change Brainstem decisions. They should only react to them.
 

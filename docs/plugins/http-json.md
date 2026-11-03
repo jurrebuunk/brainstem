@@ -70,6 +70,6 @@ The destination POSTs:
 }
 ```
 
-Each request carries an `Idempotency-Key` header with the delivery's idempotency key. A retried delivery sends the same key and the same body, so the receiver can drop duplicates.
+Each request carries an `Idempotency-Key` header with the delivery's idempotency key. A retried delivery sends the same key and the same body, so the receiver can drop duplicates. With tracing on, it also sends the W3C `traceparent` header, so the receiver can continue the envelope's trace.
 
 A non-2xx response fails the delivery, and it is retried with backoff (see [Delivery pipeline](../delivery-pipeline.md)).

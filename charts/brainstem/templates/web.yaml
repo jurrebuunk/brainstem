@@ -1,0 +1,114 @@
+{{- if .Values.web.enabled }}
+{{- $selector := include "brainstem.componentSelector" (dict "root" . "component" "web") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "brainstem.fullname" . }}-web
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" . "component" "web") | nindent 4 }}
+spec:
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels:
+      {{- $selector | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "brainstem.componentLabels" (dict "root" . "component" "web") | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "brainstem.serviceAccountName" (dict "root" . "component" "web") }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- include "brainstem.topologySpread" (dict "root" . "selector" $selector) | nindent 6 }}
+      containers:
+        - name: web
+          image: {{ include "brainstem.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "web/server.mjs"]
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: HOST
+              value: "0.0.0.0"
+            - name: PORT
+              value: {{ .Values.web.port | quote }}
+            - name: WEB_BACKEND_URL
+              value: {{ include "brainstem.apiUrl" . | quote }}
+            {{- range $name, $value := .Values.web.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.web.port }}
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /, port: http }
+            periodSeconds: 20
+            failureThreshold: 3
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.web.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.web.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.web.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "brainstem.fullname" . }}-web
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" . "component" "web") | nindent 4 }}
+spec:
+  type: {{ .Values.web.service.type }}
+  selector:
+    {{- $selector | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.web.service.port }}
+      targetPort: http
+{{- if and .Values.web.pdb.enabled (gt (int .Values.web.replicas) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "brainstem.fullname" . }}-web
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" . "component" "web") | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.web.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- $selector | nindent 6 }}
+{{- end }}
+{{- end }}

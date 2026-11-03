@@ -1,0 +1,119 @@
+suite: observability and security
+templates:
+  - templates/servicemonitor.yaml
+  - templates/prometheusrule.yaml
+  - templates/grafana-dashboard.yaml
+  - templates/networkpolicies.yaml
+  - templates/cores.yaml
+  - templates/ingress.yaml
+set:
+  database.url: postgres://u:p@pg/b
+tests:
+  - it: scrapes the API and every core
+    template: templates/servicemonitor.yaml
+    set:
+      metrics.serviceMonitor.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: spec.endpoints[0].port
+          value: http
+        documentIndex: 0
+      - equal:
+          path: spec.endpoints[0].port
+          value: health
+        documentIndex: 1
+
+  - it: alerts on no healthy core, backlog, failures and overdue inputs
+    template: templates/prometheusrule.yaml
+    release:
+      namespace: ops
+    set:
+      metrics.prometheusRule.enabled: true
+    asserts:
+      - equal:
+          path: spec.groups[0].rules[0].alert
+          value: BrainstemNoHealthyCore
+      - equal:
+          path: spec.groups[0].rules[0].expr
+          value: max by (queue) (brainstem_cores_running{namespace="ops"}) < 1
+      - equal:
+          path: spec.groups[0].rules[2].expr
+          value: max by (queue) (brainstem_queue_oldest_age_seconds{namespace="ops"}) > 300
+      - lengthEqual:
+          path: spec.groups[0].rules
+          count: 7
+
+  - it: ships the Grafana dashboard for the sidecar
+    template: templates/grafana-dashboard.yaml
+    set:
+      metrics.grafanaDashboard.enabled: true
+    asserts:
+      - equal:
+          path: metadata.labels.grafana_dashboard
+          value: "1"
+      - matchRegex:
+          path: data["brainstem.json"]
+          pattern: '"uid": "brainstem-overview"'
+
+  - it: puts cores behind a default-deny policy that still reaches Postgres and the API
+    template: templates/networkpolicies.yaml
+    set:
+      networkPolicy.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-brainstem-cores
+    asserts:
+      - equal:
+          path: spec.policyTypes
+          value: [Ingress, Egress]
+      - contains:
+          path: spec.egress
+          content:
+            ports:
+              - { port: 5432, protocol: TCP }
+      - contains:
+          path: spec.egress
+          content: {}
+
+  - it: lets only the web pods, cores and Prometheus reach the API
+    template: templates/networkpolicies.yaml
+    set:
+      networkPolicy.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-brainstem-api
+    asserts:
+      - lengthEqual:
+          path: spec.ingress[0].from
+          count: 3
+
+  - it: routes the ingress to the Web UI with SSE-friendly defaults
+    template: templates/ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.tls:
+        - secretName: tls
+          hosts: [brainstem.example.com]
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: RELEASE-NAME-brainstem-web
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-buffering"]
+          value: "off"
+
+  - it: sends traces to the configured collector
+    template: templates/cores.yaml
+    set:
+      tracing.endpoint: http://otel:4318
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OTEL_EXPORTER_OTLP_ENDPOINT
+            value: http://otel:4318

@@ -1,3 +1,5 @@
+import { activeSpan } from "../observability/tracing.mjs";
+
 const LEVELS = {
   debug: 10,
   info: 20,
@@ -71,6 +73,13 @@ class RuntimeLogger {
       message: String(message),
       ...normalizeFields(fields)
     };
+
+    // Correlate with the trace this work belongs to (tracing on).
+    const span = activeSpan();
+    if (span?.traceId) {
+      entry.trace_id ??= span.traceId;
+      entry.span_id ??= span.spanId;
+    }
 
     const line = this.format === "json"
       ? JSON.stringify(entry)

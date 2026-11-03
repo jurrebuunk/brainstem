@@ -231,6 +231,16 @@ docker manifest inspect ghcr.io/jurrebuunk/brainstem:v1.4.0
 
 See [`docs/docker.md`](docs/docker.md).
 
+## Kubernetes
+
+The Helm chart runs Brainstem as one pod with SQLite (`mode: single`), or as a scaled-out cluster on Postgres (`mode: cluster`). The cluster has API, Web UI and core worker groups, KEDA autoscaling on queue depth, CloudNativePG, the model as an OCI image, network policies, a ServiceMonitor, alerts and a Grafana dashboard:
+
+```sh
+helm install brainstem oci://ghcr.io/jurrebuunk/charts/brainstem --set database.existingSecret=brainstem-db
+```
+
+To run the same processes on one machine, use `docker compose -f docker-compose.cluster.yml up -d`. See [`docs/kubernetes.md`](docs/kubernetes.md) and [`docs/observability.md`](docs/observability.md) (Prometheus metrics and OpenTelemetry traces).
+
 ## Package binaries
 
 The package exposes two binaries when installed from npm or directly from the repository:

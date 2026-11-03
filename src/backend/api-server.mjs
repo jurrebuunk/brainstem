@@ -25,6 +25,8 @@ import { withSingletonLock } from "../db/locks.mjs";
 import { CONFIG_SCHEMA } from "../config/schema.mjs";
 import { createConfigVersionStore } from "../config/versions.mjs";
 import { resolveConfigSource } from "../config/source.mjs";
+import { registerClusterMetrics } from "../observability/brainstem-metrics.mjs";
+import { defaultRegistry, metricsAuthorized, metricsEnabled, sendMetrics } from "../observability/metrics.mjs";
 
 // Cores not seen for this long are removed from the registry.
 const CORE_PRUNE_AFTER_MS = 24 * 60 * 60 * 1000;
@@ -63,7 +65,10 @@ export function createBackendApiServer({
   maintenanceIntervalMs = nonNegativeInteger(
     process.env.BRAINSTEM_MAINTENANCE_INTERVAL_MS,
     DEFAULT_MAINTENANCE_INTERVAL_MS
-  )
+  ),
+  // Prometheus registry for GET /metrics (null: off). The API adds
+  // the cluster-wide queue, core and input gauges.
+  metrics = metricsEnabled() ? defaultRegistry() : null
 } = {}) {
   const configStore = createConfigStore(configPath);
   const proxies = createTrustedProxies(trustedProxies);
@@ -81,6 +86,7 @@ export function createBackendApiServer({
   let configVersions = null;
   let started = null;
   let draining = false;
+  let removeClusterMetrics = null;
 
   async function start() {
     if (database) {
@@ -131,6 +137,7 @@ export function createBackendApiServer({
     // The runtime's job queue and delivery log, in the same database.
     pipeline = createPipelineStorage({ type: "database", database: handle });
     pipelineAdmin = createPipelineAdmin(pipeline);
+    if (metrics) removeClusterMetrics = registerClusterMetrics(metrics, { database: handle });
 
     api.telemetryStore = telemetryStore;
     api.authStore = authStore;
@@ -165,6 +172,12 @@ export function createBackendApiServer({
       if (url.pathname === "/startupz" && request.method === "GET") {
         const startedOk = Boolean(telemetryStore && authStore);
         sendJson(response, { ok: startedOk, role: "api" }, startedOk ? 200 : 503);
+        return;
+      }
+
+      if (url.pathname === "/metrics" && request.method === "GET" && metrics) {
+        if (!metricsAuthorized(request)) throw httpError(401, "Unauthorized");
+        await sendMetrics(response, metrics);
         return;
       }
 
@@ -583,6 +596,8 @@ export function createBackendApiServer({
       }
       await started?.catch(() => {});
       await maintenance?.stop();
+      removeClusterMetrics?.();
+      removeClusterMetrics = null;
       await telemetryStore?.close();
       await authStore?.close();
       if (ownsHandle) await handle.close();

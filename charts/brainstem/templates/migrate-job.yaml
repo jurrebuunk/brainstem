@@ -1,0 +1,59 @@
+{{- /* Single mode (role all) migrates on start. */}}
+{{- if and .Values.migrations.enabled (eq .Values.mode "cluster") }}
+{{- $hook := not .Values.cnpg.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  {{- if $hook }}
+  name: {{ include "brainstem.fullname" . }}-migrate
+  {{- else }}
+  name: {{ include "brainstem.fullname" . }}-migrate-{{ .Release.Revision }}
+  {{- end }}
+  labels:
+    {{- include "brainstem.componentLabels" (dict "root" . "component" "migrate") | nindent 4 }}
+  {{- if $hook }}
+  annotations:
+    # Before api and cores roll: they refuse an outdated schema.
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+  {{- end }}
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "brainstem.componentLabels" (dict "root" . "component" "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "brainstem.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "brainstem.mjs", "migrate"]
+          env:
+            - name: BRAINSTEM_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "brainstem.databaseSecretName" . }}
+                  key: {{ include "brainstem.databaseSecretKey" . }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}
