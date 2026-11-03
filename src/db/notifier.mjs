@@ -34,10 +34,13 @@ const MAX_PAYLOAD_BYTES = 7_500;
 const COALESCE_MS = 15;
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 30_000;
+// A partitioned LISTEN connection never errors by itself: ping it.
+const PING_INTERVAL_MS = 15_000;
+const PING_TIMEOUT_MS = 5_000;
 
-export function createNotifier({ dialect, url, schema = null, logger = null } = {}) {
+export function createNotifier({ dialect, url, schema = null, logger = null, pingIntervalMs = PING_INTERVAL_MS } = {}) {
   if (dialect === "postgres" && url) {
-    return new PostgresNotifier({ url, schema, logger });
+    return new PostgresNotifier({ url, schema, logger, pingIntervalMs });
   }
 
   return new LocalNotifier();
@@ -90,8 +93,10 @@ class LocalNotifier {
 }
 
 class PostgresNotifier extends LocalNotifier {
-  constructor({ url, schema, logger }) {
+  constructor({ url, schema, logger, pingIntervalMs = PING_INTERVAL_MS }) {
     super();
+    this.pingIntervalMs = pingIntervalMs;
+    this.pingTimer = null;
     this.url = url;
     this.schema = schema ?? "public";
     this.logger = logger;
@@ -180,7 +185,14 @@ class PostgresNotifier extends LocalNotifier {
   async #sender() {
     if (!this.sender) {
       const { default: pg } = await import("pg");
-      this.sender = new pg.Pool({ connectionString: this.url, max: 1, idleTimeoutMillis: 10_000 });
+      this.sender = new pg.Pool({
+        connectionString: this.url,
+        max: 1,
+        idleTimeoutMillis: 10_000,
+        connectionTimeoutMillis: 10_000,
+        query_timeout: 10_000,
+        keepAlive: true
+      });
       this.sender.on("error", () => {});
     }
 
@@ -192,7 +204,12 @@ class PostgresNotifier extends LocalNotifier {
 
     this.connecting = (async () => {
       const { default: pg } = await import("pg");
-      const client = new pg.Client({ connectionString: this.url });
+      const client = new pg.Client({
+        connectionString: this.url,
+        connectionTimeoutMillis: 10_000,
+        keepAlive: true,
+        keepAliveInitialDelayMillis: 10_000
+      });
 
       client.on("notification", message => this.#receive(message));
       client.on("error", error => this.#lost(client, error));
@@ -212,6 +229,8 @@ class PostgresNotifier extends LocalNotifier {
       this.hadConnection = true;
       this.reconnectDelay = RECONNECT_MIN_MS;
 
+      this.#startPing(client);
+
       if (reconnected) this.deliver("$reconnect", null);
     })()
       .catch(error => {
@@ -223,13 +242,43 @@ class PostgresNotifier extends LocalNotifier {
       });
   }
 
+  /*
+   * A failed or slow ping ends the connection, which reconnects and
+   * announces $reconnect so consumers resync what they missed.
+   */
+  #startPing(client) {
+    clearInterval(this.pingTimer);
+    this.pingTimer = setInterval(async () => {
+      let timer;
+      try {
+        await Promise.race([
+          client.query("select 1"),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("notification listener ping timed out")), PING_TIMEOUT_MS);
+          })
+        ]);
+      }
+      catch (error) {
+        this.#lost(client, error);
+      }
+      finally {
+        clearTimeout(timer);
+      }
+    }, this.pingIntervalMs);
+    this.pingTimer.unref?.();
+  }
+
   #lost(client, error) {
     if (this.client !== client) return;
 
+    clearInterval(this.pingTimer);
+    this.pingTimer = null;
     this.client = null;
     this.connected = false;
     client.removeAllListeners("notification");
     client.end().catch(() => {});
+    // end() waits for the server, which a partition never answers.
+    client.connection?.stream?.destroy?.();
 
     if (this.closed) return;
 
@@ -281,6 +330,7 @@ class PostgresNotifier extends LocalNotifier {
 
     this.closed = true;
     clearTimeout(this.reconnectTimer);
+    clearInterval(this.pingTimer);
     this.reconnectTimer = null;
 
     await this.connecting;

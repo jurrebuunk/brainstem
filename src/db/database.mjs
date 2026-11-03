@@ -56,12 +56,27 @@ export async function openDatabase({ url, pool = {} } = {}) {
     const { default: pg } = await import("pg");
     // Return BIGINT (int8) as JS numbers; counters stay well below 2^53.
     pg.types.setTypeParser(20, value => Number(value));
-    dialect = new PostgresDialect({
-      pool: new pg.Pool({
-        connectionString: parsed.connectionString,
-        max: pool.max ?? 10
-      })
+    const pgPool = new pg.Pool({
+      connectionString: parsed.connectionString,
+      max: pool.max ?? 10,
+      /*
+       * Fail instead of hanging when Postgres fails over or the
+       * network partitions (roadmap Phase 5): a bounded connect
+       * time, a client-side query timeout and TCP keepalive, so
+       * claims and commits error out and are retried rather than
+       * waiting minutes on a dead connection.
+       */
+      connectionTimeoutMillis: pool.connectionTimeoutMillis ?? 10_000,
+      query_timeout: pool.queryTimeoutMs ?? 30_000,
+      idleTimeoutMillis: pool.idleTimeoutMillis ?? 30_000,
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10_000
     });
+    // An idle connection dropped by a failover emits 'error' on the
+    // pool; unhandled, that would crash the process. The pool
+    // replaces the connection on the next query.
+    pgPool.on("error", () => {});
+    dialect = new PostgresDialect({ pool: pgPool });
   }
 
   const db = new Kysely({ dialect });

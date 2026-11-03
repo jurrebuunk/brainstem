@@ -63,9 +63,15 @@ The sidebar has these pages:
 - **Deliveries** — the [delivery pipeline](delivery-pipeline.md): decide and deliver queue depth, the delivery log filtered by status, and dead jobs. Users with `runtime:control` can redrive or discard dead jobs. Needs `runtime:read`.
 - **Settings** — subtabs for:
   - **Appearance** — choose dark, light, or system theme.
-  - **Config** — a syntax-highlighted editor for `brainstem.config.mjs`; saves are checked with `node --check` before writing.
+  - **Config** — the config file read-only, or, with `configSource: "database"`, an editor for the active version with its history and rollback (see [Configuration](#configuration)).
   - **Users** — create users, assign roles, enable/disable accounts, and delete users.
   - **Roles** — create and delete custom roles; built-in roles are locked.
+
+Click the core pool node for an overview of every core (status, queues, config version, last heartbeat and its decided, delivered and polled counts). Pick a core to filter the inspector to its work:
+
+![Brainstem core pool overview](assets/brainstem-cores.png)
+
+![Brainstem Deliveries page](assets/brainstem-deliveries.png)
 
 ![Brainstem Stats view](assets/brainstem-stats.png)
 
@@ -140,7 +146,7 @@ See [ADR-0008](adr/0008-core-registry-and-topology.md) for the reasoning.
 }
 ```
 
-The topology comes from the most recently seen running core, or the last core seen if none is running. Each runtime registers in the `cores` table when it starts, heartbeats every `runtime.cores.heartbeatMs` (default 10 s) and marks itself stopped on shutdown. A running core that misses 3 heartbeats is reported as `lost`. Cores not seen for 24 h are pruned by the API's maintenance task. With one runtime there is one core; with several (roadmap Phase 3) each adds a row.
+The topology comes from the most recently seen running core, or the last core seen if none is running. Each runtime registers in the `cores` table when it starts, heartbeats every `runtime.cores.heartbeatMs` (default 5 s) and marks itself stopped on shutdown. A running core that misses 3 heartbeats is reported as `lost`. Cores not seen for 24 h are pruned by the API's maintenance task. With one runtime there is one core; with several (roadmap Phase 3) each adds a row.
 
 Event log retention is controlled by `WEB_EVENTS_PRUNE_AFTER_DAYS` and `WEB_EVENTS_MAX_ROWS` (defaults: 14 days and 50,000 rows). Set either to `0` to disable that pruning mode. Old time-series rows are pruned after 14 days by default; override with `STATS_PRUNE_AFTER_DAYS` or set it to `0` to disable time-series pruning.
 
@@ -149,6 +155,8 @@ The backend config API writes atomically after `node --check` validation and cre
 ### Configuration
 
 The Config page shows where the config comes from. With `configSource: "file"`, it shows the config file read-only: edit the file and restart. With `configSource: "database"`, it edits the active version as JSON. **Save version** stores and activates a new version: the save sends `If-Match`, so a concurrent change by someone else is reported instead of overwritten. The version list can open any version in the editor or activate it (rollback). Running cores reload the active version on their own. See [Configuration](configuration.md#versioned-config).
+
+![Brainstem versioned config editor](assets/brainstem-config.png)
 
 The live stream reconnects with `Last-Event-ID`, so behind several API replicas the browser resumes on any of them without missing events.
 

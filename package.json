@@ -1,6 +1,6 @@
 {
   "name": "@jurrebuunk/brainstem",
-  "version": "2.0.0-rc.1",
+  "version": "2.0.0",
   "description": "A lightweight decision and orchestration layer for autonomous AI agents.",
   "main": "src/core/brainstem.mjs",
   "exports": {
@@ -23,6 +23,8 @@
     "check": "node --check brainstem.mjs && node --check brainstem-api.mjs && find src plugins web/src/flow -name '*.mjs' -o -name 'model.js' | xargs -n1 node --check",
     "test": "node --test tests/*.test.mjs",
     "test:acceptance": "node --test tests/acceptance/*.test.mjs",
+    "test:chaos": "node --test --test-concurrency=1 tests/chaos/*.test.mjs",
+    "test:load": "node scripts/load-test.mjs",
     "pack:dry-run": "npm pack --dry-run",
     "prepack": "npm test"
   },

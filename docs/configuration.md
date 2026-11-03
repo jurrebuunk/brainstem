@@ -99,6 +99,11 @@ runtime: {
     // optional; BRAINSTEM_DATABASE_URL is used when url is omitted
     url: "sqlite:data/brainstem.sqlite"
     // or url: "postgres://brainstem:secret@db:5432/brainstem"
+
+    // Postgres connection pool, per process (defaults shown). The
+    // timeouts make queries fail fast and retry during a failover or
+    // network partition instead of hanging on a dead connection.
+    // pool: { max: 10, connectionTimeoutMillis: 10000, queryTimeoutMs: 30000, idleTimeoutMillis: 30000 }
   },
 
   records: {
@@ -138,7 +143,7 @@ runtime: {
   cores: {
     // Registry heartbeat (see docs/web-ui.md#topology). Active whenever the
     // runtime uses a database; enabled: false turns it off.
-    heartbeatMs: 10000
+    heartbeatMs: 5000
   },
 
   handoff: {

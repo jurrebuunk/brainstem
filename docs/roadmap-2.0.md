@@ -1,6 +1,6 @@
 # Brainstem 2.0 — Scale-out architecture & roadmap
 
-Status: **accepted** (all decisions in §7 are final) · Current release: `v1.4.0` (Phases 0–2) · Beta: `v2.0.0-beta.1` (Phase 3) · RC: `v2.0.0-rc.1` (Phase 4) · Target: `v2.0.0` · Baseline: `v0.1.0` (single Node process + SQLite)
+Status: **delivered** in `v2.0.0` (all decisions in §7 are final) · Releases: `v1.3.0`–`v1.4.0` (Phases 0–2), `v2.0.0-beta.1` (Phase 3), `v2.0.0-rc.1` (Phase 4), `v2.0.0` (Phase 5) · Baseline: `v0.1.0` (single Node process + SQLite)
 
 ## 1. Goal
 
@@ -217,7 +217,7 @@ Each phase is releasable on its own and keeps `role=all` working. Rough sizing a
 - `docker-compose.cluster.yml` (postgres + api + web + 3 cores) for parity.
 - CI: `ct lint/install` on kind with CNPG + KEDA, helm-unittest, kubeconform, multi-arch buildx, cosign, Trivy.
 
-### Phase 5 — Hardening (≈2 wks) → `2.0.0`
+### Phase 5 — Hardening (≈2 wks) → `2.0.0` · done, see [runbook](runbook.md#delivery-guarantees), [load testing](load-testing.md), [upgrade guide](upgrade-2.0.md)
 - Chaos tests: kill cores mid-poll / mid-delivery, Postgres failover, network partition → assert no lost observations, no duplicate effects beyond the documented window.
 - Load test: target throughput and autoscale behaviour; tune claim batch size, lease TTL, KEDA thresholds.
 - Docs: upgrade guide 1.x → 2.0, ops runbook, plugin v2 migration guide.

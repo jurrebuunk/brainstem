@@ -1917,7 +1917,7 @@ function DeliveriesPage({ auth }) {
               <tbody>{deadJobs.map(job => (
                 <tr key={job.id}>
                   {canControl && <td><input type="checkbox" aria-label={`Select job ${job.id}`} checked={selected.has(job.id)} onChange={() => toggle(job.id)} /></td>}
-                  <td><strong>{job.queue} #{job.id}</strong><span>{jobLabel(job)}</span></td>
+                  <td><strong>{job.queue} #{job.id}</strong><span className="cell-muted">{jobLabel(job)}</span></td>
                   <td>{job.attempts}/{job.maxAttempts}</td>
                   <td className="error-cell">{job.lastError ?? "—"}</td>
                   <td>{formatDateTime(job.updatedAt)}</td>

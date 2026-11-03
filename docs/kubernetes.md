@@ -25,7 +25,7 @@ Cluster mode is the [cluster mode](cluster.md) process model on Kubernetes: ever
 The chart is published as an OCI artifact with every release:
 
 ```sh
-helm install brainstem oci://ghcr.io/jurrebuunk/charts/brainstem --version 2.0.0-rc.1 -f values.yaml
+helm install brainstem oci://ghcr.io/jurrebuunk/charts/brainstem --version 2.0.0 -f values.yaml
 ```
 
 From a checkout: `helm install brainstem ./charts/brainstem -f values.yaml`.
@@ -142,7 +142,7 @@ Cluster pods never migrate. A Job runs `brainstem migrate` first: a `pre-install
 - images are multi-arch (amd64, arm64), signed with cosign (keyless), and come with SBOM and provenance attestations. Verify them with:
 
 ```sh
-cosign verify ghcr.io/jurrebuunk/brainstem:v2.0.0-rc.1 \
+cosign verify ghcr.io/jurrebuunk/brainstem:v2.0.0 \
   --certificate-identity-regexp 'https://github.com/jurrebuunk/brainstem/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
