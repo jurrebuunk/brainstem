@@ -57,6 +57,9 @@ jobs:
       - name: Unit and integration tests
         run: npm test
 
+      - name: Plugin packages
+        run: npm run plugin:test
+
       # Multi-core acceptance tests: several core processes on the
       # Postgres service above.
       - name: Acceptance tests
@@ -67,3 +70,30 @@ jobs:
       # the at-least-once window.
       - name: Chaos tests
         run: npm run test:chaos
+
+  # What a user gets from npm: publish every package to a throwaway
+  # local registry, then install, init, add/remove plugins and poll.
+  npm-packaging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the Web UI
+        run: |
+          npm --prefix web ci
+          npm run web:build
+
+      - name: npm smoke test
+        run: node scripts/npm-smoke.mjs

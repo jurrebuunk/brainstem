@@ -5,7 +5,7 @@ Watches a log file and emits an observation when new lines match a pattern (by d
 ## Module
 
 ```js
-"./plugins/log-file/index.mjs"
+"@brainstem-dev/plugin-log-file"
 ```
 
 ## Example
@@ -14,7 +14,7 @@ Watches a log file and emits an observation when new lines match a pattern (by d
 inputs: [
   {
     id: "app-log",
-    module: "./plugins/log-file/index.mjs",
+    module: "@brainstem-dev/plugin-log-file",
     input: "lines",
     intervalMs: 30000,
     config: {

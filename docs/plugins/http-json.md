@@ -5,7 +5,7 @@ Sends each matching Brainstem output event as JSON to an HTTP endpoint.
 ## Module
 
 ```js
-"./plugins/http-json/index.mjs"
+"@brainstem-dev/plugin-http-json"
 ```
 
 ## Example
@@ -15,7 +15,7 @@ Send envelopes to the backend API telemetry history:
 ```js
 destinations: [
   {
-    module: "./plugins/http-json/index.mjs",
+    module: "@brainstem-dev/plugin-http-json",
     destination: "default",
     decisions: "all",
     routes: "all",

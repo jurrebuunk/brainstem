@@ -5,7 +5,7 @@ Polls GitHub issues and emits Brainstem observations.
 ## Module
 
 ```js
-"./plugins/github-issues/index.mjs"
+"@brainstem-dev/plugin-github-issues"
 ```
 
 ## Config
@@ -14,7 +14,7 @@ Polls GitHub issues and emits Brainstem observations.
 inputs: [
   {
     id: "github-my-repo-issues",
-    module: "./plugins/github-issues/index.mjs",
+    module: "@brainstem-dev/plugin-github-issues",
     input: "issues",
     config: {
       repo: "owner/repo",

@@ -7,7 +7,7 @@ Plugins do not receive the Brainstem core instance. They only produce observatio
 ## Minimal plugin
 
 ```js
-import { defineInputPlugin } from "../../src/sdk/index.mjs";
+import { defineInputPlugin } from "@brainstem-dev/sdk";
 
 export default defineInputPlugin({
   apiVersion: "brainstem.input/v1",
@@ -123,7 +123,7 @@ Use stable input IDs so checkpoint ownership survives config reordering:
 inputs: [
   {
     id: "matrix-main-room",
-    module: "./plugins/matrix/index.mjs",
+    module: "@brainstem-dev/plugin-matrix",
     input: "messages"
   }
 ]
@@ -258,7 +258,7 @@ Or per input:
 ```js
 inputs: [
   {
-    module: "./plugins/github-issues/index.mjs",
+    module: "@brainstem-dev/plugin-github-issues",
     input: "issues",
     retry: {
       attempts: 5,

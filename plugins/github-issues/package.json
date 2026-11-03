@@ -1,0 +1,47 @@
+{
+  "name": "@brainstem-dev/plugin-github-issues",
+  "version": "2.1.0",
+  "description": "Brainstem input plugin: Turn new and updated GitHub issues into observations.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "api.mjs",
+    "config.mjs",
+    "index.mjs",
+    "observation.mjs",
+    "state.mjs",
+    "README.md"
+  ],
+  "keywords": [
+    "brainstem",
+    "brainstem-plugin",
+    "brainstem-input"
+  ],
+  "brainstem": {
+    "kind": "input",
+    "api": 2
+  },
+  "peerDependencies": {
+    "@brainstem-dev/sdk": "^2.1.0"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jurrebuunk/brainstem.git",
+    "directory": "plugins/github-issues"
+  },
+  "homepage": "https://github.com/jurrebuunk/brainstem/blob/main/docs/plugins/github-issues.md",
+  "bugs": {
+    "url": "https://github.com/jurrebuunk/brainstem/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

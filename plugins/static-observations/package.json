@@ -1,0 +1,43 @@
+{
+  "name": "@brainstem-dev/plugin-static-observations",
+  "version": "2.1.0",
+  "description": "Brainstem input plugin: Emit fixed observations from config; for tests and demos.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "README.md"
+  ],
+  "keywords": [
+    "brainstem",
+    "brainstem-plugin",
+    "brainstem-input"
+  ],
+  "brainstem": {
+    "kind": "input",
+    "api": 2
+  },
+  "peerDependencies": {
+    "@brainstem-dev/sdk": "^2.1.0"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jurrebuunk/brainstem.git",
+    "directory": "plugins/static-observations"
+  },
+  "homepage": "https://github.com/jurrebuunk/brainstem/blob/main/docs/plugins/static-observations.md",
+  "bugs": {
+    "url": "https://github.com/jurrebuunk/brainstem/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

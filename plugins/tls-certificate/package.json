@@ -1,0 +1,47 @@
+{
+  "name": "@brainstem-dev/plugin-tls-certificate",
+  "version": "2.1.0",
+  "description": "Brainstem input plugin: Watch TLS certificates and report upcoming expiry.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "check.mjs",
+    "config.mjs",
+    "index.mjs",
+    "observation.mjs",
+    "state.mjs",
+    "README.md"
+  ],
+  "keywords": [
+    "brainstem",
+    "brainstem-plugin",
+    "brainstem-input"
+  ],
+  "brainstem": {
+    "kind": "input",
+    "api": 2
+  },
+  "peerDependencies": {
+    "@brainstem-dev/sdk": "^2.1.0"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jurrebuunk/brainstem.git",
+    "directory": "plugins/tls-certificate"
+  },
+  "homepage": "https://github.com/jurrebuunk/brainstem/blob/main/docs/tls-certificate.md",
+  "bugs": {
+    "url": "https://github.com/jurrebuunk/brainstem/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { DEFAULT_LAYA_MODULE, LayaPool } from "./laya-pool.mjs";
+import { createObservation } from "@brainstem-dev/sdk";
 
 import {
   MemoryRecordStore,
@@ -902,35 +903,8 @@ function decisionOf({
  * Observation helper.
  */
 
-export function createObservation({
-  id,
-  source,
-  type,
-  state,
-  timestamp =
-    new Date().toISOString(),
-  title,
-  message,
-  facts = {},
-  data = {}
-}) {
-  return {
-    version: VERSION,
-    kind: "observation",
-
-    payload: {
-      id,
-      source,
-      type,
-      state,
-      timestamp,
-      title,
-      message,
-      facts,
-      data
-    }
-  };
-}
+// Observations are built by the SDK (shared with plugins).
+export { createObservation };
 
 
 /*

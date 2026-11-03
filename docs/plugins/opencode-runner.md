@@ -7,7 +7,7 @@ This destination is intended as a first agent-runner output plugin. It keeps Bra
 ## Module
 
 ```js
-"./plugins/opencode-runner/index.mjs"
+"@brainstem-dev/plugin-opencode-runner"
 ```
 
 ## Example
@@ -23,7 +23,7 @@ Configure the destination:
 ```js
 destinations: [
   {
-    module: "./plugins/opencode-runner/index.mjs",
+    module: "@brainstem-dev/plugin-opencode-runner",
     destination: "default",
     decisions: ["queue", "dispatch"],
     routes: ["coding"],

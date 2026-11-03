@@ -1,4 +1,4 @@
-import { defineDestinationPlugin } from "../../src/sdk/index.mjs";
+import { defineDestinationPlugin } from "@brainstem-dev/sdk";
 import { normalizeConfig } from "./config.mjs";
 import { buildPrompt } from "./prompt.mjs";
 

@@ -1,0 +1,45 @@
+{
+  "name": "@brainstem-dev/plugin-opencode-runner",
+  "version": "2.1.0",
+  "description": "Brainstem destination plugin: Start an opencode session for a decision (a coding agent).",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "config.mjs",
+    "index.mjs",
+    "prompt.mjs",
+    "README.md"
+  ],
+  "keywords": [
+    "brainstem",
+    "brainstem-plugin",
+    "brainstem-destination"
+  ],
+  "brainstem": {
+    "kind": "destination",
+    "api": 2
+  },
+  "peerDependencies": {
+    "@brainstem-dev/sdk": "^2.1.0"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jurrebuunk/brainstem.git",
+    "directory": "plugins/opencode-runner"
+  },
+  "homepage": "https://github.com/jurrebuunk/brainstem/blob/main/docs/plugins/opencode-runner.md",
+  "bugs": {
+    "url": "https://github.com/jurrebuunk/brainstem/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

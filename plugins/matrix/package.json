@@ -1,0 +1,47 @@
+{
+  "name": "@brainstem-dev/plugin-matrix",
+  "version": "2.1.0",
+  "description": "Brainstem destination plugin: Notify a Matrix room, with suppression and recovery messages.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "client.mjs",
+    "config.mjs",
+    "index.mjs",
+    "message.mjs",
+    "notify.mjs",
+    "README.md"
+  ],
+  "keywords": [
+    "brainstem",
+    "brainstem-plugin",
+    "brainstem-destination"
+  ],
+  "brainstem": {
+    "kind": "destination",
+    "api": 2
+  },
+  "peerDependencies": {
+    "@brainstem-dev/sdk": "^2.1.0"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jurrebuunk/brainstem.git",
+    "directory": "plugins/matrix"
+  },
+  "homepage": "https://github.com/jurrebuunk/brainstem/blob/main/docs/matrix-destination.md",
+  "bugs": {
+    "url": "https://github.com/jurrebuunk/brainstem/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

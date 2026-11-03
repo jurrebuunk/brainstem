@@ -1,4 +1,4 @@
-import { defineInputPlugin } from "../../src/sdk/index.mjs";
+import { defineInputPlugin } from "@brainstem-dev/sdk";
 
 export default defineInputPlugin({
   apiVersion: "brainstem.input/v1",

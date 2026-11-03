@@ -5,7 +5,7 @@ The TLS certificate input checks certificate validity and expiry for HTTPS/TLS e
 ## Module
 
 ```js
-"./plugins/tls-certificate/index.mjs"
+"@brainstem-dev/plugin-tls-certificate"
 ```
 
 ## Single host
@@ -14,7 +14,7 @@ The TLS certificate input checks certificate validity and expiry for HTTPS/TLS e
 inputs: [
   {
     id: "example-tls",
-    module: "./plugins/tls-certificate/index.mjs",
+    module: "@brainstem-dev/plugin-tls-certificate",
     input: "check",
     config: {
       host: "example.com",
@@ -34,7 +34,7 @@ inputs: [
 inputs: [
   {
     id: "tls-sites",
-    module: "./plugins/tls-certificate/index.mjs",
+    module: "@brainstem-dev/plugin-tls-certificate",
     input: "check",
     config: {
       warnDays: 14,
@@ -90,7 +90,7 @@ To send TLS alerts and recoveries to Matrix:
 ```js
 destinations: [
   {
-    module: "./plugins/matrix/index.mjs",
+    module: "@brainstem-dev/plugin-matrix",
     destination: "room",
     decisions: "all",
     sources: ["tls"],

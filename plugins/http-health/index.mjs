@@ -1,4 +1,4 @@
-import { defineInputPlugin } from "../../src/sdk/index.mjs";
+import { defineInputPlugin } from "@brainstem-dev/sdk";
 
 import { runCheck } from "./check.mjs";
 import { normalizeChecks } from "./config.mjs";

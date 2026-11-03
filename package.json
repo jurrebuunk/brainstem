@@ -1,6 +1,6 @@
 {
-  "name": "@jurrebuunk/brainstem",
-  "version": "2.0.0",
+  "name": "@brainstem-dev/brainstem",
+  "version": "2.1.0",
   "description": "A lightweight decision and orchestration layer for autonomous AI agents.",
   "main": "src/core/brainstem.mjs",
   "exports": {
@@ -20,7 +20,7 @@
     "web": "npm --prefix web run dev",
     "web:build": "npm --prefix web run build",
     "plugin:test": "node run-plugin-test.mjs",
-    "check": "node --check brainstem.mjs && node --check brainstem-api.mjs && find src plugins web/src/flow -name '*.mjs' -o -name 'model.js' | xargs -n1 node --check",
+    "check": "node --check brainstem.mjs && node --check brainstem-api.mjs && find src packages plugins web/src/flow -name '*.mjs' -o -name 'model.js' | xargs -n1 node --check",
     "test": "node --test tests/*.test.mjs",
     "test:acceptance": "node --test tests/acceptance/*.test.mjs",
     "test:chaos": "node --test --test-concurrency=1 tests/chaos/*.test.mjs",
@@ -39,11 +39,10 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@brainstem-dev/sdk": "2.1.0",
     "@receptron/laya": "^0.1.1",
     "argon2": "^0.45.1",
-    "imapflow": "^1.7.8",
     "kysely": "^0.29.6",
-    "mailparser": "^3.9.28",
     "pg": "^8.23.1"
   },
   "bin": {
@@ -74,13 +73,18 @@
     "Dockerfile.models",
     ".env.example",
     "src/",
-    "plugins/",
+    "web/dist/",
+    "web/server.mjs",
     "docs/",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
   ],
-  "optionalDependencies": {
-    "@rivet-dev/agentos-core": "0.4.6"
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

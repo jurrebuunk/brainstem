@@ -5,7 +5,7 @@ Emits configured observations. This is mainly for smoke tests and demos.
 ## Module
 
 ```js
-"./plugins/static-observations/index.mjs"
+"@brainstem-dev/plugin-static-observations"
 ```
 
 ## Config
@@ -14,7 +14,7 @@ Emits configured observations. This is mainly for smoke tests and demos.
 inputs: [
   {
     id: "static-test",
-    module: "./plugins/static-observations/index.mjs",
+    module: "@brainstem-dev/plugin-static-observations",
     input: "default",
     config: {
       observations: [

@@ -43,3 +43,4 @@ data/
 
 # Claude Code worktrees
 .claude/worktrees/
+brainstem-plugins/

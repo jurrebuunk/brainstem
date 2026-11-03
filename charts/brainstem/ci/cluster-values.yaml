@@ -28,7 +28,7 @@ config:
       runtime,
       inputs: [{
         id: "ci-static",
-        module: "./plugins/static-observations/index.mjs",
+        module: "@brainstem-dev/plugin-static-observations",
         intervalMs: 20000,
         config: {
           observations: [{

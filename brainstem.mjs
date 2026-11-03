@@ -32,9 +32,14 @@ Commands:
                 See: node brainstem.mjs migrate --help
   config        Config versions: import, export, list, show, activate, validate.
                 See: node brainstem.mjs config --help
+  init          Create a config and the plugin folder with the default plugins.
+  plugins       Manage plugin packages: list, add, remove, update.
+                See: node brainstem.mjs plugins --help
 
 Options:
   --config              Config file path. Default: brainstem.config.mjs
+  --plugins-dir         Plugin folder (npm packages). Default: ./brainstem-plugins.
+                        Env: BRAINSTEM_PLUGINS_DIR
   --role                all (default), core, api or web. Env: BRAINSTEM_ROLE
   --queues              Stages a core runs: poll,decide,deliver (default: all).
                         Env: BRAINSTEM_QUEUES
@@ -58,6 +63,9 @@ Setup:
 }
 
 const configPath = valueFromArgs(argv, "--config") ?? process.env.BRAINSTEM_CONFIG ?? "brainstem.config.mjs";
+
+const pluginsDirFlag = valueFromArgs(argv, "--plugins-dir");
+if (pluginsDirFlag) process.env.BRAINSTEM_PLUGINS_DIR = pluginsDirFlag;
 
 let role;
 try {

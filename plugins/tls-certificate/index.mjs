@@ -1,4 +1,4 @@
-import { defineInputPlugin } from "../../src/sdk/index.mjs";
+import { defineInputPlugin } from "@brainstem-dev/sdk";
 
 import { checkCertificate } from "./check.mjs";
 import { normalizeTargets } from "./config.mjs";

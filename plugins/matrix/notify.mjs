@@ -2,8 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import { MemoryPluginStateStore } from "../../src/runtime/plugin-state.mjs";
-import { createPluginState } from "../../src/sdk/index.mjs";
+import { MemoryPluginStateStore, createPluginState } from "@brainstem-dev/sdk";
 
 const DEFAULT_REPEAT_AFTER_MS =
   60 * 60 * 1000;

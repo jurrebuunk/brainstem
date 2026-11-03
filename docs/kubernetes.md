@@ -116,6 +116,10 @@ Decide pods (and the single pod) mount the Laya model from the `brainstem-models
 
 `config.file` is a `brainstem.config.mjs` module. The default reuses the image's example pipeline, which has a log destination and no inputs. Leave bootstrap settings (database, logging, API) out: the chart provides them through the environment. In `file` mode a pod that polls exits if the config has no inputs.
 
+## Plugins
+
+The image contains every built-in plugin, so configs can use any `@brainstem-dev/plugin-*` package. For third-party plugins, build an image on top of it with those packages in `/app/brainstem-plugins` ([Plugins](plugins.md#docker-and-kubernetes)), and point `image.repository`/`image.tag` at it. All pods then run the same plugins, which cluster mode needs.
+
 ## Migrations
 
 Cluster pods never migrate. A Job runs `brainstem migrate` first: a `pre-install`/`pre-upgrade` hook with an external database, or a regular Job per revision with CloudNativePG (whose database doesn't exist yet at pre-install). API and core pods wait for the schema (`migrations.schemaWaitSeconds`, `BRAINSTEM_SCHEMA_WAIT_MS`) instead of crash-looping, and their startup probes allow for that wait. For Argo CD, the hook annotations map onto `PreSync`/`PostSync`.

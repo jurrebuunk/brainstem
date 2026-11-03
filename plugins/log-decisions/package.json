@@ -1,0 +1,43 @@
+{
+  "name": "@brainstem-dev/plugin-log-decisions",
+  "version": "2.1.0",
+  "description": "Brainstem destination plugin: Log decisions to the console.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "README.md"
+  ],
+  "keywords": [
+    "brainstem",
+    "brainstem-plugin",
+    "brainstem-destination"
+  ],
+  "brainstem": {
+    "kind": "destination",
+    "api": 2
+  },
+  "peerDependencies": {
+    "@brainstem-dev/sdk": "^2.1.0"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jurrebuunk/brainstem.git",
+    "directory": "plugins/log-decisions"
+  },
+  "homepage": "https://github.com/jurrebuunk/brainstem/blob/main/docs/plugins/log-decisions.md",
+  "bugs": {
+    "url": "https://github.com/jurrebuunk/brainstem/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

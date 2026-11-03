@@ -1,4 +1,4 @@
-import { defineInputPlugin } from "../../src/sdk/index.mjs";
+import { defineInputPlugin } from "@brainstem-dev/sdk";
 
 import { fetchIssues } from "./api.mjs";
 import { normalizeConfig } from "./config.mjs";

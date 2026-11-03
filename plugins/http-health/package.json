@@ -1,0 +1,47 @@
+{
+  "name": "@brainstem-dev/plugin-http-health",
+  "version": "2.1.0",
+  "description": "Brainstem input plugin: Poll HTTP endpoints and report health changes (status, latency, failures).",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "check.mjs",
+    "config.mjs",
+    "index.mjs",
+    "observation.mjs",
+    "state.mjs",
+    "README.md"
+  ],
+  "keywords": [
+    "brainstem",
+    "brainstem-plugin",
+    "brainstem-input"
+  ],
+  "brainstem": {
+    "kind": "input",
+    "api": 2
+  },
+  "peerDependencies": {
+    "@brainstem-dev/sdk": "^2.1.0"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jurrebuunk/brainstem.git",
+    "directory": "plugins/http-health"
+  },
+  "homepage": "https://github.com/jurrebuunk/brainstem/blob/main/docs/http-health.md",
+  "bugs": {
+    "url": "https://github.com/jurrebuunk/brainstem/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

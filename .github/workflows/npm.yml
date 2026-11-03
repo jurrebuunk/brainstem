@@ -1,0 +1,63 @@
+name: npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Pack and check everything, publish nothing
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  # @brainstem-dev/sdk, every @brainstem-dev/plugin-*, then
+  # @brainstem-dev/brainstem, all at the tag's version.
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # npm provenance and trusted publishing (OIDC).
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1 or later.
+      - name: Update npm
+        run: npm install -g npm@11
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check plugins
+        run: npm run plugin:test
+
+      # The Web UI ships prebuilt (web/dist) in @brainstem-dev/brainstem.
+      - name: Build the Web UI
+        run: |
+          npm --prefix web ci
+          npm run web:build
+
+      # The first release of a package needs a token (secret NPM_TOKEN).
+      # Once each package has GitHub set up as a trusted publisher on
+      # npmjs.com, delete the secret: npm then authenticates with OIDC.
+      - name: Publish
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then export NODE_AUTH_TOKEN="$NPM_TOKEN"; else unset NODE_AUTH_TOKEN; fi
+          if [ "$DRY_RUN" = "true" ]; then node scripts/npm-publish.mjs --dry-run; else node scripts/npm-publish.mjs; fi
