@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.1.0 — unreleased
+## 2.1.0 — 2026-11-03
 
 Brainstem on npm, with plugins as npm packages. The app installs with `npm install -g @brainstem-dev/brainstem`. Every plugin, the built-ins included, is its own package that can be installed, pinned, updated and removed, and third-party plugins work the same way. See [Plugins](docs/plugins.md) and [ADR-0010](docs/adr/0010-plugins-as-npm-packages.md).
 
