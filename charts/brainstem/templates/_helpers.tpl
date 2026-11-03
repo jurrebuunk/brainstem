@@ -250,8 +250,7 @@ Environment shared by Brainstem containers.
   securityContext:
     {{- toYaml .Values.securityContext | nindent 4 }}
   resources:
-    requests: { cpu: 50m, memory: 64Mi }
-    limits: { memory: 256Mi }
+    {{- toYaml .Values.models.initResources | nindent 4 }}
   volumeMounts:
     - name: models
       mountPath: /shared

@@ -118,6 +118,11 @@ models:
   mount: initContainer
   path: /models
   sizeLimit: 4Gi
+  # The copy's page cache counts against its memory limit: keep the
+  # limit well above a small request, or a 1.7 GB copy gets OOMKilled.
+  initResources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 2Gi}
 
 api:
   replicas: 2

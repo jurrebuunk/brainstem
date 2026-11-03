@@ -226,6 +226,9 @@
         },
         "sizeLimit": {
           "type": "string"
+        },
+        "initResources": {
+          "type": "object"
         }
       },
       "additionalProperties": false

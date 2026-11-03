@@ -280,3 +280,13 @@ tests:
               secretKeyRef:
                 name: RELEASE-NAME-brainstem-api-token
                 key: token
+
+  - it: gives the model copy room for its page cache
+    template: templates/cores.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].resources.limits.memory
+          value: 2Gi
