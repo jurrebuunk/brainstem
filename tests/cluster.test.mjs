@@ -89,6 +89,25 @@ test("next due times are jittered by at most 10% (5 s cap)", () => {
   assert.equal(nextDueAt(600_000, { at: 0, random: () => 1 }), 605_000);
 });
 
+dialectTest("jobs held by a stopped or lost core are reclaimed before their lease expires", async ({ handle }) => {
+  const { DatabaseTransport } = await import("../src/queue/index.mjs");
+  const transport = new DatabaseTransport({ database: handle });
+  const cores = createCoreRegistry({ database: async () => handle });
+  const now = Date.now();
+
+  await cores.register({ id: "gone", heartbeatMs: 100, now: now - 10_000 });
+  await cores.register({ id: "alive", heartbeatMs: 60_000, now });
+  await transport.enqueue([{ queue: "deliver", maxAttempts: 3 }, { queue: "deliver", maxAttempts: 3 }]);
+
+  const [lostJob] = await transport.claim({ queues: ["deliver"], limit: 1, leaseMs: 600_000, workerId: "gone" });
+  const [liveJob] = await transport.claim({ queues: ["deliver"], limit: 1, leaseMs: 600_000, workerId: "alive" });
+
+  const reclaimed = await transport.reclaimStalled();
+  assert.deepEqual(reclaimed.map(job => [job.id, job.state]), [[lostJob.id, "ready"]]);
+  await assert.rejects(transport.ack(lostJob), /lost/, "the lost core can no longer ack it");
+  await transport.ack(liveJob);
+});
+
 // Runtimes sharing one database.
 
 dialectTest("two runtimes on one database poll a shared input one at a time", async ({ handle }) => {

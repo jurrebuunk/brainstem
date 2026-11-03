@@ -58,12 +58,13 @@ test(`[${DIALECT}] N cores share the polling load`, async () => {
 test(`[${DIALECT}] polling continues when a core is killed`, async () => {
   const { deliveries, atKill } = await runCluster({
     cores: 3,
-    durationMs: 2_500,
+    durationMs: 3_500,
     killAfterMs: 500
   });
 
-  // The killed core's input lease is reclaimed (lost core or lease
-  // expiry), so the others keep polling.
+  // The killed core's input lease and jobs are taken over once it
+  // counts as lost (3 missed heartbeats), so the others keep polling
+  // and finish its work.
   assert.ok(
     deliveries.length > atKill + 3,
     `only ${deliveries.length - atKill} deliveries after the kill`
