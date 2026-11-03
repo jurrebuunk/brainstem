@@ -1,4 +1,4 @@
-# Brainstem
+<h1 align="center"><img src="docs/assets/brainstem-banner.png" alt="Brainstem: local-first decision runtime for autonomous operations" width="100%"></h1>
 
 [![Release](https://img.shields.io/github/v/release/jurrebuunk/brainstem?label=release)](https://github.com/jurrebuunk/brainstem/releases/latest)
 [![License: ISC](https://img.shields.io/badge/license-ISC-blue.svg)](LICENSE)

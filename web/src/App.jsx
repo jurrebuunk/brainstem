@@ -480,7 +480,7 @@ function AuthShell({ title, children }) {
   return (
     <main className="auth-shell">
       <section className="auth-card">
-        <div className="auth-brand"><span className="brand-mark">B</span><strong>Brainstem</strong></div>
+        <div className="auth-brand"><img className="brand-mark" src="/brainstem-logo.png" alt="" /><strong>Brainstem</strong></div>
         <h1>{title}</h1>
         {children}
       </section>
@@ -672,7 +672,7 @@ function Sidebar({ page, setPage, collapsed, setCollapsed, width, setWidth, user
         </span>
       </button>
       <div className="sidebar-brand">
-        <span className="brand-mark">B</span>
+        <img className="brand-mark" src="/brainstem-logo.png" alt="" />
         {!collapsed && <span>Brainstem</span>}
       </div>
       <nav className="sidebar-nav">

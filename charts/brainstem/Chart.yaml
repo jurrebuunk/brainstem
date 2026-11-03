@@ -8,7 +8,7 @@ kubeVersion: ">=1.27.0-0"
 home: https://github.com/jurrebuunk/brainstem
 sources:
   - https://github.com/jurrebuunk/brainstem
-icon: https://raw.githubusercontent.com/jurrebuunk/brainstem/main/docs/assets/brainstem-flow.png
+icon: https://raw.githubusercontent.com/jurrebuunk/brainstem/main/docs/assets/brainstem-logo.png
 keywords:
   - ai
   - agents
