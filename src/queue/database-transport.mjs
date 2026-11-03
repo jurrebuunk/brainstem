@@ -17,10 +17,11 @@ import {
  * FOR UPDATE SKIP LOCKED so concurrent claimers never block on
  * each other.
  *
- * Wakeups are in-process. Other processes sharing the database
- * (e.g. the API redriving a job) are seen on the workers' next
- * poll; LISTEN/NOTIFY arrives with the Postgres cluster driver
- * (roadmap Phase 3).
+ * Wakeups go through the handle's notifier (src/db/notifier.mjs):
+ * on Postgres that is LISTEN/NOTIFY, so a job enqueued by any
+ * process (another core, the API redriving a job) wakes idle
+ * workers everywhere at once. On SQLite wakeups are in-process and
+ * other processes notice new work on their next poll.
  *
  * `database` is a handle from openDatabase() ({ db, dialect }),
  * a promise of one, or a function returning one. The transport
@@ -39,8 +40,13 @@ export class DatabaseTransport {
     this.wakeups = createWakeups();
   }
 
+  /*
+   * "postgres" for the cluster driver (SKIP LOCKED claims and
+   * LISTEN/NOTIFY wakeups), otherwise "database". Known once the
+   * handle is open.
+   */
   get type() {
-    return "database";
+    return this.handle?.dialect === "postgres" ? "postgres" : "database";
   }
 
   get durable() {
@@ -56,6 +62,10 @@ export class DatabaseTransport {
         : await this.database;
 
       this.handle = handle;
+
+      // Wakeups from other processes (and this one, see notify()).
+      this.unlisten = handle.notifier?.listen("jobs", () => this.wakeups.notify()) ?? null;
+
       return handle;
     })();
 
@@ -77,7 +87,12 @@ export class DatabaseTransport {
   }
 
   notify() {
-    this.wakeups.notify();
+    if (this.handle?.notifier) {
+      this.handle.notifier.notify("jobs");
+    }
+    else {
+      this.wakeups.notify();
+    }
   }
 
   async transaction(fn) {
@@ -351,5 +366,8 @@ export class DatabaseTransport {
     }));
   }
 
-  async close() {}
+  async close() {
+    this.unlisten?.();
+    this.unlisten = null;
+  }
 }

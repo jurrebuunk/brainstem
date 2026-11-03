@@ -6,7 +6,7 @@ import {
   eventTimestamp,
   eventTitle
 } from "../events.js";
-import { buildInspectorRecords, inspectorMode } from "../telemetry/inspector-records.js";
+import { buildInspectorRecords, coreOverview, inspectorMode } from "../telemetry/inspector-records.js";
 
 export default function NodeInspector({ node, events, allEvents, nodeIdsFor, onClose }) {
   const indexedEvents = useMemo(() => allEvents.map((event, index) => ({ event, index })), [allEvents]);
@@ -29,13 +29,24 @@ export default function NodeInspector({ node, events, allEvents, nodeIdsFor, onC
     return built.length > 0 ? built : fallbackEvents;
   }, [node, indexedEvents, fallbackEvents, nodeIdsFor]);
   const mode = inspectorMode(node);
+  const isCorePool = node.id === "core";
+  const overview = useMemo(
+    () => isCorePool ? coreOverview(node.data.cores ?? [], indexedEvents) : [],
+    [isCorePool, node.data.cores, indexedEvents]
+  );
+  const [coreFilter, setCoreFilter] = useState(null);
+  const visibleRecords = useMemo(
+    () => coreFilter ? records.filter(record => record.coreId === coreFilter) : records,
+    [records, coreFilter]
+  );
   const [selectedRecordId, setSelectedRecordId] = useState(null);
   const selectedRecord = useMemo(() => {
-    return records.find(record => record.id === selectedRecordId) ?? records[0] ?? null;
-  }, [records, selectedRecordId]);
+    return visibleRecords.find(record => record.id === selectedRecordId) ?? visibleRecords[0] ?? null;
+  }, [visibleRecords, selectedRecordId]);
 
   useEffect(() => {
     setSelectedRecordId(null);
+    setCoreFilter(null);
   }, [node.id]);
 
   return (
@@ -48,10 +59,22 @@ export default function NodeInspector({ node, events, allEvents, nodeIdsFor, onC
           </div>
           <div className="node-inspector-summary" aria-label="Inspector summary">
             <span>{mode.label}</span>
-            <strong>{records.length}</strong>
+            <strong>{visibleRecords.length}</strong>
           </div>
           <button className="modal-close" onClick={onClose} aria-label="Close node inspector">×</button>
         </header>
+
+        {isCorePool && overview.length > 0 && (
+          <CoreOverview
+            cores={overview}
+            total={records.length}
+            selected={coreFilter}
+            onSelect={id => {
+              setCoreFilter(current => current === id ? null : id);
+              setSelectedRecordId(null);
+            }}
+          />
+        )}
 
         <div className="node-inspector-body">
           <aside className="run-list" aria-label={mode.listLabel}>
@@ -60,7 +83,7 @@ export default function NodeInspector({ node, events, allEvents, nodeIdsFor, onC
               <p>{mode.listHint}</p>
             </div>
             <div className="run-list-items">
-              {records.map(record => (
+              {visibleRecords.map(record => (
                 <button
                   key={record.id}
                   className={`run-list-item${selectedRecord?.id === record.id ? " selected" : ""}`}
@@ -74,8 +97,10 @@ export default function NodeInspector({ node, events, allEvents, nodeIdsFor, onC
                   </span>
                 </button>
               ))}
-              {records.length === 0 && (
-                <div className="empty-detail">No inspectable activity for this node yet.</div>
+              {visibleRecords.length === 0 && (
+                <div className="empty-detail">
+                  {coreFilter ? `No decisions by ${coreFilter} in the current event window.` : "No inspectable activity for this node yet."}
+                </div>
               )}
             </div>
           </aside>
@@ -108,6 +133,53 @@ export default function NodeInspector({ node, events, allEvents, nodeIdsFor, onC
           </section>
         </div>
       </section>
+    </div>
+  );
+}
+
+/*
+ * Core pool overview: one card per core with what it did in the
+ * event window. Clicking a card filters the decisions to that core.
+ */
+function CoreOverview({ cores, total, selected, onSelect }) {
+  return (
+    <div className="core-overview" role="toolbar" aria-label="Filter by core">
+      <button
+        className={`core-overview-card core-overview-all${selected === null ? " selected" : ""}`}
+        onClick={() => onSelect(null)}
+        aria-pressed={selected === null}
+      >
+        <span className="core-overview-title">All cores</span>
+        <span className="core-overview-line">{cores.length} core{cores.length === 1 ? "" : "s"} · {total} decisions</span>
+      </button>
+      {cores.map(core => (
+        <button
+          key={core.id}
+          className={`core-overview-card core-${core.status ?? "unknown"}${selected === core.id ? " selected" : ""}`}
+          onClick={() => onSelect(core.id)}
+          aria-pressed={selected === core.id}
+          title={[core.id, core.hostname && `${core.hostname}:${core.pid}`, core.version && `v${core.version}`].filter(Boolean).join(" · ")}
+        >
+          <span className="core-overview-title">
+            <span className="core-dot" aria-hidden="true" />
+            {core.id}
+          </span>
+          <span className="core-overview-line">
+            {core.status ?? "seen in events"}
+            {core.queues?.length ? ` · ${core.queues.join(" · ")}` : ""}
+          </span>
+          <span className="core-overview-line">
+            {core.configVersion !== null && core.configVersion !== undefined ? `config v${core.configVersion} · ` : ""}
+            {core.lastSeenAt ? `seen ${formatTime(core.lastSeenAt)}` : core.lastActivityAt ? `active ${formatTime(core.lastActivityAt)}` : ""}
+          </span>
+          <span className="core-overview-stats">
+            <span><strong>{core.decided}</strong>decided</span>
+            <span><strong>{core.delivered}</strong>delivered</span>
+            <span><strong>{core.polls}</strong>polls</span>
+            {core.failed > 0 && <span className="is-failed"><strong>{core.failed}</strong>failed</span>}
+          </span>
+        </button>
+      ))}
     </div>
   );
 }

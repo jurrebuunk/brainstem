@@ -1,15 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
-import {
-  createBackendApiServer,
-  normalizeBackendApiConfig
-} from "./src/backend/api-server.mjs";
-import { openRuntimeDatabase } from "./src/runtime/bootstrap.mjs";
-import { createRuntimeLogger } from "./src/runtime/logger.mjs";
-import { BrainstemRuntime } from "./src/runtime/runtime.mjs";
+import { resolveRole, runApiProcess, runCoreProcess } from "./src/cli/serve.mjs";
 
 loadDotEnv();
 
@@ -31,186 +23,79 @@ if (/^[a-z]/.test(argv[0] ?? "")) {
 
 const args = new Set(argv);
 
-const once = args.has("--once");
-const printAll = args.has("--all");
-const configPath = valueFromArgs(argv, "--config") ?? "brainstem.config.mjs";
-const logLevel = valueFromArgs(argv, "--log-level");
-const logFormat = valueFromArgs(argv, "--log-format");
-
 if (args.has("--help") || args.has("-h")) {
-  console.log(`Usage: node brainstem.mjs [--config path] [--once] [--all] [--log-level level] [--log-format format]\n       node brainstem.mjs <command> [options]\n\nCommands:\n  migrate       Apply database migrations; also status, import-v1, copy.\n                See: node brainstem.mjs migrate --help\n\nOptions:\n  --config      Config file path. Default: brainstem.config.mjs\n  --once        Poll each configured input once, then exit.\n  --all         Print ignored decisions too through log destinations.\n  --log-level   Runtime log level: debug, info, warn, error, silent.\n  --log-format  Runtime log format: pretty or json.\n\nSetup:\n  cp brainstem.config.example.mjs brainstem.config.mjs\n  cp .env.example .env\n`);
+  console.log(`Usage: node brainstem.mjs [options]
+       node brainstem.mjs <command> [options]
+
+Commands:
+  migrate       Apply database migrations; also status, import-v1, copy.
+                See: node brainstem.mjs migrate --help
+  config        Config versions: import, export, list, show, activate, validate.
+                See: node brainstem.mjs config --help
+
+Options:
+  --config              Config file path. Default: brainstem.config.mjs
+  --role                all (default), core, api or web. Env: BRAINSTEM_ROLE
+  --queues              Stages a core runs: poll,decide,deliver (default: all).
+                        Env: BRAINSTEM_QUEUES
+  --config-source       file (default) or database. Env: BRAINSTEM_CONFIG_SOURCE
+  --health-port         Probe port (/livez, /readyz, /startupz). Default 8081
+                        for role core, off for all. Env: BRAINSTEM_HEALTH_PORT
+  --health-host         Probe host. Default 0.0.0.0. Env: BRAINSTEM_HEALTH_HOST
+  --decide-concurrency  Decide jobs at once, each with its own Laya worker thread.
+  --drain-timeout       Ms to let in-flight work finish on SIGTERM. Default 25000.
+  --host, --port        API listen address (role api).
+  --once                Poll each configured input once, then exit.
+  --all                 Print ignored decisions too through log destinations.
+  --log-level           Runtime log level: debug, info, warn, error, silent.
+  --log-format          Runtime log format: pretty or json.
+
+Setup:
+  cp brainstem.config.example.mjs brainstem.config.mjs
+  cp .env.example .env
+`);
   process.exit(0);
 }
 
-const config =
-  await loadConfig(configPath);
+const configPath = valueFromArgs(argv, "--config") ?? process.env.BRAINSTEM_CONFIG ?? "brainstem.config.mjs";
 
-const logger =
-  createRuntimeLogger({
-    ...(config.runtime?.logging ?? {}),
-    ...(logLevel ? { level: logLevel } : {}),
-    ...(logFormat ? { format: logFormat } : {})
-  });
-
-/*
- * One database handle for the runtime and the
- * embedded backend API.
- */
-const database =
-  await openRuntimeDatabase(config, { logger });
-
-const apiConfig = normalizeBackendApiConfig(
-  config.runtime?.api ?? {},
-  { repoRoot: process.cwd() }
-);
-let backendApi = null;
-
-if (apiConfig.enabled) {
-  backendApi = createBackendApiServer({
-    ...apiConfig,
-    database
-  });
-  await backendApi.listen();
-
-  if (!config.runtime) config.runtime = {};
-  const telemetry = config.runtime.telemetry;
-  const telemetryConfigured = typeof telemetry === "string"
-    ? telemetry.length > 0
-    : Boolean(telemetry?.url);
-
-  if (!telemetryConfigured) {
-    config.runtime.telemetry = {
-      ...(telemetry && typeof telemetry === "object" ? telemetry : {}),
-      url: backendApi.telemetryUrl,
-      ...(apiConfig.token ? { headers: { authorization: `Bearer ${apiConfig.token}` } } : {})
-    };
-  }
+let role;
+try {
+  role = resolveRole(valueFromArgs(argv, "--role"));
+}
+catch (error) {
+  console.error(error.message);
+  process.exit(2);
 }
 
-const inputs =
-  config.inputs ?? [];
-
-const destinations =
-  (config.destinations ?? []).map(entry => {
-    if (
-      !printAll ||
-      !isLogDestination(entry)
-    ) {
-      return entry;
-    }
-
-    return {
-      ...entry,
-      decisions: "all"
-    };
+if (role === "web") {
+  process.env.NODE_ENV ??= "production";
+  await import("./web/server.mjs");
+}
+else if (role === "api") {
+  await runApiProcess({
+    configPath,
+    host: valueFromArgs(argv, "--host"),
+    port: valueFromArgs(argv, "--port")
   });
-
-if (inputs.length === 0) {
-  logger.error(
-    "no input plugins configured"
-  );
-
-  await backendApi?.close();
-  await database.close();
-  process.exitCode = 1;
 }
 else {
-  const controller =
-    new AbortController();
+  const drainTimeout = valueFromArgs(argv, "--drain-timeout");
 
-  let stopping = false;
-
-  function stop(signalName) {
-    if (stopping) {
-      return;
-    }
-
-    stopping = true;
-
-    logger.info(
-      "shutdown signal received",
-      {
-        signal: signalName
-      }
-    );
-
-    controller.abort();
-  }
-
-  process.once("SIGINT", () => stop("SIGINT"));
-  process.once("SIGTERM", () => stop("SIGTERM"));
-
-  const runtime =
-    new BrainstemRuntime({
-      config,
-      plugins: inputs,
-      destinations,
-      logger,
-      database
-    });
-
-  try {
-    if (once) {
-      logger.info(
-        "polling inputs once",
-        {
-          inputs: inputs.length
-        }
-      );
-
-      await runtime.runOnce({
-        signal: controller.signal
-      });
-    }
-    else {
-      logger.info(
-        "starting brainstem",
-        {
-          inputs: inputs.length
-        }
-      );
-
-      await runtime.start({
-        signal: controller.signal
-      });
-
-      await runtime.wait();
-    }
-  }
-  catch (error) {
-    logger.error(
-      "brainstem failed",
-      {
-        error
-      }
-    );
-
-    process.exitCode = 1;
-  }
-  finally {
-    await runtime.close();
-    await backendApi?.close();
-    await database.close();
-  }
-}
-
-async function loadConfig(path) {
-  const absolutePath = resolve(path);
-
-  if (!existsSync(absolutePath)) {
-    console.error(
-      `Config file not found: ${path}\n\nCreate one with:\n  cp brainstem.config.example.mjs brainstem.config.mjs\n\nOr pass a config explicitly:\n  node brainstem.mjs --config ./my.config.mjs`
-    );
-
-    process.exit(1);
-  }
-
-  const module =
-    await import(
-      pathToFileURL(absolutePath).href
-    );
-
-  return module.default;
+  process.exitCode = await runCoreProcess({
+    role,
+    configPath,
+    queues: valueFromArgs(argv, "--queues"),
+    configSource: valueFromArgs(argv, "--config-source"),
+    healthHost: valueFromArgs(argv, "--health-host"),
+    healthPort: valueFromArgs(argv, "--health-port"),
+    once: args.has("--once"),
+    printAll: args.has("--all"),
+    logLevel: valueFromArgs(argv, "--log-level"),
+    logFormat: valueFromArgs(argv, "--log-format"),
+    decideConcurrency: valueFromArgs(argv, "--decide-concurrency"),
+    drainTimeoutMs: drainTimeout ? Number(drainTimeout) : null
+  });
 }
 
 function valueFromArgs(args, name) {
@@ -227,11 +112,6 @@ function valueFromArgs(args, name) {
   }
 
   return null;
-}
-
-function isLogDestination(entry) {
-  return entry.module ===
-    "./plugins/log-decisions/index.mjs";
 }
 
 function loadDotEnv(path = ".env") {

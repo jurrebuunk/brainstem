@@ -20,9 +20,16 @@ import { PERMISSIONS } from "./permissions.mjs";
 import { createSseHub } from "./sse.mjs";
 import { createTelemetryStore } from "./telemetry-store.mjs";
 import { createCoreRegistry, topologyFromCores } from "../runtime/cores.mjs";
+import { createInputLeaseStore } from "../runtime/input-leases.mjs";
+import { withSingletonLock } from "../db/locks.mjs";
+import { CONFIG_SCHEMA } from "../config/schema.mjs";
+import { createConfigVersionStore } from "../config/versions.mjs";
+import { resolveConfigSource } from "../config/source.mjs";
 
 // Cores not seen for this long are removed from the registry.
 const CORE_PRUNE_AFTER_MS = 24 * 60 * 60 * 1000;
+// Inputs no core declared for this long are removed from the schedule.
+const INPUT_PRUNE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 8;
@@ -49,6 +56,8 @@ export function createBackendApiServer({
   eventLogMaxRows = nonNegativeInteger(process.env.WEB_EVENTS_MAX_ROWS, 50_000),
   token = process.env.BRAINSTEM_API_TOKEN,
   allowConfigWrites = true,
+  // "file": the config file, read-only. "database": versioned config.
+  configSource = resolveConfigSource(),
   cookieSecure = process.env.BRAINSTEM_COOKIE_SECURE === "true",
   trustedProxies = process.env.BRAINSTEM_TRUSTED_PROXIES ?? DEFAULT_TRUSTED_PROXIES,
   maintenanceIntervalMs = nonNegativeInteger(
@@ -58,7 +67,7 @@ export function createBackendApiServer({
 } = {}) {
   const configStore = createConfigStore(configPath);
   const proxies = createTrustedProxies(trustedProxies);
-  const sse = createSseHub();
+  let sse = null;
   const events = [];
   let handle = null;
   let ownsHandle = false;
@@ -68,7 +77,10 @@ export function createBackendApiServer({
   let pipeline = null;
   let pipelineAdmin = null;
   let coreRegistry = null;
+  let inputLeases = null;
+  let configVersions = null;
   let started = null;
+  let draining = false;
 
   async function start() {
     if (database) {
@@ -96,6 +108,7 @@ export function createBackendApiServer({
     maintenance = createMaintenanceScheduler({
       db: handle.db,
       intervalMs: maintenanceIntervalMs,
+      lock: fn => withSingletonLock(handle, "api.maintenance", fn),
       tasks: {
         "telemetry.prune": ({ now }) => telemetryStore.prune({ now }),
         "auth.prune": async ({ now }) => ({
@@ -104,10 +117,17 @@ export function createBackendApiServer({
         }),
         "cores.prune": async ({ now }) => ({
           cores: await coreRegistry.prune({ olderThanMs: CORE_PRUNE_AFTER_MS, now: new Date(now).getTime() })
+        }),
+        "inputs.prune": async ({ now }) => ({
+          inputs: await inputLeases.prune({ olderThanMs: INPUT_PRUNE_AFTER_MS, at: new Date(now).getTime() })
         })
       }
     });
     coreRegistry = createCoreRegistry({ database: async () => handle });
+    inputLeases = createInputLeaseStore({ database: async () => handle });
+    configVersions = createConfigVersionStore({ database: async () => handle });
+    // Streams telemetry from every replica (LISTEN/NOTIFY on Postgres).
+    sse = createSseHub({ store: telemetryStore, notifier: handle.notifier });
     // The runtime's job queue and delivery log, in the same database.
     pipeline = createPipelineStorage({ type: "database", database: handle });
     pipelineAdmin = createPipelineAdmin(pipeline);
@@ -123,6 +143,28 @@ export function createBackendApiServer({
 
       if (request.method === "OPTIONS") {
         sendNoContent(response, 204);
+        return;
+      }
+
+      /*
+       * Probes (roadmap §5): liveness never touches the database;
+       * readiness needs it and fails while draining; startup waits
+       * for the schema and stores.
+       */
+      if (url.pathname === "/livez" && request.method === "GET") {
+        sendJson(response, { ok: true, role: "api" });
+        return;
+      }
+
+      if (url.pathname === "/readyz" && request.method === "GET") {
+        const ready = !draining && await databaseReachable(handle);
+        sendJson(response, { ok: ready, role: "api", draining }, ready ? 200 : 503);
+        return;
+      }
+
+      if (url.pathname === "/startupz" && request.method === "GET") {
+        const startedOk = Boolean(telemetryStore && authStore);
+        sendJson(response, { ok: startedOk, role: "api" }, startedOk ? 200 : 503);
         return;
       }
 
@@ -220,7 +262,7 @@ export function createBackendApiServer({
 
       if (url.pathname === "/api/stream" && request.method === "GET") {
         requirePermission(session.user, "events:read");
-        sse.stream(response);
+        await sse.stream(request, response);
         return;
       }
 
@@ -230,20 +272,87 @@ export function createBackendApiServer({
         return;
       }
 
+      /*
+       * Config (ADR-0005). With configSource "file" the file is shown
+       * read-only. With "database" every save is a new validated
+       * version; If-Match (the active version id, as returned in
+       * ETag) prevents overwriting someone else's change.
+       */
       if (url.pathname === "/api/config" && request.method === "GET") {
         requirePermission(session.user, "config:read");
-        sendJson(response, await configStore.read());
+
+        if (configSource === "file") {
+          sendJson(response, {
+            source: "file",
+            format: "mjs",
+            readOnly: true,
+            ...(await configStore.read())
+          });
+          return;
+        }
+
+        const active = await configVersions.active();
+        if (active) response.setHeader("etag", `"${active.id}"`);
+        sendJson(response, {
+          source: "database",
+          format: "json",
+          readOnly: !allowConfigWrites,
+          version: active ? versionSummary(active) : null,
+          content: active ? JSON.stringify(active.spec, null, 2) : ""
+        });
         return;
       }
 
       if (url.pathname === "/api/config" && request.method === "PUT") {
         requirePermission(session.user, "config:write");
-        if (!allowConfigWrites) {
-          sendJson(response, { error: "Config writes are disabled" }, 403);
-          return;
-        }
+        requireDatabaseConfig(configSource, allowConfigWrites);
         const body = await readJsonBody(request, {}, { maxBodyBytes });
-        sendJson(response, await configStore.save(String(body.content ?? "")));
+        const expectedActiveId = expectedVersion(request, body);
+        const spec = body.spec ?? parseConfigContent(body.content);
+        const version = await configVersions.create(spec, {
+          author: session.user.username,
+          comment: typeof body.comment === "string" ? body.comment.slice(0, 500) : null,
+          expectedActiveId
+        });
+        response.setHeader("etag", `"${version.id}"`);
+        sendJson(response, { ok: true, unchanged: version.unchanged, version: versionSummary(version) });
+        return;
+      }
+
+      if (url.pathname === "/api/config/schema" && request.method === "GET") {
+        requirePermission(session.user, "config:read");
+        sendJson(response, CONFIG_SCHEMA);
+        return;
+      }
+
+      if (url.pathname === "/api/config/versions" && request.method === "GET") {
+        requirePermission(session.user, "config:read");
+        sendJson(response, configSource === "database"
+          ? await configVersions.list({ limit: Math.min(clampLimit(url.searchParams.get("limit"), 50), 500) })
+          : []);
+        return;
+      }
+
+      const versionMatch = url.pathname.match(/^\/api\/config\/versions\/(\d+)(\/activate)?$/);
+      if (versionMatch && !versionMatch[2] && request.method === "GET") {
+        requirePermission(session.user, "config:read");
+        const version = await configVersions.get(versionMatch[1]);
+        if (!version) throw httpError(404, `Config version ${versionMatch[1]} does not exist`);
+        sendJson(response, version);
+        return;
+      }
+
+      // Activate an existing version (rollback).
+      if (versionMatch && versionMatch[2] && request.method === "POST") {
+        requirePermission(session.user, "config:write");
+        requireDatabaseConfig(configSource, allowConfigWrites);
+        const body = await readJsonBody(request, {}, { maxBodyBytes });
+        const active = await configVersions.activate(versionMatch[1], {
+          author: session.user.username,
+          expectedActiveId: expectedVersion(request, body, { required: false })
+        });
+        response.setHeader("etag", `"${active.id}"`);
+        sendJson(response, { ok: true, version: versionSummary(active) });
         return;
       }
 
@@ -317,6 +426,13 @@ export function createBackendApiServer({
         return;
       }
 
+      // Input schedule and leases: which core polls what, and when next.
+      if (url.pathname === "/api/inputs" && request.method === "GET") {
+        requirePermission(session.user, "runtime:read");
+        sendJson(response, await inputLeases.list());
+        return;
+      }
+
       if (url.pathname === "/api/pipeline" && request.method === "GET") {
         requirePermission(session.user, "runtime:read");
         sendJson(response, await pipelineAdmin.summary());
@@ -374,14 +490,15 @@ export function createBackendApiServer({
 
   async function addEvent(event) {
     events.push(event);
+    let persisted = event;
     try {
-      await telemetryStore.persistEvent(event);
+      persisted = { ...event, persistedId: await telemetryStore.persistEvent(event) };
     }
     catch (error) {
       console.error("failed to persist backend telemetry", error);
     }
     while (events.length > maxEvents) events.shift();
-    sse.broadcast(event);
+    sse.publish(persisted);
   }
 
   async function currentSession(request) {
@@ -442,7 +559,25 @@ export function createBackendApiServer({
       return await maintenance.run(options);
     },
 
+    /*
+     * Graceful shutdown (SIGTERM): readiness fails at once so the
+     * load balancer stops sending traffic, SSE streams end so
+     * clients reconnect elsewhere, then the server closes.
+     */
+    async drain({ delayMs = 0 } = {}) {
+      draining = true;
+      if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
+      sse?.closeAll();
+      await api.close();
+    },
+
+    get draining() {
+      return draining;
+    },
+
     async close() {
+      sse?.close();
+      server.closeIdleConnections?.();
       if (server.listening) {
         await new Promise(resolveClose => server.close(() => resolveClose()));
       }
@@ -473,6 +608,7 @@ export function normalizeBackendApiConfig(config = {}, { repoRoot = process.cwd(
     databaseUrl: config.databaseUrl ?? process.env.BRAINSTEM_DATABASE_URL ?? `sqlite:${telemetryDbPath}`,
     token,
     allowConfigWrites: config.allowConfigWrites ?? true,
+    configSource: resolveConfigSource({ config: { runtime: { configSource: config.configSource } } }),
     cookieSecure: config.cookieSecure ?? (process.env.BRAINSTEM_COOKIE_SECURE === "true"),
     trustedProxies: config.trustedProxies ?? process.env.BRAINSTEM_TRUSTED_PROXIES ?? DEFAULT_TRUSTED_PROXIES,
     maintenanceIntervalMs: nonNegativeInteger(
@@ -480,6 +616,79 @@ export function normalizeBackendApiConfig(config = {}, { repoRoot = process.cwd(
       DEFAULT_MAINTENANCE_INTERVAL_MS
     )
   };
+}
+
+function requireDatabaseConfig(configSource, allowConfigWrites) {
+  if (configSource !== "database") {
+    throw httpError(409, "Config is managed as a file (configSource \"file\"): edit the file and restart, or run `brainstem config import` and set BRAINSTEM_CONFIG_SOURCE=database");
+  }
+  if (!allowConfigWrites) throw httpError(403, "Config writes are disabled");
+}
+
+/*
+ * The active version id the client edited: If-Match ("12", 12 or *)
+ * or body.expectedVersion. Required for saves so concurrent edits
+ * never silently overwrite each other.
+ */
+function expectedVersion(request, body, { required = true } = {}) {
+  const header = request.headers["if-match"];
+
+  if (header !== undefined) {
+    const value = String(header).trim().replace(/^W\//, "").replace(/^"|"$/g, "");
+    if (value === "*") return undefined;
+    if (value === "" || value === "none") return null;
+    const id = Number(value);
+    if (!Number.isSafeInteger(id)) throw httpError(400, `Invalid If-Match '${header}'`);
+    return id;
+  }
+
+  if (body && Object.hasOwn(body, "expectedVersion")) {
+    if (body.expectedVersion === null) return null;
+    const id = Number(body.expectedVersion);
+    if (!Number.isSafeInteger(id)) throw httpError(400, "Invalid expectedVersion");
+    return id;
+  }
+
+  if (required) throw httpError(428, "Send If-Match with the version you edited (or expectedVersion: null for the first version)");
+  return undefined;
+}
+
+function parseConfigContent(content) {
+  if (typeof content !== "string" || content.trim() === "") {
+    throw httpError(400, "Expected content: the config as JSON");
+  }
+
+  try {
+    return JSON.parse(content);
+  }
+  catch (error) {
+    throw httpError(400, `Config is not valid JSON: ${error.message}`);
+  }
+}
+
+function versionSummary({ spec: _spec, ...version }) {
+  return version;
+}
+
+async function databaseReachable(handle) {
+  if (!handle) return false;
+
+  let timer;
+  try {
+    await Promise.race([
+      handle.db.selectFrom("maintenance_runs").select("task").limit(1).execute(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("database ping timed out")), 2_000);
+      })
+    ]);
+    return true;
+  }
+  catch {
+    return false;
+  }
+  finally {
+    clearTimeout(timer);
+  }
 }
 
 function normalizeIncomingEvent(value) {

@@ -30,6 +30,13 @@ import {
   telemetryValue
 } from "./telemetry.mjs";
 import { DEFAULT_CORE_HEARTBEAT_MS, createCoreRegistry } from "./cores.mjs";
+import {
+  DEFAULT_INPUT_LEASE_MS,
+  InputLeaseLostError,
+  createInputLeaseStore,
+  nextDueAt
+} from "./input-leases.mjs";
+import { withSingletonLock } from "../db/locks.mjs";
 import { Brainstem } from "../core/brainstem.mjs";
 export { loadDestinationPlugin, loadInputPlugin } from "./plugin-loader.mjs";
 import {
@@ -52,6 +59,28 @@ import {
 const DEFAULT_INTERVAL_MS = 60_000;
 
 const DELIVERY_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+
+/*
+ * Pipeline stages a core can run (roadmap 4.1, --queues):
+ * poll (claim inputs by lease and poll them), decide (Laya) and
+ * deliver (destinations).
+ */
+export const CORE_QUEUES = ["poll", "decide", "deliver"];
+
+export const DEFAULT_INPUT_CONFIG = {
+  // "lease" whenever the pipeline is in the database, else "timer".
+  scheduling: null,
+  leaseMs: DEFAULT_INPUT_LEASE_MS,
+  // Inputs one core polls at the same time.
+  concurrency: 16,
+  // Longest wait between schedule checks when nothing wakes the core.
+  checkIntervalMs: 5_000
+};
+
+export const DEFAULT_SHUTDOWN_CONFIG = {
+  // How long drain() lets in-flight polls and jobs finish.
+  timeoutMs: 25_000
+};
 
 /*
  * Pipeline defaults (runtime.queue). Decisions retry quickly
@@ -95,7 +124,10 @@ export class BrainstemRuntime {
     recordStore,
     pluginState,
     database,
-    pipeline
+    pipeline,
+    role,
+    queues,
+    configVersion = null
   } = {}) {
     if (!brainstem && !config) {
       throw new Error(
@@ -202,6 +234,23 @@ export class BrainstemRuntime {
       maxPerDelivery: this.config.runtime?.handoff?.maxPerDelivery ?? 5
     };
 
+    /*
+     * Which stages this core runs. A core-deliver replica never
+     * loads the Laya model; a core-decide replica never polls.
+     */
+    this.role =
+      role ?? this.config.runtime?.role ?? "all";
+    this.queues =
+      normalizeCoreQueues(queues ?? this.config.runtime?.queues);
+    this.configVersion = configVersion;
+
+    this.inputConfig =
+      normalizeInputConfig(this.config.runtime?.inputs);
+    this.shutdownConfig = {
+      ...DEFAULT_SHUTDOWN_CONFIG,
+      ...(this.config.runtime?.shutdown ?? {})
+    };
+
 
     const checkpointsInDatabase =
       this.checkpointStore instanceof DatabaseCheckpointStore;
@@ -220,6 +269,44 @@ export class BrainstemRuntime {
     this.pipelineAdmin =
       createPipelineAdmin(this.pipeline);
 
+    if (
+      !this.queues.every(queue => CORE_QUEUES.includes(queue))
+    ) {
+      throw new Error(
+        `Unknown queue in runtime.queues (${this.queues.join(", ")}). Use ${CORE_QUEUES.join(", ")}.`
+      );
+    }
+
+    if (
+      this.queues.length < CORE_QUEUES.length &&
+      this.pipeline.type !== "database"
+    ) {
+      throw new Error(
+        "Running a subset of queues needs the database transport: the other stages run in other processes"
+      );
+    }
+
+    /*
+     * Inputs are scheduled by leases in the `inputs` table when
+     * the pipeline lives in the runtime database, so several cores
+     * never poll one input at once. Otherwise (memory pipeline,
+     * injected storage) each input polls on its own timer.
+     */
+    const scheduling =
+      this.inputConfig.scheduling ??
+      (!pipeline && this.pipeline.type === "database" ? "lease" : "timer");
+
+    if (!["lease", "timer"].includes(scheduling)) {
+      throw new Error(
+        `Unknown runtime.inputs.scheduling '${scheduling}'. Use 'lease' or 'timer'.`
+      );
+    }
+
+    this.inputLeases =
+      scheduling === "lease"
+        ? createInputLeaseStore({ database: () => this.database.get() })
+        : null;
+
     /*
      * Core registry: this process registers in the `cores` table
      * and heartbeats, so the API knows which cores exist. Only
@@ -231,7 +318,7 @@ export class BrainstemRuntime {
       this.config.runtime?.cores?.heartbeatMs ?? DEFAULT_CORE_HEARTBEAT_MS;
     this.coreRegistry =
       this.config.runtime?.cores?.enabled !== false &&
-      (!this.database.owned || this.transport.type === "database")
+      (!this.database.owned || this.pipeline.type === "database")
         ? createCoreRegistry({ database: () => this.database.get() })
         : null;
     this.coreHeartbeatTimer = null;
@@ -249,6 +336,10 @@ export class BrainstemRuntime {
 
     this.abortController = null;
     this.tasks = [];
+    this.work = null;
+    this.started = false;
+    this.draining = false;
+    this.reconfiguring = null;
     this.runner = null;
     this.deliveryPruneTimer = null;
     this.deliveryPruning = null;
@@ -270,29 +361,14 @@ export class BrainstemRuntime {
       );
     }
 
-    this.abortController =
-      new AbortController();
-
-    if (signal) {
-      if (signal.aborted) {
-        this.abortController.abort(
-          signal.reason
-        );
-      }
-      else {
-        signal.addEventListener(
-          "abort",
-          () => this.abortController.abort(
-            signal.reason
-          ),
-          { once: true }
-        );
-      }
-    }
+    this.#createAbortController(signal);
 
     this.logger.info?.(
       "runtime starting",
       {
+        coreId: this.coreId,
+        role: this.role,
+        queues: this.queues,
         inputs: this.plugins.length,
         destinations: this.destinations.length,
         records: storeInfo(this.recordStore),
@@ -300,47 +376,30 @@ export class BrainstemRuntime {
       }
     );
     this.#emitTelemetry("brainstem.runtime.starting", {
+      role: this.role,
+      queues: this.queues,
       inputs: this.plugins.length,
       destinations: this.destinations.length
     });
 
-    await this.#startBrainstem(
-      this.abortController.signal
-    );
-
-    await this.#loadDestinationEntries();
+    await this.#prepare(this.abortController.signal);
 
     this.#emitSnapshot();
     this.#startTelemetrySnapshots();
     this.#startDeliveryPruning();
     await this.#startCoreHeartbeat();
 
-    this.runner =
-      this.#createRunner();
-
-    this.tasks = [
-      ...this.plugins.map((entry, index) =>
-        this.#runPluginEntry(
-          entry,
-          index,
-          this.abortController.signal
-        )
-      ),
-      this.runner
-        .start(this.abortController.signal)
-        .catch(error => {
-          this.logger.error?.(
-            "job runner failed",
-            { error }
-          );
-        })
-    ];
+    this.#startWork();
+    this.started = true;
 
     this.logger.info?.(
       "runtime started",
       {
+        coreId: this.coreId,
+        queues: this.queues,
         inputs: this.plugins.length,
-        destinations: this.destinationEntries.length
+        destinations: this.destinationEntries.length,
+        scheduling: this.inputLeases ? "lease" : "timer"
       }
     );
 
@@ -354,25 +413,7 @@ export class BrainstemRuntime {
       );
     }
 
-    this.abortController =
-      new AbortController();
-
-    if (signal) {
-      if (signal.aborted) {
-        this.abortController.abort(
-          signal.reason
-        );
-      }
-      else {
-        signal.addEventListener(
-          "abort",
-          () => this.abortController.abort(
-            signal.reason
-          ),
-          { once: true }
-        );
-      }
-    }
+    this.#createAbortController(signal);
 
     try {
       this.logger.info?.(
@@ -390,25 +431,24 @@ export class BrainstemRuntime {
         destinations: this.destinations.length
       });
 
-      await this.#startBrainstem(
-        this.abortController.signal
-      );
-
-      await this.#loadDestinationEntries();
+      await this.#prepare(this.abortController.signal);
 
       this.#emitSnapshot();
       await this.#startCoreHeartbeat();
+      this.started = true;
 
       const polls =
-        await Promise.allSettled(
-          this.plugins.map((entry, index) =>
-            this.#runPluginEntryOnce(
-              entry,
-              index,
-              this.abortController.signal
+        this.queues.includes("poll")
+          ? await Promise.allSettled(
+              this.plugins.map((entry, index) =>
+                this.#runPluginEntryOnce(
+                  entry,
+                  index,
+                  this.abortController.signal
+                )
+              )
             )
-          )
-        );
+          : [];
 
       /*
        * Decide and deliver everything the polls
@@ -420,9 +460,11 @@ export class BrainstemRuntime {
         this.#createRunner();
 
       const drained =
-        await this.runner.drain(
-          this.abortController.signal
-        );
+        this.runner
+          ? await this.runner.drain(
+              this.abortController.signal
+            )
+          : { processed: 0, failures: [] };
 
       await this.#reportPendingJobs();
 
@@ -462,8 +504,357 @@ export class BrainstemRuntime {
     }
   }
 
+  /*
+   * Resolves when the runtime stops (a reconfigure replaces the
+   * running work without resolving it). Rejects when an input or
+   * the job runner fails.
+   */
   async wait() {
-    await Promise.all(this.tasks);
+    while (true) {
+      const tasks = this.tasks;
+
+      await Promise.all(tasks);
+
+      if (this.reconfiguring) {
+        await this.reconfiguring.catch(() => {});
+      }
+
+      if (
+        this.tasks !== tasks &&
+        this.abortController &&
+        !this.abortController.signal.aborted
+      ) {
+        continue;
+      }
+
+      return;
+    }
+  }
+
+  /*
+   * Graceful shutdown (SIGTERM): stop claiming inputs and jobs,
+   * let in-flight polls and jobs finish for up to `timeoutMs`,
+   * then abort what is left (aborted jobs go back to the queue
+   * without counting the attempt; leases are released). Readiness
+   * reports not ready from the first moment.
+   */
+  async drain({ timeoutMs = this.shutdownConfig.timeoutMs } = {}) {
+    if (this.draining) return;
+
+    this.draining = true;
+
+    this.logger.info?.(
+      "runtime draining",
+      { coreId: this.coreId, timeoutMs }
+    );
+    this.#emitTelemetry("brainstem.runtime.draining", { timeoutMs });
+
+    await this.reconfiguring?.catch(() => {});
+    await this.#stopWork({ timeoutMs });
+  }
+
+  /*
+   * Liveness, readiness and startup state for health endpoints
+   * (roadmap §5). Readiness also needs the database reachable;
+   * see ready().
+   */
+  health() {
+    return {
+      coreId: this.coreId,
+      role: this.role,
+      queues: this.queues,
+      configVersion: this.configVersion,
+      started: this.started,
+      draining: this.draining,
+      reconfiguring: Boolean(this.reconfiguring)
+    };
+  }
+
+  async ready({ timeoutMs = 2_000 } = {}) {
+    if (!this.started || this.draining) return false;
+    if (!this.coreRegistry && !this.inputLeases && this.pipeline.type !== "database") return true;
+
+    try {
+      const handle = await this.database.get();
+      await withTimeout(
+        handle.db.selectFrom("cores").select("id").limit(1).execute(),
+        timeoutMs
+      );
+      return true;
+    }
+    catch {
+      return false;
+    }
+  }
+
+  /*
+   * Hot reload (roadmap 4.6): switch to a new config without
+   * restarting. Claiming stops, in-flight polls and jobs finish
+   * (up to runtime.shutdown.timeoutMs), then inputs and
+   * destinations reload and work resumes. When the new config
+   * fails to load, the previous one keeps running and the error is
+   * thrown.
+   *
+   * Takes effect: inputs, destinations, policy, laya questions and
+   * load options, runtime.queue (except transport), inputs (except
+   * scheduling), handoff, shutdown. Needs a restart: database,
+   * records, checkpoints, queue.transport, inputs.scheduling,
+   * cores, role and queues.
+   */
+  async reconfigure({
+    config,
+    plugins = config.inputs ?? [],
+    destinations = config.destinations ?? [],
+    configVersion = null
+  }) {
+    const previous = this.reconfiguring ?? Promise.resolve();
+    const run = previous
+      .catch(() => {})
+      .then(() => this.#reconfigure({ config, plugins, destinations, configVersion }));
+
+    this.reconfiguring = run;
+
+    try {
+      return await run;
+    }
+    finally {
+      if (this.reconfiguring === run) this.reconfiguring = null;
+    }
+  }
+
+  async #reconfigure({ config, plugins, destinations, configVersion }) {
+    const previous = {
+      config: this.config,
+      plugins: this.plugins,
+      destinations: this.destinations,
+      configVersion: this.configVersion
+    };
+
+    if (!this.started || this.draining || !this.abortController) {
+      this.#applyConfig({ config, plugins, destinations, configVersion });
+      return;
+    }
+
+    this.logger.info?.(
+      "config changed; reloading",
+      { from: previous.configVersion, to: configVersion }
+    );
+
+    await this.#stopWork({ timeoutMs: this.shutdownConfig.timeoutMs });
+
+    if (this.abortController.signal.aborted || this.draining) return;
+
+    try {
+      this.#applyConfig({ config, plugins, destinations, configVersion });
+      await this.#prepareReload();
+    }
+    catch (error) {
+      this.logger.error?.(
+        "config reload failed; keeping the previous config",
+        { version: configVersion, error }
+      );
+
+      this.#applyConfig(previous);
+      await this.#prepareReload().catch(restoreError => {
+        this.logger.error?.("restoring the previous config failed", { error: restoreError });
+      });
+      this.#startWork();
+      this.#emitSnapshot();
+
+      throw error;
+    }
+
+    this.#startWork();
+    this.#emitSnapshot();
+    this.#heartbeatNow();
+
+    this.logger.info?.(
+      "config reloaded",
+      {
+        version: configVersion,
+        inputs: this.plugins.length,
+        destinations: this.destinationEntries.length
+      }
+    );
+    this.#emitTelemetry("brainstem.config.reloaded", {
+      from: previous.configVersion,
+      to: configVersion,
+      inputs: this.plugins.length,
+      destinations: this.destinationEntries.length
+    });
+  }
+
+  #applyConfig({ config, plugins, destinations, configVersion }) {
+    this.config = config;
+    this.plugins = plugins;
+    this.destinations = destinations;
+    this.configVersion = configVersion;
+
+    this.queueConfig = {
+      ...normalizeQueueConfig(config.runtime?.queue),
+      transport: this.queueConfig.transport
+    };
+    this.handoffConfig = {
+      maxDepth: config.runtime?.handoff?.maxDepth ?? 2,
+      maxPerDelivery: config.runtime?.handoff?.maxPerDelivery ?? 5
+    };
+    this.inputConfig = {
+      ...normalizeInputConfig(config.runtime?.inputs),
+      scheduling: this.inputConfig.scheduling
+    };
+    this.shutdownConfig = {
+      ...DEFAULT_SHUTDOWN_CONFIG,
+      ...(config.runtime?.shutdown ?? {})
+    };
+  }
+
+  async #prepareReload() {
+    this.loadedInputs.clear();
+    this.inputsById.clear();
+
+    if (this.queues.includes("decide")) {
+      await this.brainstem.reconfigure?.(this.config);
+    }
+
+    if (
+      this.queues.includes("decide") ||
+      this.queues.includes("deliver")
+    ) {
+      await this.#loadDestinationEntries();
+    }
+  }
+
+  #heartbeatNow() {
+    if (!this.coreRegistry || !this.coreHeartbeatTimer) return;
+
+    this.coreHeartbeat = this.coreRegistry
+      .heartbeat(this.coreId, {
+        topology: this.#topology(),
+        configVersion: this.configVersion
+      })
+      .catch(error => {
+        this.logger.warn?.("core heartbeat failed", { coreId: this.coreId, error });
+      });
+  }
+
+  #createAbortController(signal) {
+    this.abortController =
+      new AbortController();
+
+    if (signal) {
+      if (signal.aborted) {
+        this.abortController.abort(
+          signal.reason
+        );
+      }
+      else {
+        signal.addEventListener(
+          "abort",
+          () => this.abortController.abort(
+            signal.reason
+          ),
+          { once: true }
+        );
+      }
+    }
+  }
+
+  /*
+   * Load what this core's queues need: the Laya model for decide,
+   * destinations for decide (routing) and deliver.
+   */
+  async #prepare(signal) {
+    if (this.queues.includes("decide")) {
+      await this.#startBrainstem(signal);
+    }
+
+    if (
+      this.queues.includes("decide") ||
+      this.queues.includes("deliver")
+    ) {
+      await this.#loadDestinationEntries();
+    }
+  }
+
+  /*
+   * One generation of running work: input polling and the job
+   * runner. `stop` ends claiming (drain, reconfigure); `abort`
+   * also interrupts in-flight work.
+   */
+  #startWork() {
+    const stop = new AbortController();
+    const abort = new AbortController();
+    const runtimeSignal = this.abortController.signal;
+
+    if (runtimeSignal.aborted) abort.abort(runtimeSignal.reason);
+    else runtimeSignal.addEventListener("abort", () => abort.abort(runtimeSignal.reason), { once: true });
+
+    const tasks = [];
+
+    if (this.queues.includes("poll")) {
+      if (this.inputLeases) {
+        tasks.push(
+          this.#runInputScheduler({ stop: stop.signal, signal: abort.signal })
+        );
+      }
+      else {
+        tasks.push(
+          ...this.plugins.map((entry, index) =>
+            this.#runPluginEntry(entry, index, { stop: stop.signal, signal: abort.signal })
+          )
+        );
+      }
+    }
+
+    this.runner =
+      this.#createRunner();
+
+    if (this.runner) {
+      tasks.push(
+        this.runner
+          .start(abort.signal, { stop: stop.signal })
+          .catch(error => {
+            this.logger.error?.(
+              "job runner failed",
+              { error }
+            );
+          })
+      );
+    }
+
+    this.work = { stop, abort, tasks };
+    this.tasks = tasks;
+  }
+
+  async #stopWork({ timeoutMs = 0 } = {}) {
+    const work = this.work;
+    if (!work) return;
+
+    work.stop.abort();
+
+    const settled = Promise.allSettled(work.tasks);
+
+    if (timeoutMs > 0 && !work.abort.signal.aborted) {
+      let timer;
+      const timedOut = await Promise.race([
+        settled.then(() => false),
+        new Promise(resolve => {
+          timer = setTimeout(() => resolve(true), timeoutMs);
+          timer.unref?.();
+        })
+      ]);
+      clearTimeout(timer);
+
+      if (timedOut) {
+        this.logger.warn?.(
+          "in-flight work did not finish in time; aborting it",
+          { timeoutMs }
+        );
+      }
+    }
+
+    work.abort.abort();
+    await settled;
   }
 
   async #startBrainstem(signal) {
@@ -561,6 +952,8 @@ export class BrainstemRuntime {
 
     this.#emitTelemetry("brainstem.runtime.stopping", {});
 
+    await this.reconfiguring?.catch(() => {});
+    await this.#stopWork({ timeoutMs: 0 });
     await Promise.allSettled(
       this.tasks
     );
@@ -574,6 +967,8 @@ export class BrainstemRuntime {
 
     this.abortController = null;
     this.tasks = [];
+    this.work = null;
+    this.started = false;
     this.runner = null;
     this.destinationEntries = [];
     this.destinationsById.clear();
@@ -587,11 +982,17 @@ export class BrainstemRuntime {
     );
   }
 
-  async #runPluginEntry(entry, index, signal) {
+  /*
+   * Timer scheduling (memory pipeline): this process polls the
+   * input every intervalMs.
+   */
+  async #runPluginEntry(entry, index, { stop, signal }) {
     const loaded =
       await this.#loadEntry(entry, index);
+    const stopOrAbort =
+      AbortSignal.any([stop, signal]);
 
-    while (!signal.aborted) {
+    while (!stopOrAbort.aborted) {
       try {
         await this.#pollInputWithRetry({
           ...loaded,
@@ -599,18 +1000,10 @@ export class BrainstemRuntime {
         });
       }
       catch (error) {
-        this.logger.error?.(
-          "input poll failed",
-          {
-            plugin: loaded.plugin.name,
-            input: loaded.inputName,
-            id: loaded.checkpointKey,
-            error
-          }
-        );
+        this.#pollFailed(loaded, error);
       }
 
-      await sleep(loaded.intervalMs, signal);
+      await sleep(loaded.intervalMs, stopOrAbort);
     }
   }
 
@@ -618,10 +1011,219 @@ export class BrainstemRuntime {
     const loaded =
       await this.#loadEntry(entry, index);
 
-    await this.#pollInputWithRetry({
-      ...loaded,
-      signal
-    });
+    if (!this.inputLeases) {
+      await this.#pollInputWithRetry({
+        ...loaded,
+        signal
+      });
+      return;
+    }
+
+    // Poll now regardless of the schedule, but never while another
+    // core holds the input.
+    await this.inputLeases.declare([inputDeclaration(loaded)]);
+
+    const [lease] =
+      await this.inputLeases.claim({
+        ids: [loaded.checkpointKey],
+        owner: this.coreId,
+        leaseMs: this.inputConfig.leaseMs,
+        force: true
+      });
+
+    if (!lease) {
+      this.logger.warn?.(
+        "input is being polled by another core; skipped",
+        { id: loaded.checkpointKey }
+      );
+      return;
+    }
+
+    await this.#pollLeased(loaded, lease, signal, { rethrow: true });
+  }
+
+  /*
+   * Lease scheduling (roadmap 4.3): claim due inputs from the
+   * `inputs` table, poll them, release with the next due time.
+   * Every core runs this; the claim makes sure only one of them
+   * polls an input at a time.
+   */
+  async #runInputScheduler({ stop, signal }) {
+    const loaded = [];
+
+    for (const [index, entry] of this.plugins.entries()) {
+      loaded.push(await this.#loadEntry(entry, index));
+    }
+
+    const byId = new Map();
+
+    for (const item of loaded) {
+      if (byId.has(item.checkpointKey)) {
+        throw new Error(
+          `Duplicate input id '${item.checkpointKey}'. Give each input a unique 'id'.`
+        );
+      }
+
+      byId.set(item.checkpointKey, item);
+    }
+
+    await this.inputLeases.declare(loaded.map(inputDeclaration));
+
+    const running = new Map();
+    const wake = createWake();
+    const stopOrAbort = AbortSignal.any([stop, signal]);
+    const notifier = (await this.database.get()).notifier;
+    const unlisten = notifier?.listen("inputs", () => wake.notify());
+
+    try {
+      while (!stopOrAbort.aborted) {
+        const free =
+          [...byId.keys()].filter(id => !running.has(id));
+        const capacity =
+          this.inputConfig.concurrency - running.size;
+        let leases = [];
+
+        if (capacity > 0 && free.length > 0) {
+          try {
+            leases = await this.inputLeases.claim({
+              ids: free,
+              owner: this.coreId,
+              limit: capacity,
+              leaseMs: this.inputConfig.leaseMs
+            });
+          }
+          catch (error) {
+            if (stopOrAbort.aborted) break;
+            this.logger.error?.("input claim failed", { error });
+          }
+        }
+
+        for (const lease of leases) {
+          const run = this.#pollLeased(byId.get(lease.id), lease, signal)
+            .finally(() => {
+              running.delete(lease.id);
+              wake.notify();
+            });
+
+          running.set(lease.id, run);
+        }
+
+        if (capacity > 0 && leases.length === capacity) continue;
+
+        let delayMs = this.inputConfig.checkIntervalMs;
+
+        try {
+          const waiting =
+            [...byId.keys()].filter(id => !running.has(id));
+          const next =
+            await this.inputLeases.nextClaimAt(waiting);
+
+          if (next !== null) {
+            delayMs = Math.min(delayMs, Math.max(10, next - Date.now()));
+          }
+        }
+        catch {
+          // Keep the default delay; the next claim reports errors.
+        }
+
+        await wake.wait(stopOrAbort, delayMs);
+      }
+    }
+    finally {
+      unlisten?.();
+      await Promise.allSettled(running.values());
+      await this.inputLeases.releaseAll(this.coreId).catch(() => {});
+    }
+  }
+
+  /*
+   * One leased poll: renew the lease while it runs (a lost lease
+   * aborts the poll), then release it with the next due time.
+   */
+  async #pollLeased(loaded, lease, signal, { rethrow = false } = {}) {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(signal.reason);
+
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+
+    const renew = setInterval(async () => {
+      try {
+        const held = await this.inputLeases.extend(lease, {
+          leaseMs: this.inputConfig.leaseMs
+        });
+
+        if (!held) controller.abort(new InputLeaseLostError(lease));
+      }
+      catch (error) {
+        this.logger.warn?.("input lease renewal failed", { id: lease.id, error });
+      }
+    }, Math.max(10, Math.floor(this.inputConfig.leaseMs / 3)));
+    renew.unref?.();
+
+    let failure = null;
+
+    try {
+      await this.#pollInputWithRetry({
+        ...loaded,
+        signal: controller.signal,
+        lease
+      });
+    }
+    catch (error) {
+      failure = error;
+    }
+    finally {
+      clearInterval(renew);
+      signal.removeEventListener("abort", onAbort);
+    }
+
+    const leaseLost =
+      failure instanceof InputLeaseLostError ||
+      controller.signal.reason instanceof InputLeaseLostError;
+
+    if (leaseLost) {
+      this.logger.warn?.(
+        "input lease lost; another core polls it now",
+        { id: lease.id, epoch: lease.epoch }
+      );
+      return;
+    }
+
+    if (signal.aborted) {
+      // Interrupted by shutdown: keep the schedule so another core
+      // polls it right away.
+      await this.inputLeases.release(lease).catch(() => {});
+      return;
+    }
+
+    if (failure) this.#pollFailed(loaded, failure);
+
+    try {
+      await this.inputLeases.release(lease, {
+        nextDueAt: nextDueAt(loaded.intervalMs),
+        polled: true,
+        error: failure ? failure.message ?? String(failure) : null
+      });
+      (await this.database.get()).notifier?.notify("inputs");
+    }
+    catch (error) {
+      this.logger.warn?.("input lease release failed", { id: lease.id, error });
+    }
+
+    if (failure && rethrow) throw failure;
+  }
+
+  #pollFailed(loaded, error) {
+    const info = {
+      id: loaded.checkpointKey,
+      plugin: loaded.plugin.name,
+      input: loaded.inputName,
+      error
+    };
+
+    this.logger.error?.("input poll failed", info);
+    this.#emitTelemetry("brainstem.input.poll.failed", info);
   }
 
   async #loadEntry(entry, index) {
@@ -811,10 +1413,11 @@ export class BrainstemRuntime {
     try {
       await this.coreRegistry.register({
         id: this.coreId,
-        role: "all",
-        queues: ["poll", "decide", "deliver"],
+        role: this.role,
+        queues: this.queues,
         heartbeatMs: this.coreHeartbeatMs,
-        topology: this.#topology()
+        topology: this.#topology(),
+        configVersion: this.configVersion
       });
     }
     catch (error) {
@@ -823,7 +1426,10 @@ export class BrainstemRuntime {
 
     this.coreHeartbeatTimer = setInterval(() => {
       this.coreHeartbeat = this.coreRegistry
-        .heartbeat(this.coreId, { topology: this.#topology() })
+        .heartbeat(this.coreId, {
+          topology: this.#topology(),
+          configVersion: this.configVersion
+        })
         .catch(error => {
           this.logger.warn?.("core heartbeat failed", { coreId: this.coreId, error });
         });
@@ -932,7 +1538,8 @@ export class BrainstemRuntime {
     inputName,
     input,
     signal,
-    checkpointKey
+    checkpointKey,
+    lease = null
   }) {
     const checkpoint =
       createDeferredCheckpoint({
@@ -954,10 +1561,23 @@ export class BrainstemRuntime {
         stateStore: this.pluginState,
         plugin: plugin.name,
         input: inputName,
-        id: checkpointKey
+        id: checkpointKey,
+        lease: lease
+          ? {
+              id: lease.id,
+              owner: lease.owner,
+              epoch: lease.epoch,
+              get until() {
+                return lease.until;
+              },
+              extend: (leaseMs = this.inputConfig.leaseMs) =>
+                this.inputLeases.extend(lease, { leaseMs })
+            }
+          : null
       });
 
-    const pollId = `${checkpointKey}:${Date.now()}`;
+    // Unique across cores and restarts.
+    const pollId = `${checkpointKey}:${Date.now()}:${randomUUID().slice(0, 8)}`;
 
     this.logger.info?.(
       "input poll started",
@@ -1034,13 +1654,21 @@ export class BrainstemRuntime {
      * crash in between re-polls instead of losing
      * observations.
      */
+    /*
+     * With a lease the commit is fenced on its epoch: when another
+     * core claimed the input meanwhile, nothing is committed and
+     * that core polls again from the stored checkpoint.
+     */
     if (this.checkpointsInTransaction) {
       await this.transport.transaction(async executor => {
+        if (lease) await this.inputLeases.fence(lease, { executor });
         await this.transport.enqueue(jobs, { executor });
         await checkpoint.commit({ executor });
       });
     }
     else {
+      if (lease) await this.inputLeases.fence(lease);
+
       if (jobs.length > 0) {
         await this.transport.enqueue(jobs);
       }
@@ -1178,33 +1806,45 @@ export class BrainstemRuntime {
     };
   }
 
+  /*
+   * Job runner for this core's decide and deliver queues, or null
+   * when it runs neither (a poll-only core).
+   */
   #createRunner() {
+    const queues = {
+      decide: {
+        concurrency: this.queueConfig.decide.concurrency,
+        retry: this.queueConfig.decide.retry,
+        handler: (job, context) =>
+          this.#decide(job, context),
+        onFailure: (job, error, details) =>
+          this.#decideFailed(job, error, details)
+      },
+      deliver: {
+        concurrency: this.queueConfig.deliver.concurrency,
+        retryFor: job =>
+          this.destinationsById.get(job.payload.destination)?.retry ??
+          this.queueConfig.deliver.retry,
+        handler: (job, context) =>
+          this.#deliver(job, context),
+        onFailure: (job, error, details) =>
+          this.#deliverFailed(job, error, details)
+      }
+    };
+
+    for (const name of Object.keys(queues)) {
+      if (!this.queues.includes(name)) delete queues[name];
+    }
+
+    if (Object.keys(queues).length === 0) return null;
+
     return new JobRunner({
       transport: this.transport,
       workerId: this.coreId,
       leaseMs: this.queueConfig.leaseMs,
       pollIntervalMs: this.queueConfig.pollIntervalMs,
       logger: this.logger,
-      queues: {
-        decide: {
-          concurrency: this.queueConfig.decide.concurrency,
-          retry: this.queueConfig.decide.retry,
-          handler: (job, context) =>
-            this.#decide(job, context),
-          onFailure: (job, error, details) =>
-            this.#decideFailed(job, error, details)
-        },
-        deliver: {
-          concurrency: this.queueConfig.deliver.concurrency,
-          retryFor: job =>
-            this.destinationsById.get(job.payload.destination)?.retry ??
-            this.queueConfig.deliver.retry,
-          handler: (job, context) =>
-            this.#deliver(job, context),
-          onFailure: (job, error, details) =>
-            this.#deliverFailed(job, error, details)
-        }
-      }
+      queues
     });
   }
 
@@ -1701,13 +2341,22 @@ export class BrainstemRuntime {
       return;
     }
 
+    const prune = () =>
+      this.deliveries.prune({
+        olderThan: new Date(
+          Date.now() - days * 24 * 60 * 60 * 1000
+        ).toISOString()
+      });
+
+    // One core at a time in a cluster (advisory lock).
     const run = () =>
-      this.deliveryPruning = this.deliveries
-        .prune({
-          olderThan: new Date(
-            Date.now() - days * 24 * 60 * 60 * 1000
-          ).toISOString()
-        })
+      this.deliveryPruning = (
+        this.pipeline.type === "database"
+          ? this.database.get().then(handle =>
+              withSingletonLock(handle, "deliveries.prune", prune)
+            )
+          : prune()
+      )
         .catch(error => {
           this.logger.warn?.(
             "delivery log prune failed",
@@ -1763,6 +2412,97 @@ export function deliveryKey({
   emissionId
 }) {
   return `${destinationId}:${observationId}:r${revision ?? 0}:${emissionId}`;
+}
+
+export function normalizeCoreQueues(queues) {
+  if (queues === undefined || queues === null || queues === "all") {
+    return [...CORE_QUEUES];
+  }
+
+  const list = (Array.isArray(queues) ? queues : String(queues).split(","))
+    .map(queue => String(queue).trim())
+    .filter(Boolean);
+
+  if (list.length === 0) {
+    throw new Error("runtime.queues must name at least one of poll, decide, deliver");
+  }
+
+  return CORE_QUEUES.filter(queue => list.includes(queue))
+    .concat(list.filter(queue => !CORE_QUEUES.includes(queue)));
+}
+
+export function normalizeInputConfig(inputs = {}) {
+  const defaults = DEFAULT_INPUT_CONFIG;
+
+  return {
+    scheduling: inputs.scheduling ?? defaults.scheduling,
+    leaseMs: Math.max(1_000, Number(inputs.leaseMs ?? defaults.leaseMs)),
+    concurrency: Math.max(1, Math.floor(Number(inputs.concurrency ?? defaults.concurrency))),
+    checkIntervalMs: Math.max(10, Number(inputs.checkIntervalMs ?? defaults.checkIntervalMs))
+  };
+}
+
+function inputDeclaration(loaded) {
+  return {
+    id: loaded.checkpointKey,
+    plugin: loaded.plugin.name,
+    input: loaded.inputName,
+    intervalMs: loaded.intervalMs
+  };
+}
+
+/*
+ * Wait for a timeout or an explicit wakeup, whichever comes first.
+ */
+function createWake() {
+  let resolveWait = null;
+  let pending = false;
+
+  return {
+    notify() {
+      if (resolveWait) {
+        resolveWait();
+        resolveWait = null;
+      }
+      else {
+        pending = true;
+      }
+    },
+
+    async wait(signal, delayMs) {
+      if (pending || signal.aborted) {
+        pending = false;
+        return;
+      }
+
+      await new Promise(resolve => {
+        const timer = setTimeout(done, delayMs);
+        timer.unref?.();
+        signal.addEventListener("abort", done, { once: true });
+
+        function done() {
+          clearTimeout(timer);
+          signal.removeEventListener("abort", done);
+          resolveWait = null;
+          resolve();
+        }
+
+        resolveWait = done;
+      });
+    }
+  };
+}
+
+function withTimeout(promise, timeoutMs) {
+  let timer;
+
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
+      timer.unref?.();
+    })
+  ]);
 }
 
 export function normalizeQueueConfig(queue = {}) {

@@ -59,6 +59,7 @@ function buildCoreRecords(items) {
 
       return {
         id: eventId(item.event, item.index),
+        coreId: eventCoreId(item.event),
         timestamp: eventTimestamp(item.event),
         title: observationId ? `Observation ${observationId}` : "Core decision",
         subtitle: `${payload.source ?? payload.observation?.payload?.source?.type ?? "source"} · ${payload.type ?? payload.observation?.payload?.type ?? "observation"} → ${decision}`,
@@ -362,3 +363,41 @@ function formatTime(value) {
     second: "2-digit"
   });
 }
+
+/*
+ * The core pool overview in the inspector: one entry per core, from
+ * the registry (`cores`, GET /api/topology) plus any core id seen
+ * only in events, with what it did in the event window. Sorted:
+ * running, then lost, then stopped; by id within each.
+ */
+const CORE_STATUS_ORDER = { running: 0, lost: 1, stopped: 2 };
+
+export function coreOverview(cores = [], items = []) {
+  const byId = new Map(cores.map(core => [core.id, { ...core, decided: 0, delivered: 0, polls: 0, failed: 0, lastActivityAt: null }]));
+
+  for (const { event } of items) {
+    const coreId = eventCoreId(event);
+    if (!coreId) continue;
+
+    const kind = String(event?.kind ?? "");
+    const entry = byId.get(coreId) ?? { id: coreId, status: null, queues: [], decided: 0, delivered: 0, polls: 0, failed: 0, lastActivityAt: null };
+
+    if (kind === "brainstem.core.decision") entry.decided += 1;
+    else if (kind === "brainstem.destination.completed") entry.delivered += 1;
+    else if (kind === "brainstem.input.poll.started") entry.polls += 1;
+    else if (kind.endsWith(".failed")) entry.failed += 1;
+    else {
+      byId.set(coreId, entry);
+      continue;
+    }
+
+    const at = eventTimestamp(event);
+    if (!entry.lastActivityAt || Date.parse(at) > Date.parse(entry.lastActivityAt)) entry.lastActivityAt = at;
+    byId.set(coreId, entry);
+  }
+
+  return [...byId.values()].sort((a, b) =>
+    (CORE_STATUS_ORDER[a.status] ?? 3) - (CORE_STATUS_ORDER[b.status] ?? 3) || String(a.id).localeCompare(String(b.id))
+  );
+}
+

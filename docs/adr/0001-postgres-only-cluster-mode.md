@@ -49,3 +49,7 @@ Follow-ups:
 - `Transport` interface and `sqlite` driver (Phase 2).
 - `postgres` driver with SKIP LOCKED and LISTEN/NOTIFY (Phase 3).
 - Load test to confirm throughput headroom; tune claim batch size (Phase 5).
+
+## Implementation
+
+Implemented in Phase 3 (2.0.0-beta). The `database` transport is the cluster driver on Postgres: claims use `FOR UPDATE SKIP LOCKED`, and wakeups use `LISTEN/NOTIFY` (`src/db/notifier.mjs`: one direct connection per process, messages scoped by schema, sent after the writing transaction and coalesced). See [Cluster mode](../cluster.md).

@@ -10,7 +10,8 @@ Documentation is kept in the repository so it is versioned with the code.
 - [Architecture](architecture.md) — how inputs, core, runtime, state, and destinations fit together.
 - [State](state.md) — the database: records, checkpoints, plugin state, jobs and deliveries.
 - [Delivery pipeline](delivery-pipeline.md) — durable decide/deliver jobs, retries, idempotency keys, dead jobs and redrive.
-- [Web UI](web-ui.md) — React Flow live view, persisted stats, first-run auth, RBAC, users, roles, and config editor.
+- [Cluster mode](cluster.md) — roles and queues, Postgres, input leases, hot config reload, drain, probes and the model image.
+- [Web UI](web-ui.md) — React Flow live view, persisted stats, first-run auth, RBAC, users, roles, and the versioned config editor.
 - [Runtime telemetry](telemetry.md) — structured events emitted by the runtime.
 
 ## Plugin docs

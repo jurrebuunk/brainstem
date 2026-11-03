@@ -13,7 +13,10 @@ export { JobRunner, DEFAULT_POLL_INTERVAL_MS } from "./runner.mjs";
  * always on the same backend so they can share transactions.
  *
  *   type "database"  jobs and deliveries tables in the runtime
- *                    database (durable)
+ *                    database (durable). On Postgres this is the
+ *                    cluster driver: SKIP LOCKED claims and
+ *                    LISTEN/NOTIFY wakeups.
+ *   type "postgres"  the same, but refuses to run on SQLite
  *   type "memory"    process-local (not durable)
  */
 export function createPipelineStorage({ type, database } = {}) {
@@ -25,15 +28,24 @@ export function createPipelineStorage({ type, database } = {}) {
     };
   }
 
-  if (type === "database") {
+  if (type === "database" || type === "postgres") {
+    const requirePostgres = type === "postgres";
+    const resolve = async () => {
+      const handle = typeof database === "function" ? await database() : await database;
+      if (requirePostgres && handle.dialect !== "postgres") {
+        throw new Error("runtime.queue.transport 'postgres' requires a postgres:// database URL");
+      }
+      return handle;
+    };
+
     return {
-      type,
-      transport: new DatabaseTransport({ database }),
+      type: "database",
+      transport: new DatabaseTransport({ database: resolve }),
       deliveries: new DatabaseDeliveryStore({ database })
     };
   }
 
-  throw new Error(`Unsupported queue transport '${type}'. Use 'database' or 'memory'.`);
+  throw new Error(`Unsupported queue transport '${type}'. Use 'database', 'postgres' or 'memory'.`);
 }
 
 /*

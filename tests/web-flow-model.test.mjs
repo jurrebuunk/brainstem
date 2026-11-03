@@ -186,3 +186,28 @@ test("node counters prefer database totals over the event window", () => {
   assert.equal(windowMeta("core").decisions, 2);
   assert.equal(windowMeta("destination:ops-room").errors, 1);
 });
+
+test("the core overview lists each core with its activity, for filtering", async () => {
+  const { coreOverview, buildInspectorRecords } = await import("../web/src/telemetry/inspector-records.js");
+  const items = [
+    event("brainstem.input.poll.started", { id: "test-app-log", coreId: "core-a" }, 10),
+    event("brainstem.core.decision", { observationId: "o1", coreId: "core-a" }, 11),
+    event("brainstem.core.decision", { observationId: "o2", coreId: "core-c" }, 12),
+    event("brainstem.destination.completed", { destinationId: "ops-room", coreId: "core-b" }, 13),
+    event("brainstem.destination.failed", { destinationId: "ops-room", coreId: "core-b" }, 14)
+  ].map((item, index) => ({ event: item, index }));
+
+  const overview = coreOverview(topology.cores, items);
+  assert.deepEqual(
+    overview.map(core => [core.id, core.status, core.decided, core.delivered, core.polls, core.failed]),
+    [
+      ["core-a", "running", 1, 0, 1, 0],
+      ["core-b", "lost", 0, 1, 0, 1],
+      ["core-c", null, 1, 0, 0, 0]
+    ],
+    "registry cores first by status, then cores only seen in events"
+  );
+
+  const records = buildInspectorRecords({ id: "core" }, items);
+  assert.deepEqual(records.map(record => record.coreId).sort(), ["core-a", "core-c"]);
+});

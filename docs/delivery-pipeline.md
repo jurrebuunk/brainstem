@@ -108,7 +108,26 @@ A destination entry can override the deliver retry policy:
 | `database` | Default when checkpoints are in the database (the default since 2.0 Phase 1). Uses the `jobs` and `deliveries` tables on SQLite or Postgres. | yes |
 | `memory` | Default when checkpoints are `memory` or `json`. | no: jobs waiting for a retry are lost on exit |
 
-The database transport works on SQLite and Postgres. Each claim is a single atomic statement, and on Postgres it uses `FOR UPDATE SKIP LOCKED`. Wakeups are in-process, and other processes are picked up on the next poll. The roadmap's Postgres cluster driver (Phase 3) adds `LISTEN/NOTIFY` and lease-based input scheduling. Until then, run **one** runtime per database. Running more makes each one poll every input; the acceptance tests in `tests/acceptance` track this.
+The database transport works on SQLite and Postgres. Each claim is a single atomic statement. On Postgres it is the cluster driver: claims use `FOR UPDATE SKIP LOCKED` and wakeups use `LISTEN/NOTIFY`, so a job enqueued by any process wakes idle workers everywhere. On SQLite, wakeups are in-process and other processes pick up work on their next poll. `transport: "postgres"` is the same driver, but refuses to start on SQLite.
+
+Several runtimes can share one database: see [Cluster mode](cluster.md).
+
+### Input scheduling
+
+With the database transport, inputs are scheduled by leases in the `inputs` table instead of a timer per process. A core claims a due input (bumping its `lease_epoch`), renews the lease while polling, and commits the observations and checkpoint in one transaction fenced on that epoch. It then releases the input with the next due time. However many cores run, each input is polled once per interval, and a stale poller can never commit. Restarting doesn't trigger an early poll: the schedule survives in the database.
+
+```js
+runtime: {
+  inputs: {
+    scheduling: "lease",   // default with the database transport; "timer" with memory
+    leaseMs: 30000,        // renewed every leaseMs / 3 while polling
+    concurrency: 16,       // inputs one core polls at the same time
+    checkIntervalMs: 5000  // longest wait between schedule checks
+  }
+}
+```
+
+Inputs get `ctx.lease` (`{ id, owner, epoch, until, extend(leaseMs) }`) for long-lived connections; `ctx.signal` aborts when the lease is lost. A poll that fails after its retries counts as an input error (`brainstem.input.poll.failed`) and is retried at the next interval.
 
 ## Handoff: destinations emitting observations
 

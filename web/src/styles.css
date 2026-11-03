@@ -2790,3 +2790,192 @@ button:disabled {
 .core-running .core-dot { background: var(--success); }
 .core-lost .core-dot { background: var(--danger); }
 .core-stopped .core-dot { background: var(--muted-2); }
+
+/* Config versions (ADR-0005) */
+.config-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.config-comment {
+  min-width: 220px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+
+.config-page .notice code {
+  font-size: 0.95em;
+}
+
+.config-versions {
+  margin-top: var(--space-4);
+}
+
+.config-versions h3 {
+  font-size: var(--font-size-base);
+  margin: 0 0 var(--space-2);
+}
+
+.config-versions ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.config-versions li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.config-versions li:first-child {
+  border-top: 0;
+}
+
+.config-versions li > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.config-versions li span {
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.config-versions li.is-active strong {
+  color: var(--destination-active);
+}
+
+.config-version-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.config-version-actions button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 6px 10px;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.config-version-actions button:hover {
+  border-color: color-mix(in srgb, var(--input-active) 50%, var(--border));
+}
+
+@media (max-width: 720px) {
+  .config-actions {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .config-comment {
+    min-width: 0;
+  }
+}
+
+/* Core pool overview in the inspector: one card per core, click to filter. */
+.core-overview {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.core-overview-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+  min-width: 190px;
+  max-width: 260px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 10px 12px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.core-overview-card:hover {
+  border-color: color-mix(in srgb, var(--brainstem-active) 50%, var(--border));
+}
+
+.core-overview-card.selected {
+  border-color: var(--brainstem-active);
+  background: color-mix(in srgb, var(--brainstem-active) 12%, var(--surface-2));
+}
+
+.core-overview-all {
+  min-width: 140px;
+  justify-content: center;
+}
+
+.core-overview-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--font-size-sm);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.core-overview-line {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--font-size-xs, 12px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.core-overview-stats {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+  color: var(--muted-2);
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.core-overview-stats strong {
+  margin-right: 3px;
+  color: var(--text-strong);
+  font-size: var(--font-size-sm);
+  letter-spacing: 0;
+}
+
+.core-overview-stats .is-failed strong {
+  color: var(--danger);
+}
+
+.core-unknown .core-dot {
+  background: var(--muted-2);
+}

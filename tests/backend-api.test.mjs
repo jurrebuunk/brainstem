@@ -458,7 +458,7 @@ dialectTest("backend api lists dead jobs and redrives or discards them", async (
     });
 
     const summary = await fetch(`${api.url}/api/pipeline`, { headers: { cookie } }).then(response => response.json());
-    assert.equal(summary.transport, "database");
+    assert.equal(summary.transport, handle.dialect === "postgres" ? "postgres" : "database");
     assert.deepEqual(summary.deliveries, { dead: 2 });
     assert.deepEqual(summary.jobs.map(({ queue, state, count }) => [queue, state, count]), [["deliver", "dead", 2]]);
 

@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased — 2.0.0-beta.1
+
+Multi-core (roadmap Phase 3). Brainstem runs as several processes on one Postgres database: input polling, decisions and deliveries are shared across cores, a lost core loses nothing, and config is versioned data that every core hot-reloads. Single-node mode (`--role all`, SQLite) works as before. See [Cluster mode](docs/cluster.md).
+
+Upgrading (breaking):
+
+- **The API no longer writes or executes the config file.** `PUT /api/config` returns 409 with `configSource: file` (the default), and the Web UI shows the file read-only. To edit config in the UI, run `brainstem config import` and set `BRAINSTEM_CONFIG_SOURCE=database`. Mount the config file read-only.
+- Inputs are scheduled by leases in the database when the pipeline uses the database transport (the default). The schedule survives restarts, so a restart no longer polls every input immediately; it polls when the input is next due. Set `runtime.inputs.scheduling: "timer"` for the 1.x behavior.
+- `--role core` and `--role api` never migrate. Run `brainstem migrate` once per upgrade, or set `BRAINSTEM_MIGRATE=true`. `--role all` (the default) and `brainstem-api.mjs` still migrate on start.
+- `GET /api/pipeline` reports `transport: "postgres"` on Postgres.
+- Migration `0005_cluster` adds `inputs`, `config_versions`, `active_config` and `cores.config_version`.
+
+Changes:
+
+- **Roles and queues:** `brainstem --role all|core|api|web` and `--queues poll,decide,deliver` (`BRAINSTEM_ROLE`, `BRAINSTEM_QUEUES`). Only `decide` cores load the Laya model. Cores register their role, queues and config version.
+- **Postgres cluster driver:** `LISTEN/NOTIFY` wakeups for jobs, inputs, config and telemetry (`src/db/notifier.mjs`); claims keep `FOR UPDATE SKIP LOCKED`. `runtime.queue.transport: "postgres"` requires Postgres.
+- **Lease-based input scheduling with fencing epochs:** each input is polled by one core at a time, and its checkpoint commit is refused once another core holds the lease. Leases of stopped or lost cores are taken over at once. Inputs get `ctx.lease`. `GET /api/inputs` shows the schedule and lease owners.
+- **Advisory-lock singletons** for delivery-log pruning and API maintenance (`src/db/locks.mjs`). New `inputs.prune` maintenance task.
+- **Laya worker pool:** `runtime.laya.workers` / `BRAINSTEM_LAYA_WORKERS` / `--decide-concurrency` evaluates observations in parallel in worker threads, off the event loop. `BRAINSTEM_LAYA_MODEL_DIR` uses a mounted model. The model is published as the `brainstem-models` OCI image (`Dockerfile.models`, CI).
+- **Config as versioned data:** `config_versions` validated against a JSON Schema (`GET /api/config/schema`); saves guarded by `If-Match`; rollback by activating an older version; `brainstem config import|export|list|show|activate|validate`. Cores reload the active version without a restart and keep the previous one when a new one fails to load.
+- **SSE across API replicas:** telemetry is announced by id and streamed by every replica. Events carry ids, and reconnecting clients resume from `Last-Event-ID` on any replica.
+- **Graceful drain on SIGTERM:** readiness fails, claiming stops, in-flight polls and jobs finish (`runtime.shutdown.timeoutMs`, `--drain-timeout`), and leases are released. The API ends SSE streams and closes.
+- **Probes on every role:** `/livez`, `/readyz` and `/startupz` (core: `--health-port`, default 8081; API: its own port).
+- Web UI: versioned config editor with history and rollback; the Cores panel shows each core's config version.
+- Topology merges cores that run different queues and is consistent when running cores share a config version.
+- Failed input polls emit `brainstem.input.poll.failed` and count as input node errors.
+- The multi-core acceptance tests pass (no longer `todo`) on SQLite and Postgres, including killing a core mid-run.
+
 ## 1.4.0 — 2026-11-02
 
 Small agent tasks and the groundwork for multi-core: a generic agentOS runner for cheap, bounded agent work, destinations that hand results back to the core, a log file input, telemetry and a core registry that identify cores and destinations, and a Web UI flow built on them.

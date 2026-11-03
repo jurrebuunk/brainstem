@@ -55,6 +55,33 @@ Show help:
 node brainstem.mjs --help
 ```
 
+### Roles and cluster options
+
+| Option | Env | Meaning |
+|---|---|---|
+| `--role all\|core\|api\|web` | `BRAINSTEM_ROLE` | process role (default `all`) |
+| `--queues poll,decide,deliver` | `BRAINSTEM_QUEUES` | stages a core runs |
+| `--config-source file\|database` | `BRAINSTEM_CONFIG_SOURCE` | where the pipeline config comes from |
+| `--health-port`, `--health-host` | `BRAINSTEM_HEALTH_PORT`, `_HOST` | probes; default port 8081 for `core` |
+| `--decide-concurrency N` | – | N decide jobs, each with a Laya worker thread |
+| `--drain-timeout ms` | – | in-flight work on SIGTERM (default 25000) |
+| `--host`, `--port` | – | API address (`--role api`) |
+
+See [Cluster mode](cluster.md).
+
+## Config commands
+
+```sh
+node brainstem.mjs config import [--file path] [--comment text] [--no-activate]
+node brainstem.mjs config export [--version id] [--out path] [--format mjs|json]
+node brainstem.mjs config list
+node brainstem.mjs config show [id]
+node brainstem.mjs config activate <id>     # rollback
+node brainstem.mjs config validate [--file path]
+```
+
+`import` evaluates the module locally, checks it is plain data that matches the schema, and stores it as a new version. Unless `--no-activate` is given, the new version becomes active, and cores running with `BRAINSTEM_CONFIG_SOURCE=database` reload it. Per-process bootstrap settings (`runtime.database`, `api`, `logging`, `telemetry`, `coreId`, `role`, `queues`) are not stored. See [Configuration](configuration.md#versioned-config).
+
 ## Database commands
 
 All state lives in one database (see [State](state.md)). The URL comes from, in order:

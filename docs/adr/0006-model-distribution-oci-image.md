@@ -45,3 +45,7 @@ Follow-ups:
 - Laya `worker_threads` pool; build and publish `brainstem-models` in CI (Phase 3).
 - Helm chart image-volume / init-container templates; startup probe gated on the model being loaded (Phase 4).
 - Measure cold-start and scale-up times in load tests (Phase 5).
+
+## Implementation
+
+Implemented in Phase 3 (2.0.0-beta): `Dockerfile.models` (bundle files fetched at build time onto a busybox base, so init containers can `cp`) and a `models` job in `.github/workflows/docker.yml` that publishes `ghcr.io/<repo>-models:laya-<version>`. Brainstem uses a mounted model through `BRAINSTEM_LAYA_MODEL_DIR` / `runtime.laya.modelDir`. Laya also runs in a `worker_threads` pool (`runtime.laya.workers`, `src/core/laya-pool.mjs`), which resolves the bundle once on the main thread before starting workers.
