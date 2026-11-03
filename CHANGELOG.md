@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.0.0-rc.1 — 2026-11-03
 
 Kubernetes and operations (roadmap Phase 4): a Helm chart for single-node and cluster deployments, Prometheus metrics, OpenTelemetry traces across cores, a Compose file for cluster mode, and signed multi-arch images. See [Kubernetes](docs/kubernetes.md) and [Observability](docs/observability.md).
 
