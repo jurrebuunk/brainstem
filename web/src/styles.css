@@ -231,17 +231,11 @@ button:disabled {
 }
 
 .brand-mark {
-  display: grid;
-  place-items: center;
+  display: block;
   flex: 0 0 auto;
   width: 32px;
   height: 32px;
-  border: 1px solid color-mix(in srgb, var(--brainstem-active) 35%, var(--border));
-  border-radius: 7px;
-  background: var(--brainstem);
-  color: var(--brainstem-contrast);
-  font-size: var(--font-size-md);
-  font-weight: 700;
+  object-fit: contain;
 }
 
 .sidebar-nav {

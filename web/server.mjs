@@ -146,6 +146,7 @@ function contentType(path) {
     case ".jpeg": return "image/jpeg";
     case ".gif": return "image/gif";
     case ".webp": return "image/webp";
+    case ".ico": return "image/x-icon";
     case ".woff": return "font/woff";
     case ".woff2": return "font/woff2";
     default: return "application/octet-stream";
