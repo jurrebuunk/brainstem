@@ -25,35 +25,26 @@ import {
  * otherwise from the events at hand. No React here, so it is unit
  * tested.
  */
-// Columns: inputs, pool in, cores, pool out, destinations.
+const FLOW_COLUMN_GAP = 420;
 const FLOW_ROW_GAP = 205;
-const CORE_ROW_GAP = 165;
-const POOL_WIDTH = 44;
-const POOL_PADDING = 28;
-const FLOW_POOL_IN_X = 380;
-const FLOW_CORE_X = FLOW_POOL_IN_X + POOL_WIDTH + 96;
-const FLOW_POOL_OUT_X = FLOW_CORE_X + 260 + 96;
-const FLOW_DESTINATION_X = FLOW_POOL_OUT_X + POOL_WIDTH + 96;
-// Stopped cores stay visible this long, so a shutdown is seen.
-const STOPPED_CORE_VISIBLE_MS = 5 * 60_000;
+const FLOW_CORE_X = FLOW_COLUMN_GAP;
+const FLOW_DESTINATION_X = FLOW_COLUMN_GAP * 2;
 const ACTIVE_FOR_MS = 30_000;
 // A handoff is shown briefly while it happens, then disappears.
 export const HANDOFF_VISIBLE_MS = 8_000;
 
 const COLORS = {
   input: "#3b82f6",
-  core: "#38bdf8",
   destination: "#22c55e",
   handoff: "#ec4899",
   idle: "#4b5563"
 };
 
-// Every node has a fixed size in the graph, so connection dots (at
-// 50% height, or placed by the pools) line up without measuring.
+// Destination nodes and handoff pills have the same fixed size
+// in the graph, so their connection dots (at 50% height) line up
+// without measuring anything.
 const NODE_WIDTH = 260;
-const NODE_HEIGHT = 160;
-export const DESTINATION_NODE_HEIGHT = NODE_HEIGHT;
-const CORE_NODE_HEIGHT = 130;
+export const DESTINATION_NODE_HEIGHT = 160;
 const HANDOFF_PILL_X = FLOW_DESTINATION_X + NODE_WIDTH + 90;
 
 export function buildFlowModel({ topology = null, events = [], nodeTotals = null, now = Date.now() } = {}) {
@@ -67,7 +58,6 @@ export function buildFlowModel({ topology = null, events = [], nodeTotals = null
   const stats = new Map();
   const handoffs = new Map();
   const inputCores = new Map();
-  const coreActivity = new Map();
 
   for (const event of events) {
     try {
@@ -80,7 +70,6 @@ export function buildFlowModel({ topology = null, events = [], nodeTotals = null
       }
 
       collectActivity(event, activityAt, { resolve, edgeActivity, nodeStatus, handoffs, inputCores });
-      collectCoreActivity(event, activityAt, coreActivity);
     }
     catch {
       // One malformed event must not blank the flow view.
@@ -110,39 +99,20 @@ export function buildFlowModel({ topology = null, events = [], nodeTotals = null
   const count = (id, field) => nodeTotals?.[id]?.[field] ?? stats.get(id)?.[field] ?? 0;
   const lastAt = id => latest(nodeTotals?.[id]?.lastAt ?? null, stats.get(id)?.lastAt ?? null);
 
-  /*
-   * Layout, left to right:
-   *
-   *   inputs → pool in → one node per core → pool out → destinations
-   *
-   * Every node has a fixed height and each column is centred on the
-   * same middle line. The pools are tall and thin, and their handles
-   * sit exactly level with the centre of the node they connect to,
-   * so every line is straight.
-   */
-  const shownCores = displayCores(cores, now);
-  const coreItems = shownCores.length > 0
-    ? shownCores
-    : [{ id: null, status: activeStatus("core", "idle"), queues: [], role: null }];
+  const rows = Math.max(inputs.length, destinations.length, 1);
+  const coreHeight = coreHeightForHandles(Math.max(inputs.length, destinations.length));
+  const coreY = ((rows - 1) * FLOW_ROW_GAP) / 2 - coreHeight / 2 + 65;
 
-  const ioColumn = count => Math.max(1, count) * FLOW_ROW_GAP - (FLOW_ROW_GAP - NODE_HEIGHT);
-  const coreColumn = count => Math.max(1, count) * CORE_ROW_GAP - (CORE_ROW_GAP - CORE_NODE_HEIGHT);
-  const columnHeight = Math.max(ioColumn(inputs.length), coreColumn(coreItems.length), ioColumn(destinations.length));
-  const offset = height => (columnHeight - height) / 2;
-
-  const inputY = index => offset(ioColumn(inputs.length)) + index * FLOW_ROW_GAP;
-  const destinationY = index => offset(ioColumn(destinations.length)) + index * FLOW_ROW_GAP;
-  const coreY = index => offset(coreColumn(coreItems.length)) + index * CORE_ROW_GAP;
-
-  const poolY = -POOL_PADDING;
-  const poolHeight = columnHeight + POOL_PADDING * 2;
-  const poolTop = centre => ((centre - poolY) / poolHeight) * 100;
-
-  const coreNodeId = core => core.id === null ? "core-node:local" : `core-node:${core.id}`;
-  const coreHandle = core => safeHandleId(core.id ?? "local");
-  const coreDecided = core => isActive(core.id === null ? nodeActivity.get("core") : coreActivity.get(core.id)?.decideAt);
-  const coreDelivered = core => isActive(core.id === null ? lastDestinationActivity(destinations, edgeActivity) : coreActivity.get(core.id)?.deliverAt);
-  const anyDelivery = destinations.some(destination => isActive(edgeActivity.get(destinationEdgeId(destination.id))));
+  const inputHandles = inputs.map((input, index) => ({
+    id: `in-${safeHandleId(input.id)}`,
+    top: handleTop(index, inputs.length, coreHeight),
+    active: isActive(edgeActivity.get(inputEdgeId(input.id)))
+  }));
+  const outputHandles = destinations.map((destination, index) => ({
+    id: `out-${safeHandleId(destination.id)}`,
+    top: handleTop(index, destinations.length, coreHeight),
+    active: isActive(edgeActivity.get(destinationEdgeId(destination.id)))
+  }));
 
   const nodes = [
     ...inputs.map((input, index) => {
@@ -162,103 +132,31 @@ export function buildFlowModel({ topology = null, events = [], nodeTotals = null
         }),
         footnote: coreId && cores.length > 1 ? `polled by ${coreId}` : null,
         x: 0,
-        y: inputY(index),
-        nodeHeight: NODE_HEIGHT,
+        y: index * FLOW_ROW_GAP,
         active: isActive(nodeActivity.get(id)),
         handleActive: isActive(edgeActivity.get(inputEdgeId(input.id))),
         extra: { inputId: input.id }
       });
     }),
-    poolNode({
+    graphNode({
       id: "core",
-      side: "in",
-      label: "Core pool",
-      summary: cores.length > 0 ? coreSummary(cores) : "brainstem core",
+      nodeType: "core",
+      label: cores.length > 0 ? "Core pool" : "Brainstem Core",
+      subtitle: cores.length > 0 ? coreSummary(cores) : "dedupe · laya · policy · route",
       status: coreStatus(cores, activeStatus("core", "idle")),
-      warning: topology && topology.consistent === false ? "cores loaded different configs" : null,
-      x: FLOW_POOL_IN_X,
-      y: poolY,
-      height: poolHeight,
-      active: isActive(nodeActivity.get("core")),
-      left: inputs.map((input, index) => ({
-        id: `in-${safeHandleId(input.id)}`,
-        top: poolTop(inputY(index) + NODE_HEIGHT / 2),
-        active: isActive(edgeActivity.get(inputEdgeId(input.id)))
-      })),
-      right: coreItems.map((core, index) => ({
-        id: `to-${coreHandle(core)}`,
-        top: poolTop(coreY(index) + CORE_NODE_HEIGHT / 2),
-        active: coreDecided(core)
-      })),
-      extra: {
-        cores,
+      meta: compactMeta({
         decisions: count("core", "decisions"),
-        errors: count("core", "errors")
-      }
-    }),
-    ...coreItems.map((core, index) => {
-      const id = coreNodeId(core);
-      const decided = coreDecided(core);
-      const delivered = coreDelivered(core);
-      const recent = coreActivity.get(core.id) ?? {};
-
-      return graphNode({
-        id,
-        nodeType: "core",
-        label: core.id ?? "Brainstem Core",
-        subtitle: core.id === null
-          ? "dedupe · laya · policy · route"
-          : (core.queues?.length ? core.queues : [core.role ?? "all"]).join(" · "),
-        status: decided ? "deciding" : delivered ? "delivering" : core.status ?? "idle",
-        meta: core.id === null
-          ? compactMeta({
-              decisions: count("core", "decisions"),
-              errors: count("core", "errors"),
-              last: relativeTime(lastAt("core"), now)
-            })
-          : compactMeta({
-              decided: recent.decisions ?? 0,
-              delivered: recent.delivered ?? 0,
-              seen: relativeTime(core.lastSeenAt ?? null, now)
-            }),
-        footnote: core.id === null
-          ? null
-          : [
-              core.configVersion !== null && core.configVersion !== undefined ? `config v${core.configVersion}` : null,
-              core.hostname ?? null
-            ].filter(Boolean).join(" · ") || null,
-        x: FLOW_CORE_X,
-        y: coreY(index),
-        nodeHeight: CORE_NODE_HEIGHT,
-        active: decided || delivered,
-        extra: {
-          coreId: core.id,
-          coreStatus: core.status ?? null,
-          decideActive: decided,
-          deliverActive: delivered
-        }
-      });
-    }),
-    poolNode({
-      id: "pool:out",
-      side: "out",
-      label: "Core pool",
-      summary: `${destinations.length} destination${destinations.length === 1 ? "" : "s"}`,
-      status: anyDelivery ? "delivering" : "idle",
-      x: FLOW_POOL_OUT_X,
-      y: poolY,
-      height: poolHeight,
-      active: anyDelivery,
-      left: coreItems.map((core, index) => ({
-        id: `from-${coreHandle(core)}`,
-        top: poolTop(coreY(index) + CORE_NODE_HEIGHT / 2),
-        active: coreDelivered(core)
-      })),
-      right: destinations.map((destination, index) => ({
-        id: `out-${safeHandleId(destination.id)}`,
-        top: poolTop(destinationY(index) + NODE_HEIGHT / 2),
-        active: isActive(edgeActivity.get(destinationEdgeId(destination.id)))
-      }))
+        errors: count("core", "errors"),
+        last: relativeTime(lastAt("core"), now)
+      }),
+      footnote: topology && topology.consistent === false ? "cores loaded different configs" : null,
+      x: FLOW_CORE_X,
+      y: coreY,
+      active: isActive(nodeActivity.get("core")),
+      height: coreHeight,
+      inputHandles,
+      outputHandles,
+      extra: { cores }
     }),
     ...destinations.map((destination, index) => {
       const id = `destination:${destination.id}`;
@@ -281,8 +179,8 @@ export function buildFlowModel({ topology = null, events = [], nodeTotals = null
           });
         })(),
         x: FLOW_DESTINATION_X,
-        y: destinationY(index),
-        nodeHeight: NODE_HEIGHT,
+        y: index * FLOW_ROW_GAP,
+        nodeHeight: DESTINATION_NODE_HEIGHT,
         active: isActive(nodeActivity.get(id)),
         handleActive: isActive(edgeActivity.get(destinationEdgeId(destination.id))),
         extra: {
@@ -309,8 +207,8 @@ export function buildFlowModel({ topology = null, events = [], nodeTotals = null
       node: {
         id: `handoff:${destination.id}:${stamp}`,
         type: "handoffPill",
-        position: { x: HANDOFF_PILL_X, y: destinationY(index) },
-        height: NODE_HEIGHT,
+        position: { x: HANDOFF_PILL_X, y: index * FLOW_ROW_GAP },
+        height: DESTINATION_NODE_HEIGHT,
         draggable: false,
         selectable: false,
         data: {
@@ -342,29 +240,9 @@ export function buildFlowModel({ topology = null, events = [], nodeTotals = null
       active: isActive(edgeActivity.get(inputEdgeId(input.id))),
       color: COLORS.input
     })),
-    ...coreItems.flatMap(core => [
-      graphEdge({
-        id: `edge-pool-in-${coreHandle(core)}`,
-        source: "core",
-        sourceHandle: `to-${coreHandle(core)}`,
-        target: coreNodeId(core),
-        targetHandle: "in",
-        active: coreDecided(core),
-        color: COLORS.core
-      }),
-      graphEdge({
-        id: `edge-pool-out-${coreHandle(core)}`,
-        source: coreNodeId(core),
-        sourceHandle: "out",
-        target: "pool:out",
-        targetHandle: `from-${coreHandle(core)}`,
-        active: coreDelivered(core),
-        color: COLORS.core
-      })
-    ]),
     ...destinations.map(destination => graphEdge({
       id: destinationEdgeId(destination.id),
-      source: "pool:out",
+      source: "core",
       sourceHandle: `out-${safeHandleId(destination.id)}`,
       target: `destination:${destination.id}`,
       targetHandle: "in",
@@ -396,12 +274,6 @@ export function eventNodeIds(event, resolve = createResolver(emptyStructure())) 
   const destination = resolve.destination(event);
 
   if (inputId) ids.add(`input:${inputId}`);
-
-  const coreId = eventCoreId(event);
-  if (coreId && (kind === "brainstem.core.decision" || kind === "brainstem.core.failed" || kind.startsWith("brainstem.destination."))) {
-    ids.add(`core-node:${coreId}`);
-  }
-  if (destination && (kind.startsWith("brainstem.destination.") || kind === "brainstem.output")) ids.add("pool:out");
 
   if (kind === "brainstem.output") {
     ids.add("core");
@@ -628,62 +500,6 @@ function graphNode({
   };
 }
 
-/*
- * A tall, thin pool node: inputs fan into the core pool on the
- * left, and out of it to destinations on the right. `left` and
- * `right` are its handles, placed level with the nodes they join.
- */
-function poolNode({ id, side, label, summary, status, warning = null, x, y, height, active, left, right, extra = {} }) {
-  return {
-    id,
-    type: "poolNode",
-    position: { x, y },
-    width: POOL_WIDTH,
-    height,
-    draggable: false,
-    data: { nodeType: "pool", side, label, summary, status, warning, active, left, right, ...extra }
-  };
-}
-
-/*
- * Cores to draw: running and lost ones, plus recently stopped ones.
- */
-function displayCores(cores, now) {
-  return cores.filter(core =>
-    core.status !== "stopped" ||
-    (core.lastSeenAt && now - Date.parse(core.lastSeenAt) < STOPPED_CORE_VISIBLE_MS)
-  );
-}
-
-/*
- * Per core, from the event window: when it last decided or
- * delivered, and how often.
- */
-function collectCoreActivity(event, at, coreActivity) {
-  const coreId = eventCoreId(event);
-  if (!coreId) return;
-
-  const kind = String(event?.kind ?? "");
-  const decided = kind === "brainstem.core.decision";
-  const delivered = kind === "brainstem.destination.completed";
-  const delivering = kind === "brainstem.destination.running" || delivered || kind === "brainstem.destination.emitted";
-
-  if (!decided && !delivering) return;
-
-  const current = coreActivity.get(coreId) ?? { decisions: 0, delivered: 0, decideAt: null, deliverAt: null };
-  if (decided) {
-    current.decisions += 1;
-    current.decideAt = latest(current.decideAt, at);
-  }
-  if (delivering) current.deliverAt = latest(current.deliverAt, at);
-  if (delivered) current.delivered += 1;
-  coreActivity.set(coreId, current);
-}
-
-function lastDestinationActivity(destinations, edgeActivity) {
-  return destinations.reduce((last, destination) => latest(last, edgeActivity.get(destinationEdgeId(destination.id)) ?? null), null);
-}
-
 function graphEdge({ id, source, sourceHandle, target, targetHandle, active, color }) {
   return {
     id,
@@ -709,6 +525,24 @@ function inputEdgeId(id) {
 
 function destinationEdgeId(id) {
   return `edge-destination-${id}`;
+}
+
+function coreHeightForHandles(count) {
+  const minHeight = 130;
+  const reserved = 76;
+  const minGap = 18;
+  return Math.max(minHeight, reserved + Math.max(0, count - 1) * minGap);
+}
+
+function handleTop(index, count, height) {
+  if (count <= 1) return 50;
+
+  const reserved = 76;
+  const minGap = 18;
+  const maxSpread = Math.max(0, height - reserved);
+  const spread = Math.min(maxSpread, (count - 1) * minGap);
+  const topPx = height / 2 - spread / 2 + (index * spread) / (count - 1);
+  return (topPx / height) * 100;
 }
 
 function safeHandleId(value) {
