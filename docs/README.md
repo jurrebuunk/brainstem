@@ -45,4 +45,5 @@ Built-in plugin pages:
 
 - [Release checklist](release.md)
 - [Brainstem 2.0 roadmap](roadmap-2.0.md) — scale-out architecture, phases, and decisions.
+- [Web UI backlog](web-ui-backlog.md) — what the CLI can do and the Web UI can't yet, with proposals.
 - [Architecture Decision Records](adr/README.md) — recorded architectural decisions and how to add one.
